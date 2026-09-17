@@ -1,0 +1,25 @@
+[package]
+name = "ember-testkit"
+description = "Development-only library exposing a local channel for driving a test server."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ember-enshrouded.workspace = true
+ember-holistic.workspace = true
+ember-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

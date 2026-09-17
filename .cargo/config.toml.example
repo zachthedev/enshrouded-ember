@@ -1,0 +1,5 @@
+# Copy to .cargo/config.toml (gitignored) to build against a sibling checkout of
+# a dependency instead of the published version.
+#
+# [patch.crates-io]
+# ember-sdk = { path = "../enshrouded-ember/crates/ember-sdk" }

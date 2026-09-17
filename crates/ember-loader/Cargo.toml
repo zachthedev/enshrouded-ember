@@ -1,0 +1,27 @@
+[package]
+name = "ember-loader"
+description = "The library the server loads: resolves the build, discovers mods, and starts them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ember-enshrouded.workspace = true
+ember-holistic.workspace = true
+ember-platform.workspace = true
+ember-sdk.workspace = true
+ember-sigs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
