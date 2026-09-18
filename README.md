@@ -39,6 +39,7 @@ symbol it declared is resolved.
 | `ember-platform`   | Operating system seam: image access, inline hooks, library loading |
 | `ember-sigs`       | Per-build signature and layout tables, as data                     |
 | `ember-holistic`   | The Holistic engine: reflection registry, components, systems      |
+| `ember-kfc`        | Keen's KFC container format: the directory, resources, loca tags   |
 | `ember-enshrouded` | The game above the engine: sessions, chat, saves, items, recipes   |
 | `ember-sdk`        | What a mod author writes against                                   |
 | `ember-loader`     | The library the server loads                                       |
