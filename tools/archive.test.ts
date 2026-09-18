@@ -10,6 +10,7 @@ import {
   digestFile,
   DESTINATION,
   digestRow,
+  fetchedManifest,
   DuplicateRowError,
   MissingCredentialError,
   objectKey,
@@ -373,6 +374,103 @@ describe("compareDigests", () => {
     expect(problems.map((problem) => problem.fileName)).toEqual([
       "enshrouded_server.kfc",
     ]);
+  });
+});
+
+describe("fetchedManifest", () => {
+  /** A SteamCMD app manifest, which is KeyValues rather than JSON. */
+  const acf = (depots: Record<string, string>): string =>
+    [
+      '"AppState"',
+      "{",
+      '\t"appid"\t\t"2278520"',
+      '\t"buildid"\t\t"23178631"',
+      '\t"InstalledDepots"',
+      "\t{",
+      ...Object.entries(depots).flatMap(([depot, manifest]) => [
+        `\t\t"${depot}"`,
+        "\t\t{",
+        `\t\t\t"manifest"\t\t"${manifest}"`,
+        '\t\t\t"size"\t\t"8756751690"',
+        "\t\t}",
+      ]),
+      "\t}",
+      "}",
+    ].join("\n");
+
+  test("a directory with no evidence reads as null", async () => {
+    expect(await fetchedManifest(await sandbox(), 2278520, 2278521)).toBeNull();
+  });
+
+  /**
+   * SteamCMD's `app_update` takes no manifest parameter and returns the head of
+   * the branch, so this is the only thing that says which build arrived.
+   */
+  test("the app manifest names the depot's manifest", async () => {
+    const dir = await sandbox();
+    await Bun.write(
+      join(dir, "steamapps", "appmanifest_2278520.acf"),
+      acf({ "1004": "7604377918839582995", "2278521": "2174935030716737236" }),
+    );
+    const found = await fetchedManifest(dir, 2278520, 2278521);
+    expect(found?.manifestId).toBe("2174935030716737236");
+    expect(found?.source).toContain("appmanifest_2278520.acf");
+  });
+
+  /**
+   * A file filter leaves depots listed that nothing was written from, so the
+   * table is read by depot rather than by taking whichever entry comes first.
+   */
+  test("another depot's manifest is not taken", async () => {
+    const dir = await sandbox();
+    await Bun.write(
+      join(dir, "steamapps", "appmanifest_2278520.acf"),
+      acf({ "1004": "7604377918839582995" }),
+    );
+    expect(await fetchedManifest(dir, 2278520, 2278521)).toBeNull();
+  });
+
+  test("a gid that is not decimal is no evidence", async () => {
+    const dir = await sandbox();
+    await Bun.write(
+      join(dir, "steamapps", "appmanifest_2278520.acf"),
+      acf({ "2278521": "../../../evil" }),
+    );
+    expect(await fetchedManifest(dir, 2278520, 2278521)).toBeNull();
+  });
+
+  /** DepotDownloader puts the gid in the name of the manifest it cached. */
+  test("the DepotDownloader cache names the manifest in its file name", async () => {
+    const dir = await sandbox();
+    await Bun.write(
+      join(dir, ".DepotDownloader", "2278521_5177045887918896292.manifest"),
+      "binary",
+    );
+    await Bun.write(join(dir, ".DepotDownloader", "depot.config"), "binary");
+    const found = await fetchedManifest(dir, 2278520, 2278521);
+    expect(found?.manifestId).toBe("5177045887918896292");
+  });
+
+  test("a cached manifest for another depot is not taken", async () => {
+    const dir = await sandbox();
+    await Bun.write(
+      join(dir, ".DepotDownloader", "1004_7604377918839582995.manifest"),
+      "binary",
+    );
+    expect(await fetchedManifest(dir, 2278520, 2278521)).toBeNull();
+  });
+
+  /**
+   * A filtered SteamCMD fetch leaves a second application's manifest behind.
+   * Only the application and depot asked for decide anything.
+   */
+  test("a second application's manifest is ignored", async () => {
+    const dir = await sandbox();
+    await Bun.write(
+      join(dir, "steamapps", "appmanifest_228980.acf"),
+      '"AppState"\n{\n\t"appid"\t\t"228980"\n}\n',
+    );
+    expect(await fetchedManifest(dir, 2278520, 2278521)).toBeNull();
   });
 });
 

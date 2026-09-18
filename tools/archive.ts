@@ -40,6 +40,7 @@ import { mkdir, readdir, rename, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import * as VDF from "vdf-parser";
 import { z } from "zod";
 import {
   ARCHIVE_FILES,
@@ -160,6 +161,79 @@ const DEPOT_ID = 2278521;
  */
 export function objectKey(manifestId: string, fileName: string): string {
   return `build/${manifestId}/${fileName}`;
+}
+
+/**
+ * ///////////////////////////////////////////////
+ * Provenance
+ * ///////////////////////////////////////////////
+ */
+
+/** Where a fetched build says which manifest it came from. */
+export interface FetchedManifest {
+  /** The depot manifest gid the fetching tool recorded. */
+  readonly manifestId: string;
+  /** The file that said so, so a reader can check it by hand. */
+  readonly source: string;
+}
+
+/**
+ * The manifest gid the tool that filled a directory says it fetched.
+ *
+ * @remarks
+ * Both fetching routes leave this behind, in different places. SteamCMD writes
+ * `steamapps/appmanifest_<app>.acf` beside the payload, whose `InstalledDepots`
+ * table names a manifest per depot; it is read by depot, because that table
+ * lists depots a file filter wrote nothing from. DepotDownloader names its
+ * cached manifest `<depot>_<gid>.manifest` under `.DepotDownloader`, so the gid
+ * is in the file name.
+ *
+ * It matters because a fetch can return a different build than the one asked
+ * for. SteamCMD's `app_update` takes no manifest parameter and always fetches
+ * the head of a branch, so a Keen release landing between the watch job and the
+ * archive job would be stored under the previous gid. A digest row has to
+ * describe what arrived rather than what was requested.
+ *
+ * @param dir - The directory the fetch filled.
+ * @param appId - The Steam application that was fetched.
+ * @param depotId - The depot whose manifest is wanted.
+ * @returns What the directory says, or null when it carries no evidence.
+ */
+export async function fetchedManifest(
+  dir: string,
+  appId: number,
+  depotId: number,
+): Promise<FetchedManifest | null> {
+  const acf = join(dir, "steamapps", `appmanifest_${appId}.acf`);
+  if (await Bun.file(acf).exists()) {
+    // The same two options the app info parser passes, for the same two
+    // reasons: a gid rounds if it becomes a number, and arrayify keeps the
+    // parser off Object.prototype.
+    const root = VDF.parse<Record<string, unknown>>(
+      await Bun.file(acf).text(),
+      { types: false, arrayify: true },
+    );
+    const state = root["AppState"] as Record<string, unknown> | undefined;
+    const installed = state?.["InstalledDepots"] as
+      Record<string, unknown> | undefined;
+    const entry = installed?.[String(depotId)] as
+      Record<string, unknown> | undefined;
+    const manifestId = entry?.["manifest"];
+    if (typeof manifestId === "string" && /^\d{1,20}$/.test(manifestId)) {
+      return { manifestId, source: acf };
+    }
+  }
+
+  const cache = join(dir, ".DepotDownloader");
+  const pattern = new RegExp(`^${depotId}_(\\d{1,20})\\.manifest$`);
+  for (const name of await readdir(cache).catch(() => [] as string[])) {
+    const match = pattern.exec(name);
+    if (match !== null) {
+      return { manifestId: match[1] as string, source: join(cache, name) };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -448,6 +522,31 @@ async function commandRecord(options: Options): Promise<never> {
     );
   }
 
+  const appId = Number(options.app ?? APP_ID);
+  const depotId = Number(options.depot ?? DEPOT_ID);
+
+  // What the fetch says it got, against what it was asked for. A fetch that
+  // cannot pin a manifest returns the head of the branch, so a Keen release
+  // landing mid-run would otherwise be filed under the previous gid and the
+  // row would describe a build that is not there.
+  const fetched = await fetchedManifest(dir, appId, depotId);
+  if (fetched === null) {
+    row(true, dim(`${dir} carries no record of which manifest it came from`));
+  } else if (fetched.manifestId !== manifestId) {
+    row(
+      false,
+      `${fetched.source} says this build came from manifest ` +
+        `${fetched.manifestId}, and the row would say ${manifestId}`,
+    );
+    summary(
+      "nothing recorded. The bytes are a different build than the one asked " +
+        "for, so the row would key them under the wrong manifest",
+      true,
+    );
+  } else {
+    row(true, `${manifestId} confirmed by ${dim(fetched.source)}`);
+  }
+
   const files: Record<string, FileDigest> = {};
   for (const fileName of options.file ?? ARCHIVE_FILES) {
     // Checked before the file is opened. Validating it afterwards would print
@@ -470,8 +569,8 @@ async function commandRecord(options: Options): Promise<never> {
   await appendRecord(BUILD_DIGESTS_PATH, BuildDigestRecord, {
     manifestId,
     buildId: options.build ?? null,
-    appId: Number(options.app ?? APP_ID),
-    depotId: Number(options.depot ?? DEPOT_ID),
+    appId,
+    depotId,
     revision: options.revision === undefined ? null : Number(options.revision),
     branch: options.branch ?? null,
     archivedAt: (options.date ?? new Date().toISOString()).slice(0, 10),

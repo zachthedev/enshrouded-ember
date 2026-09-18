@@ -206,31 +206,72 @@ describe("the workflows", () => {
   });
 
   /**
+   * A probe exists for the few minutes its branch does, and then the branch is
+   * deleted. Its filename says so, and this is what makes that structural
+   * rather than a matter of intent: it can only be reached by pushing a
+   * `probe/` branch, so it cannot fire on the default branch and cannot fire
+   * on a timer.
+   *
+   * It also uploads nothing. A probe is exactly where somebody would add an
+   * artifact to see the output, and what these fetch out of Steam is a Keen
+   * binary that must never leave the runner.
+   */
+  test.each(
+    loaded
+      .filter((one) => one.name.startsWith("probe-"))
+      .map((one) => [one.name] as const),
+  )("%s can only run on a probe branch, and uploads nothing", (name) => {
+    const workflow = loaded.find((one) => one.name === name) as LoadedWorkflow;
+    expect(Object.keys(workflow.parsed.on ?? {})).toEqual(["push"]);
+    const push = (workflow.parsed.on ?? {})["push"] as
+      { branches?: string[] } | undefined;
+    expect(push?.branches ?? []).not.toHaveLength(0);
+    for (const branch of push?.branches ?? []) {
+      expect(branch, `${name} can be pushed to ${branch}`).toMatch(/^probe\//);
+    }
+    for (const reference of actionReferences(workflow.parsed)) {
+      expect(
+        reference,
+        `${name} uploads an artifact, and what it fetches is a Keen binary`,
+      ).not.toContain("upload-artifact");
+    }
+  });
+
+  /**
    * A tag is resolved when the job runs, so whoever owns it chooses the image
    * on the day rather than on the day the line was written.
    */
   test("every container image is pinned by digest", () => {
     let checked = 0;
     for (const workflow of loaded) {
-      for (const image of workflow.text.matchAll(
-        /docker\s+run\b[^\n]*?(?:\$\{?(\w+)\}?|([\w./-]+(?::[\w.-]+|@sha256:[0-9a-f]{64})))/g,
-      )) {
-        const viaVariable = image[1];
-        const literal = image[2];
-        // `docker run "$IMAGE"` is the shape this file uses, so the pin lives
-        // in the env block the variable names.
-        const reference =
-          viaVariable === undefined
-            ? literal
-            : (workflow.parsed.env ?? {})[viaVariable];
+      // Every image is named by a variable whose name ends in _IMAGE, and the
+      // pin lives on that variable. Picking the image out of a `docker run`
+      // line by pattern does not survive contact with the line: a volume mount
+      // or a --user flag puts other words, and other variables, ahead of it.
+      for (const [name, value] of Object.entries(workflow.parsed.env ?? {})) {
+        if (!name.endsWith("_IMAGE")) {
+          continue;
+        }
         checked += 1;
         expect(
-          String(reference),
-          `${workflow.name} runs a container that is not pinned by digest`,
+          String(value),
+          `${workflow.name} sets ${name} to an image that is not pinned by digest`,
         ).toMatch(/@sha256:[0-9a-f]{64}$/);
       }
+
+      for (const line of workflow.text.split("\n")) {
+        // A comment naming the command is prose about it, not a run of it.
+        if (/^\s*#/.test(line) || !/\bdocker\s+run\b/.test(line)) {
+          continue;
+        }
+        expect(
+          line,
+          `${workflow.name} runs a container without naming a pinned *_IMAGE ` +
+            `variable: ${line.trim()}`,
+        ).toMatch(/\$\{?[A-Z0-9_]*_IMAGE\}?/);
+      }
     }
-    expect(checked, "no workflow runs a container").toBeGreaterThan(0);
+    expect(checked, "no workflow names a container image").toBeGreaterThan(0);
   });
 
   /**
