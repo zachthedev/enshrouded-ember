@@ -4,7 +4,6 @@
 //! script. A contributor who works on the Rust side and has no Bun still needs
 //! the hooks, so the same one-line configuration is reachable from cargo.
 
-use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -20,7 +19,7 @@ const HOOKS_DIR: &str = ".githooks";
 ///
 /// Returns an error when git is not reachable or refuses the configuration.
 pub fn install(ui: &Ui) -> Result<()> {
-    let root = workspace_root();
+    let root = crate::workspace_root();
     let hooks = root.join(HOOKS_DIR);
     if !hooks.is_dir() {
         bail!("no hook directory at {}", hooks.display());
@@ -40,11 +39,4 @@ pub fn install(ui: &Ui) -> Result<()> {
     ui.row(Mark::Ok, "core.hooksPath", HOOKS_DIR);
     ui.line("the commit-msg hook runs commitlint through bunx");
     Ok(())
-}
-
-/// The directory holding the workspace manifest.
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }

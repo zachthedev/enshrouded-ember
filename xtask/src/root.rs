@@ -58,7 +58,7 @@ impl DevRoot {
             Some(path) => path.to_path_buf(),
             None => match std::env::var_os(ROOT_VAR) {
                 Some(value) => PathBuf::from(value),
-                None => workspace_root(),
+                None => crate::workspace_root(),
             },
         };
         let path = std::path::absolute(&path)
@@ -259,13 +259,6 @@ pub fn build_id_from_manifest(install_dir: &Path, app: &str) -> Result<String> {
         }
     }
     bail!("{} names no buildid", manifest.display())
-}
-
-/// The workspace root, which is the directory holding this crate's parent.
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 #[cfg(test)]

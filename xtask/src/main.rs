@@ -16,6 +16,8 @@ mod hooks;
 mod image;
 mod kfc;
 mod loca;
+#[cfg(test)]
+mod policy;
 mod proc;
 mod root;
 mod schema;
@@ -25,7 +27,7 @@ mod steam;
 mod testutil;
 mod ui;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
@@ -209,6 +211,13 @@ enum LocaCommand {
         #[arg(long)]
         force: bool,
     },
+}
+
+/// The workspace root, which is the directory above this crate's manifest.
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
 }
 
 fn main() -> ExitCode {
