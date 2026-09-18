@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::root::DevRoot;
 use crate::ui::{Mark, Row, Ui};
@@ -60,7 +60,6 @@ struct TypeShape {
 }
 
 /// One extraction, parsed into what a diff compares.
-#[derive(Default)]
 struct Extraction {
     /// Every `keen::` type, by qualified name.
     types: BTreeMap<String, TypeShape>,
@@ -188,30 +187,29 @@ fn name_of(path: &Path) -> String {
 
 /// Read one extraction directory.
 ///
-/// A missing file yields an empty section rather than an error, because an
-/// extraction taken without `--client` is still worth diffing.
+/// Every file read here is written by every `schema extract` run, whatever flags
+/// it was given. One that is absent means the extraction stopped partway, so it
+/// is refused by name. Parsing it as an empty section instead would report every
+/// type, program, message and surface in it as removed, which is a wrong answer
+/// rather than a missing one.
 fn load(dir: &Path) -> Result<Extraction> {
-    let mut out = Extraction::default();
-    if let Some(text) = read_optional(&dir.join("srv.schema.txt"))? {
-        out.types = parse_schema(&text);
-    }
-    if let Some(text) = read_optional(&dir.join("programs.tsv"))? {
-        out.programs = parse_programs(&text);
-    }
-    if let Some(text) = read_optional(&dir.join("srv.proto.txt"))? {
-        out.messages = parse_messages(&text);
-    }
-    if let Some(text) = read_optional(&dir.join("ui-events.txt"))? {
-        out.ui_events = parse_ui_events(&text);
-    }
-    Ok(out)
+    Ok(Extraction {
+        types: parse_schema(&require(dir, "srv.schema.txt")?),
+        programs: parse_programs(&require(dir, "programs.tsv")?),
+        messages: parse_messages(&require(dir, "srv.proto.txt")?),
+        ui_events: parse_ui_events(&require(dir, "ui-events.txt")?),
+    })
 }
 
-/// Read a file, or report that it was not there.
-fn read_optional(path: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+/// Read a file the extraction has to hold.
+fn require(dir: &Path, name: &str) -> Result<String> {
+    let path = dir.join(name);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => bail!(
+            "{} holds no {name}, so that extraction did not finish. Take it again with `cargo xtask schema extract --force`.",
+            dir.display()
+        ),
         Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
     }
 }
@@ -498,8 +496,61 @@ fn compare_sets(
 
 #[cfg(test)]
 mod tests {
-    use super::{Extraction, Mark, WATCHLIST, compare, is_watched, parse_schema};
+    use super::{Extraction, Mark, WATCHLIST, compare, is_watched, load, parse_schema};
+    use crate::testutil::TestDir;
     use std::collections::{BTreeMap, BTreeSet};
+
+    /// The four files `load` reads, which every extract run writes.
+    const REQUIRED: [&str; 4] = [
+        "srv.schema.txt",
+        "programs.tsv",
+        "srv.proto.txt",
+        "ui-events.txt",
+    ];
+
+    /// A run that stops partway leaves some of the four behind. Reading the rest
+    /// as empty sections would report every type, program, message and surface
+    /// in the missing file as removed, which is a wrong answer rather than a
+    /// missing one.
+    #[test]
+    fn an_extraction_missing_a_file_the_diff_reads_is_refused_by_name() {
+        for absent in REQUIRED {
+            let dir = TestDir::new("diff-short");
+            for name in REQUIRED {
+                if name != absent {
+                    dir.write(&format!("23178631/{name}"), b"");
+                }
+            }
+            let target = dir.path().join("23178631");
+
+            let outcome = load(&target);
+
+            assert!(
+                outcome.is_err(),
+                "an extraction with no {absent} must be refused, not read as empty"
+            );
+            let text = outcome
+                .err()
+                .map_or_else(String::new, |err| format!("{err:#}"));
+            assert!(
+                text.contains(absent),
+                "the refusal names the missing file: {text}"
+            );
+        }
+    }
+
+    /// An extraction holding all four reads, whatever else it does or does not
+    /// carry. `cli.schema.txt`, `descriptors.tsv` and `strings.tsv` are absent
+    /// here, and none of them is read by a diff.
+    #[test]
+    fn an_extraction_holding_the_four_reads_without_the_files_no_diff_opens() {
+        let dir = TestDir::new("diff-complete");
+        for name in REQUIRED {
+            dir.write(&format!("23178631/{name}"), b"");
+        }
+
+        load(&dir.path().join("23178631")).expect("the four the diff reads are all there");
+    }
 
     /// Build a schema dump body from header and member lines.
     fn schema(blocks: &[(&str, &str, &[&str])]) -> String {

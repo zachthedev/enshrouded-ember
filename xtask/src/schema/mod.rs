@@ -93,7 +93,6 @@ fn extract(
             target.display()
         );
     }
-    std::fs::create_dir_all(&target).with_context(|| format!("creating {}", target.display()))?;
 
     ui.line(&format!("build {build_id}"));
     let fingerprint = image.fingerprint().map(|print| metadata::Fingerprint {
@@ -122,6 +121,11 @@ fn extract(
             None
         }
     };
+
+    let cleared = prepare_target(&target)?;
+    if cleared > 0 {
+        ui.line(&format!("replaced {cleared} file(s) already there"));
+    }
 
     let mut rows = Vec::new();
     let descriptors = descriptor::walk(&image);
@@ -207,6 +211,47 @@ fn locate_server(
             path.display()
         ),
     }
+}
+
+/// Make the target directory hold this run's files and nothing else, and report
+/// how many it removed.
+///
+/// `cli.schema.txt` is written only when `--client` names a build, so leaving
+/// the previous run's files in place would present one build's client dump as
+/// part of another build's extraction. Only the names this command writes are
+/// removed, because `--root` names a directory the caller chose and whatever
+/// else is in it is theirs.
+///
+/// The build record goes first. Every step here can fail, and a run that stops
+/// partway has to leave behind no record claiming the files beside it are a
+/// finished extraction of that build.
+///
+/// An entry is judged by its own metadata rather than by what it points at, so a
+/// symlink is removed as the link it is. That is the boundary the writes after
+/// this rely on: every dump lands inside the target, never at a link's
+/// destination.
+fn prepare_target(target: &Path) -> Result<usize> {
+    std::fs::create_dir_all(target).with_context(|| format!("creating {}", target.display()))?;
+    let mut cleared = 0;
+    for name in std::iter::once(&metadata::FILE).chain(OUTPUTS.iter()) {
+        let path = target.join(name);
+        match path.symlink_metadata() {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| format!("reading {}", path.display()));
+            }
+            Ok(found) if found.is_dir() => bail!(
+                "a directory stands at {}, where this command writes a file. Move it aside.",
+                path.display()
+            ),
+            Ok(_) => {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("removing {}", path.display()))?;
+                cleared += 1;
+            }
+        }
+    }
+    Ok(cleared)
 }
 
 /// Write one dump and describe it as a result row.
@@ -492,9 +537,101 @@ pub fn resolve_extraction(dir: &Path, wanted: &str) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_ui_surface, locate_server};
+    use super::{OUTPUTS, is_ui_surface, locate_server, metadata, prepare_target};
     use crate::root::DevRoot;
     use crate::testutil::TestDir;
+
+    /// Every name in the target directory after a call, sorted.
+    fn entries(target: &std::path::Path) -> Vec<String> {
+        let mut found: Vec<String> = std::fs::read_dir(target)
+            .expect("the target is readable")
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// `cli.schema.txt` is written only when `--client` names a build, so a dump
+    /// the previous run left behind would read as part of this one.
+    ///
+    /// The whole surviving set is asserted rather than one planted name. A rule
+    /// widened from these eight names to an extension would take `mydata.tsv`
+    /// with them, and a check that only looked for `notes.md` would still pass.
+    #[test]
+    fn a_replaced_extraction_keeps_no_file_from_the_run_before_it() {
+        let dir = TestDir::new("schema-replace");
+        let target = dir.path().join("23178631");
+        for name in OUTPUTS {
+            dir.write(&format!("23178631/{name}"), b"old");
+        }
+        dir.write(&format!("23178631/{}", metadata::FILE), b"old");
+        dir.write("23178631/notes.md", b"someone else's file");
+        dir.write("23178631/mydata.tsv", b"someone else's table");
+
+        let cleared = prepare_target(&target).expect("the directory is prepared");
+
+        assert_eq!(
+            cleared,
+            OUTPUTS.len() + 1,
+            "every dump and the build record are removed"
+        );
+        assert_eq!(
+            entries(&target),
+            ["mydata.tsv", "notes.md"],
+            "exactly what the caller put there survives, and nothing else"
+        );
+    }
+
+    /// A directory standing at one of the eight names cannot be replaced with a
+    /// file, so the run stops there.
+    ///
+    /// The build record is removed first, so what is left claims to be nothing.
+    /// Reading the leftovers as a finished extraction is what `schema diff` must
+    /// never do.
+    #[test]
+    fn a_clear_that_cannot_finish_leaves_no_build_record() {
+        let dir = TestDir::new("schema-blocked");
+        let target = dir.path().join("23178631");
+        dir.write(&format!("23178631/{}", metadata::FILE), b"old");
+        dir.write("23178631/srv.schema.txt", b"old");
+        std::fs::create_dir(target.join("strings.tsv"))
+            .expect("a directory stands where a dump goes");
+
+        let outcome = prepare_target(&target);
+
+        assert!(
+            outcome.is_err(),
+            "a directory at one of the names this command writes is refused"
+        );
+        let text = outcome
+            .err()
+            .map_or_else(String::new, |err| format!("{err:#}"));
+        assert!(
+            text.contains("strings.tsv"),
+            "the refusal names the path that blocked it: {text}"
+        );
+        assert!(
+            !target.join(metadata::FILE).exists(),
+            "the record goes first, so a run that stops leaves none behind"
+        );
+        assert!(
+            !target.join("srv.schema.txt").exists(),
+            "the dumps reached before the refusal are gone"
+        );
+    }
+
+    /// A first run creates the directory and removes nothing.
+    #[test]
+    fn a_first_extraction_creates_the_directory() {
+        let dir = TestDir::new("schema-first");
+        let target = dir.path().join("fresh").join("23178631");
+
+        let cleared = prepare_target(&target).expect("the directory is created");
+
+        assert_eq!(cleared, 0);
+        assert!(target.is_dir());
+    }
 
     /// `--build` beside `--server` becomes the extraction directory name, and
     /// `Path::join` takes an absolute argument as the whole path. Every spelling
