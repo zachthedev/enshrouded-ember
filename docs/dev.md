@@ -114,22 +114,28 @@ derived data, stays under `.cache`, and is never committed.
 cargo xtask check
 ```
 
-Nine steps, in order, stopping at the first failure:
+Eleven steps, in order, stopping at the first failure:
 
 ```text
-fmt       cargo fmt --check
-taplo     taplo fmt --check
-clippy    cargo clippy --workspace --all-targets -- -D warnings
-tests     cargo nextest run --workspace
-doctests  cargo test --workspace --doc
-deny      cargo deny check
-machete   cargo machete crates xtask
-audit     cargo audit
-prettier  bunx --no-install --bun prettier --check
+fmt        cargo fmt --check
+taplo      taplo fmt --check
+clippy     cargo clippy --workspace --all-targets -- -D warnings
+tests      cargo nextest run --workspace
+doctests   cargo test --workspace --doc
+deny       cargo deny check
+machete    cargo machete crates xtask
+audit      cargo audit
+prettier   bunx --no-install --bun prettier --check
+typecheck  bunx --no-install --bun tsc --noEmit
+tools      bun test tools
 ```
 
 `taplo` reads `.taplo.toml` for the files it covers. `prettier` covers `.md`,
 `.yml`, `.yaml`, `.json`, `.js`, `.mjs`, `.cjs` and `.ts`.
+
+`typecheck` and `tools` cover `tools/`, which holds the build watcher and the
+archive client. Bun strips types rather than checking them, so without
+`typecheck` the gate would run TypeScript whose types nothing reads.
 
 `doctests` runs whether or not `cargo-nextest` is installed, because
 `cargo nextest` runs none of them.
@@ -157,6 +163,44 @@ cargo xtask loca extract          # write a client build's localization tables
 A command that acts on one build takes `--build <buildid>` and otherwise picks
 the only one there is. `--root <path>` moves `.cache` somewhere else, which is
 how a mod repository keeps its fetched server under its own tree.
+
+## The build watcher and the archive
+
+`tools/` holds two Bun scripts. `build-watch.yml` runs the first one hourly and
+the second one when a build moves.
+
+`watch-builds.ts` reads the output of SteamCMD `app_info_print` and appends a
+row to `data/steam-builds.jsonl` when a branch build id or a depot manifest gid
+moves. Valve serves that output directly, so the record depends on no scraper.
+The project owns its build history from the first run, because none of the three
+keyless routes to Steam carries any history at all.
+
+`archive.ts` moves a build in and out of the R2 archive. Steam serves a depot
+manifest only while it is current, so a build that is not archived inside the
+polling window needs an authenticated pull by hand to recover. The archive is
+the primary copy, not a convenience.
+
+```sh
+bun run archive verify --dir <path> --manifest <gid>
+bun run archive pull --manifest <gid> --out <path>
+```
+
+`data/build-digests.jsonl` is what each archived build's files hash to, and
+every pull checks what arrived against it before the bytes take their final
+name. R2 has no object versioning and no Object Lock, so an overwrite is final
+and that record is the only thing that would notice one.
+
+`archive.json` at the repository root names the account and the bucket those
+commands reach. A fork points the pipeline at its own bucket by editing that
+file and nothing else. It is committed rather than kept in a secret, so a change
+to the destination shows up in a diff and a reviewer sees it, and it is the only
+place either value is written down: no workflow restates it, and a case refuses
+one that starts to. Nothing reads the destination from the environment, which a
+case proves by running a process with every plausible override name set and
+checking where a request would still have gone.
+
+Both R2 commands read their credential from the environment and say which
+variables are missing when it is absent. A pull without one creates nothing.
 
 ## Tests that need a real server
 

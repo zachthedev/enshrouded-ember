@@ -32,66 +32,94 @@ pub(crate) struct Step {
     requires: &'static str,
     /// How to install it when it is missing.
     pub(crate) install: &'static str,
+    /// The `node_modules/.bin` entry `bun install` has to have written.
+    ///
+    /// A step naming one is checked for it before it runs, which is what turns
+    /// a missing install into `bun install` rather than a fetch of whatever
+    /// npm serves as latest. A step that follows one needs no entry of its
+    /// own, because the gate stops at the first failure.
+    package: Option<&'static str>,
 }
 
 /// Every step, in the order they run.
-pub(crate) const STEPS: [Step; 9] = [
+pub(crate) const STEPS: [Step; 11] = [
     Step {
         name: "fmt",
         requires: "cargo-fmt",
         install: "rustup component add rustfmt",
+        package: None,
     },
     Step {
         name: "taplo",
         requires: "taplo",
         install: "cargo install --locked taplo-cli",
+        package: None,
     },
     Step {
         name: "clippy",
         requires: "cargo-clippy",
         install: "rustup component add clippy",
+        package: None,
     },
     Step {
         name: "tests",
         requires: "cargo",
         install: "rustup toolchain install",
+        package: None,
     },
     Step {
         name: "doctests",
         requires: "cargo",
         install: "rustup toolchain install",
+        package: None,
     },
     Step {
         name: "deny",
         requires: "cargo-deny",
         install: "cargo install --locked cargo-deny",
+        package: None,
     },
     Step {
         name: "machete",
         requires: "cargo-machete",
         install: "cargo install --locked cargo-machete",
+        package: None,
     },
     Step {
         name: "audit",
         requires: "cargo-audit",
         install: "cargo install --locked cargo-audit",
+        package: None,
     },
     Step {
         name: "prettier",
         requires: "bunx",
         install: "install Bun from https://bun.sh",
+        package: Some("prettier"),
+    },
+    Step {
+        name: "typecheck",
+        requires: "bunx",
+        install: "install Bun from https://bun.sh",
+        package: Some("tsc"),
+    },
+    Step {
+        name: "tools",
+        requires: "bun",
+        install: "install Bun from https://bun.sh",
+        package: None,
     },
 ];
 
-/// Where `bun install` puts the prettier launcher, per host.
-///
-/// The gate runs prettier with `--no-install`, so the package has to be in
-/// `node_modules` already. Checking for the launcher is what lets a missing
-/// install be reported as `bun install` rather than as a fetch from npm.
-#[cfg(windows)]
-const PRETTIER_LAUNCHER: &str = "node_modules/.bin/prettier.exe";
-#[cfg(not(windows))]
-const PRETTIER_LAUNCHER: &str = "node_modules/.bin/prettier";
+/// Where `bun install` writes a package's launcher, per host.
+fn launcher(root: &Path, package: &str) -> PathBuf {
+    let name = if cfg!(windows) {
+        format!("{package}.exe")
+    } else {
+        package.to_string()
+    };
+    root.join("node_modules").join(".bin").join(name)
+}
 
 /// Run the gate.
 ///
@@ -114,10 +142,12 @@ pub fn run(ui: &Ui) -> Result<bool> {
             )));
             return Ok(report(ui, &rows, Some(step.name), None));
         }
-        if step.name == "prettier" && !root.join(PRETTIER_LAUNCHER).is_file() {
+        if let Some(package) = step.package
+            && !launcher(&root, package).is_file()
+        {
             rows.push(
                 Row::new(Mark::Fail, step.name, "did not run")
-                    .note("prettier is not in node_modules: bun install"),
+                    .note(format!("{package} is not in node_modules: bun install")),
             );
             return Ok(report(ui, &rows, Some(step.name), None));
         }
@@ -276,9 +306,25 @@ fn invoke(name: &str, root: &Path) -> Result<(Outcome, Option<Output>)> {
                 None,
             )
         }
+        // Bun strips types rather than checking them, so the tools step would
+        // run TypeScript that does not typecheck and never say so.
+        "typecheck" => run_one(root, "bunx", &TYPECHECK_ARGS, "tools/".to_string(), None),
+        "tools" => run_one(root, "bun", &TOOLS_TEST_ARGS, "bun test".to_string(), None),
         other => unreachable!("no step named {other}"),
     }
 }
+
+/// The typecheck command.
+///
+/// `--no-install` makes an absent package a failure rather than a fetch from
+/// npm, the same way the prettier step does. `tsconfig.json` names the files.
+const TYPECHECK_ARGS: [&str; 4] = ["--no-install", "--bun", "tsc", "--noEmit"];
+
+/// The command that runs the repository's own TypeScript tests.
+///
+/// Scoped to `tools`, which is the only directory holding any. A bare
+/// `bun test` would walk whatever else a contributor left in the tree.
+const TOOLS_TEST_ARGS: [&str; 2] = ["test", "tools"];
 
 /// The `bunx` argument vector for the prettier step.
 ///
@@ -383,18 +429,89 @@ fn on_path(program: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CRATE_ENV, DOCTEST_ARGS, MACHETE_DIRS, STEPS, on_path, prettier_args};
+    use super::{
+        CRATE_ENV, DOCTEST_ARGS, MACHETE_DIRS, STEPS, TOOLS_TEST_ARGS, TYPECHECK_ARGS, launcher,
+        on_path, prettier_args,
+    };
     use crate::testutil::TestDir;
 
     #[test]
-    fn the_gate_runs_the_nine_steps_in_the_documented_order() {
+    fn the_gate_runs_the_eleven_steps_in_the_documented_order() {
         let names: Vec<&str> = STEPS.iter().map(|step| step.name).collect();
         assert_eq!(
             names,
             vec![
-                "fmt", "taplo", "clippy", "tests", "doctests", "deny", "machete", "audit",
-                "prettier"
+                "fmt",
+                "taplo",
+                "clippy",
+                "tests",
+                "doctests",
+                "deny",
+                "machete",
+                "audit",
+                "prettier",
+                "typecheck",
+                "tools"
             ]
+        );
+    }
+
+    /// Bun strips types rather than checking them, so the TypeScript under
+    /// `tools` would run without its types ever being read.
+    #[test]
+    fn the_gate_typechecks_the_typescript_it_runs() {
+        assert!(TYPECHECK_ARGS.contains(&"tsc"));
+        assert!(TYPECHECK_ARGS.contains(&"--noEmit"));
+        assert!(
+            TYPECHECK_ARGS.contains(&"--no-install"),
+            "the gate never fetches from npm, got {TYPECHECK_ARGS:?}"
+        );
+    }
+
+    /// Prettier checks how the TypeScript is laid out and nothing else, so a
+    /// gate without this step covers no behavior in `tools` at all.
+    #[test]
+    fn the_gate_runs_the_typescript_tests() {
+        assert_eq!(TOOLS_TEST_ARGS, ["test", "tools"]);
+    }
+
+    /// A step running out of `node_modules` is checked for its launcher first,
+    /// so an absent install is reported as `bun install`.
+    ///
+    /// The set is derived from the steps rather than written out here. A
+    /// hardcoded pair passes untouched when a later step is added without a
+    /// package, which is the one case this is for.
+    #[test]
+    fn every_step_running_from_node_modules_names_its_package() {
+        let through_bunx: Vec<&&str> = STEPS
+            .iter()
+            .filter(|step| step.requires == "bunx")
+            .map(|step| &step.name)
+            .collect();
+        assert!(
+            !through_bunx.is_empty(),
+            "no step runs through bunx, so this case checked nothing"
+        );
+        for step in STEPS.iter().filter(|step| step.requires == "bunx") {
+            assert!(
+                step.package.is_some(),
+                "{} runs `bunx --no-install` and names no package, so a missing \
+                 install reports as a failed command rather than `bun install`",
+                step.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_launcher_resolves_under_node_modules() {
+        let dir = TestDir::new("launcher");
+        let path = launcher(dir.path(), "tsc");
+        assert!(path.starts_with(dir.path()));
+        assert!(path.to_string_lossy().contains("node_modules"));
+        assert!(
+            path.file_stem().and_then(|stem| stem.to_str()) == Some("tsc"),
+            "the launcher is named for the package, got {}",
+            path.display()
         );
     }
 

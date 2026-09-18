@@ -1,0 +1,17 @@
+# Bun's install gate for this repository.
+#
+# A version published minutes ago is the shape a compromised package arrives
+# in, and most are pulled within hours. Three days is the window this project
+# refuses to install inside.
+#
+# It costs continuous integration nothing, because both workflows run
+# `bun install --frozen-lockfile`, which replays the lockfile and resolves
+# nothing. What it covers is a human running `bun add` or `bun install` after
+# editing package.json, on any machine. A user-level bunfig governs one laptop;
+# this one travels with the clone.
+#
+# Dependabot carries the same three days for all three ecosystems, in
+# .github/dependabot.yml.
+
+[install]
+minimumReleaseAge = 259200

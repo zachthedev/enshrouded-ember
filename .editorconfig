@@ -8,7 +8,9 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-[*.{md,json,yml,yaml,js}]
+# The extensions prettier owns here. Prettier reads this file, so the gate and
+# an editor agree on the width without it being written down twice.
+[*.{md,json,yml,yaml,js,mjs,cjs,ts}]
 indent_size = 2
 
 # A markdown line break is two trailing spaces.

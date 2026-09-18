@@ -1,0 +1,274 @@
+name: build-watch
+
+# Steam serves a depot manifest only while it is current, so a build that is
+# not archived within the polling window cannot be fetched again without a
+# Steam credential. The interval is set by that risk, not by how fast anyone
+# needs to know. Keen's server cadence is months, so an hour of latency costs
+# nothing and a day would not.
+#
+# One operational caveat no line in this file can fix. GitHub disables a
+# schedule in a public repository after 60 days with no repository activity,
+# and emails the admin as the only signal. A quiet stretch between Keen
+# releases is that state, and is also when the next build lands. Any commit
+# resets the timer and this workflow commits whenever Steam moves, so the
+# exposure is a repository with no other work going on. A manual run from the
+# Actions tab resets it too.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+# No pull_request trigger, and no archive credential anywhere in ci.yml. GitHub
+# passes no secrets to a workflow triggered from a fork, so an archive step on
+# pull_request would have no credential at all.
+permissions:
+  contents: read
+
+concurrency:
+  # Keyed by ref so a workflow_dispatch on a branch cannot cancel a pending
+  # scheduled run, which would consume an hour of the archiving window.
+  group: build-watch-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_SERVER: "2278520"
+  APP_CLIENT: "1203620"
+  DEPOT_SERVER: "2278521"
+  # SteamCMD updates itself from Valve on every run, so this digest pins the
+  # wrapper rather than the client. No bot reads a `docker run` line, so it is
+  # bumped by hand. Taken from the ubuntu-24 tag on 2026-09-18.
+  #
+  # The container is given no environment, no volume and no token, so its only
+  # channel out is the stdout redirect. A compromised SteamCMD controls the
+  # appinfo text and nothing else, and the watcher validates that text.
+  STEAMCMD_IMAGE: steamcmd/steamcmd@sha256:bf25fdfcfd8245a7f7b3dccfa0fe42004621aa99eb80166fc26f9d75083e8356
+  # Bun is fetched and checked rather than installed by an action. The archive
+  # job runs it with both halves of the write token in its environment, and
+  # setup-bun's only hash call is a cache key over the URL.
+  BUN_VERSION: 1.3.13
+  BUN_SHA256: 79c0771fa8b92c33aae41e15a0e0d307ea99d0e2f00317c71c6c53237a78e25a
+  # The self-contained build, which carries its own .NET runtime. The framework
+  # build needs a runtime that setup-dotnet fetches and validates by comparing
+  # Content-Length, which any equal-length substitution passes. This zip is
+  # pinned by digest instead, and it carries the same version and commit string
+  # the audited framework build does.
+  DEPOTDOWNLOADER_TAG: DepotDownloader_3.4.0
+  DEPOTDOWNLOADER_SHA256: a999dec66b4850fc961bd50366696d23c2d0fad7b18790e6a5647b2f19097a53
+
+jobs:
+  # Reads what Steam advertises and records it. No archive credential reaches
+  # this job: it writes a list of numbers to the repository and nothing else.
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+    outputs:
+      server_changed: ${{ steps.server.outputs.changed }}
+      server_build_id: ${{ steps.server.outputs.build_id }}
+      server_manifest_id: ${{ steps.server.outputs.manifest_id }}
+      server_needs_archive: ${{ steps.server.outputs.needs_archive }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Bun, pinned and checked
+        run: |
+          curl --fail --silent --show-error --location --output bun.zip \
+            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
+          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
+          unzip -q bun.zip
+          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+
+      # --ignore-scripts because the root `prepare` sets core.hooksPath to
+      # .githooks, whose pre-push runs the whole gate. The runner has no tool
+      # belt, so the gate exits non-zero and every push this workflow makes is
+      # refused. It also keeps any dependency lifecycle script away from the
+      # job that holds the write credential.
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # app_info_update 1 forces a fresh fetch. Without it a cold SteamCMD
+      # prints an empty block, which the watcher refuses rather than recording.
+      - name: Read what Steam advertises for the dedicated server
+        run: |
+          mkdir -p .watch
+          docker run --rm "$STEAMCMD_IMAGE" \
+            +login anonymous \
+            +app_info_update 1 \
+            +app_info_print "$APP_SERVER" \
+            +quit > ".watch/appinfo-$APP_SERVER.txt"
+
+      # The server is read and recorded before the client is touched, and the
+      # client's steps cannot abort the job. The server's row reaches the
+      # working tree the moment this step runs, so a failure reading the client
+      # would otherwise throw away a detected build and consume an archiving
+      # window while saying only that the run was red.
+      - id: server
+        name: Record the dedicated server's build state
+        run: |
+          bun run tools/watch-builds.ts \
+            "$APP_SERVER" ".watch/appinfo-$APP_SERVER.txt" --depot "$DEPOT_SERVER"
+
+      - id: client_read
+        name: Read what Steam advertises for the client
+        continue-on-error: true
+        run: |
+          docker run --rm "$STEAMCMD_IMAGE" \
+            +login anonymous \
+            +app_info_update 1 \
+            +app_info_print "$APP_CLIENT" \
+            +quit > ".watch/appinfo-$APP_CLIENT.txt"
+
+      - id: client
+        name: Record the client's build state
+        if: steps.client_read.outcome == 'success'
+        continue-on-error: true
+        run: |
+          bun run tools/watch-builds.ts \
+            "$APP_CLIENT" ".watch/appinfo-$APP_CLIENT.txt"
+
+      - name: Commit the record
+        if:
+          steps.server.outputs.changed == 'true' || steps.client.outputs.changed
+          == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/steam-builds.jsonl
+          git diff --cached --quiet || git commit -m 'chore(ci): record what Steam advertises'
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push
+
+      # Gated on the public branch alone. A client change must never claim a
+      # new server build, and neither must a beta branch: build_id and
+      # manifest_id both follow public, so an issue opened because some other
+      # branch moved would name the build that did not.
+      #
+      # Every value the body carries arrives through the environment rather
+      # than pasted into the script, and reaches printf as an argument rather
+      # than as a format string.
+      - name: Open the build issue
+        if: steps.server.outputs.public_moved == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ steps.server.outputs.build_id }}
+          MANIFEST_ID: ${{ steps.server.outputs.manifest_id }}
+          CHANGE_NUMBER: ${{ steps.server.outputs.change_number }}
+        run: |
+          {
+            printf 'App %s moved on its public branch.\n\n' "$APP_SERVER"
+            printf -- '- build id `%s`\n' "$BUILD_ID"
+            printf -- '- depot %s manifest `%s`\n' "$DEPOT_SERVER" "$MANIFEST_ID"
+            printf -- '- change number `%s`\n\n' "$CHANGE_NUMBER"
+            printf 'The archive job stores the executable under `build/%s/`.\n' "$MANIFEST_ID"
+            printf 'Fill the revision and the fingerprint from the fetched build, '
+            printf 'and resolve every signature row against it before anything ships.\n'
+          } > issue-body.md
+          gh issue create \
+            --label build \
+            --title "build: server buildid $BUILD_ID" \
+            --body-file issue-body.md
+
+      # Last, so the server's row and its issue survive a client failure. The
+      # run still goes red, which is what makes a repeated one visible.
+      - name: Fail if the client could not be read
+        if:
+          steps.client_read.outcome == 'failure' || steps.client.outcome ==
+          'failure'
+        run: |
+          echo "reading app $APP_CLIENT failed. The server's row was recorded." >&2
+          exit 1
+
+  # The only job that holds the write token. The environment restricts it to
+  # main, so a pull request cannot reach the credential even by landing a
+  # workflow change.
+  #
+  # Gated on the archive's own state rather than on whether this run saw a
+  # change. steam-builds.jsonl says what Steam advertised and
+  # build-digests.jsonl says what was actually stored, and only the second can
+  # answer whether the work still needs doing. Gating on the first meant any
+  # transient failure here was never retried, because the next run compared
+  # against a record that already said the build had been seen.
+  archive:
+    needs: watch
+    if: >-
+      needs.watch.outputs.server_needs_archive == 'true' &&
+      needs.watch.outputs.server_manifest_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: archive-write
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Bun, pinned and checked
+        run: |
+          curl --fail --silent --show-error --location --output bun.zip \
+            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
+          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
+          unzip -q bun.zip
+          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+
+      # --ignore-scripts because the root `prepare` sets core.hooksPath to
+      # .githooks, whose pre-push runs the whole gate. The runner has no tool
+      # belt, so the gate exits non-zero and every push this workflow makes is
+      # refused. It also keeps any dependency lifecycle script away from the
+      # job that holds the write credential.
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # No Steam credential ever enters continuous integration. An anonymous
+      # session gets the current manifest and is refused a historical one, so a
+      # missed build is backfilled by an authenticated pull by hand.
+      - name: Fetch the executable while its manifest is current
+        env:
+          MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+        run: |
+          curl --fail --silent --show-error --location \
+            --output depotdownloader.zip \
+            "https://github.com/SteamRE/DepotDownloader/releases/download/$DEPOTDOWNLOADER_TAG/DepotDownloader-linux-x64.zip"
+          echo "$DEPOTDOWNLOADER_SHA256  depotdownloader.zip" | sha256sum --check --strict
+          unzip -q depotdownloader.zip -d depotdownloader
+          chmod +x depotdownloader/DepotDownloader
+          printf '%s\n' enshrouded_server.exe enshrouded_server.kfc > filelist.txt
+          ./depotdownloader/DepotDownloader \
+            -app "$APP_SERVER" \
+            -depot "$DEPOT_SERVER" \
+            -manifest "$MANIFEST_ID" \
+            -filelist filelist.txt \
+            -dir ".cache/archive/$MANIFEST_ID"
+
+      - name: Record what the files hash to
+        env:
+          MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+          BUILD_ID: ${{ needs.watch.outputs.server_build_id }}
+        run: |
+          bun run tools/archive.ts record \
+            --dir ".cache/archive/$MANIFEST_ID" \
+            --manifest "$MANIFEST_ID" \
+            --build "$BUILD_ID"
+
+      # The upload comes before the commit. A digest row committed for a build
+      # that never reached the bucket would tell the next run the work was
+      # done, which is the same trap this job's own gate used to carry. push is
+      # idempotent, so a run that died part way through resumes here.
+      - name: Upload to the archive
+        env:
+          MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+          R2_ARCHIVE_WRITE_ACCESS_KEY_ID:
+            ${{ secrets.R2_ARCHIVE_WRITE_ACCESS_KEY_ID }}
+          R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY:
+            ${{ secrets.R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY }}
+        run: |
+          bun run tools/archive.ts push \
+            --dir ".cache/archive/$MANIFEST_ID" \
+            --manifest "$MANIFEST_ID"
+
+      - name: Commit the digest row
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/build-digests.jsonl
+          git diff --cached --quiet || git commit -m 'chore(ci): record an archived build digest'
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push

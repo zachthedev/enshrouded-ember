@@ -30,20 +30,26 @@ cargo xtask check
 
 It runs, in order and stopping at the first failure:
 
-| Step       | Command                                                 |
-| ---------- | ------------------------------------------------------- |
-| `fmt`      | `cargo fmt --check`                                     |
-| `taplo`    | `taplo fmt --check`                                     |
-| `clippy`   | `cargo clippy --workspace --all-targets -- -D warnings` |
-| `tests`    | `cargo nextest run --workspace`                         |
-| `doctests` | `cargo test --workspace --doc`                          |
-| `deny`     | `cargo deny check`                                      |
-| `machete`  | `cargo machete crates xtask`                            |
-| `audit`    | `cargo audit`                                           |
-| `prettier` | `bunx --no-install --bun prettier --check`              |
+| Step        | Command                                                 |
+| ----------- | ------------------------------------------------------- |
+| `fmt`       | `cargo fmt --check`                                     |
+| `taplo`     | `taplo fmt --check`                                     |
+| `clippy`    | `cargo clippy --workspace --all-targets -- -D warnings` |
+| `tests`     | `cargo nextest run --workspace`                         |
+| `doctests`  | `cargo test --workspace --doc`                          |
+| `deny`      | `cargo deny check`                                      |
+| `machete`   | `cargo machete crates xtask`                            |
+| `audit`     | `cargo audit`                                           |
+| `prettier`  | `bunx --no-install --bun prettier --check`              |
+| `typecheck` | `bunx --no-install --bun tsc --noEmit`                  |
+| `tools`     | `bun test tools`                                        |
 
 `taplo` reads `.taplo.toml` for the files it covers. `prettier` covers `.md`,
 `.yml`, `.yaml`, `.json`, `.js`, `.mjs`, `.cjs` and `.ts`.
+
+`typecheck` and `tools` cover `tools/`, the repository's own TypeScript. Bun
+strips types rather than checking them, so without `typecheck` the gate would
+run TypeScript whose types nothing reads.
 
 `doctests` runs whether or not `cargo-nextest` is installed, because
 `cargo nextest` runs none of them and a doctest that stops compiling would
