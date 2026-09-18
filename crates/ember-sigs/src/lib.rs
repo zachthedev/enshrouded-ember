@@ -17,3 +17,10 @@
 //! Resolution fails closed. A missing required symbol disables the mod that
 //! needed it, names the symbol in the log, and leaves the server running vanilla
 //! for that feature.
+
+pub mod fingerprint;
+pub mod load;
+pub mod report;
+pub mod resolve;
+pub mod symbol;
+pub mod table;

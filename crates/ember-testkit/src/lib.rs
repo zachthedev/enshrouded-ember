@@ -9,3 +9,9 @@
 //! This library opens a channel on the loopback interface and answers commands:
 //! spawn a player, place an entity, read state back, step the simulation. Tests
 //! call it; servers never load it. It is never published.
+
+pub mod client;
+pub mod commands;
+pub mod handshake;
+pub mod protocol;
+pub mod server;

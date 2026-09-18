@@ -27,3 +27,11 @@
 //! the Steamworks client library resolves its `logs` and `config` directories
 //! against the executable rather than the working directory, so its own files
 //! land there. `cargo xtask server fetch --validate` restores everything else.
+
+pub mod discovery;
+pub mod entry;
+pub mod host_api;
+pub mod logging;
+pub mod proxy;
+pub mod report;
+pub mod startup;

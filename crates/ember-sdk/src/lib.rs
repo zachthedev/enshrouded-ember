@@ -7,3 +7,13 @@
 //!
 //! This crate owns the mod lifecycle and re-exports the engine and game
 //! surfaces. It holds no knowledge of either itself.
+
+pub mod abi;
+pub mod config;
+pub mod declare;
+pub mod events;
+pub mod hooks;
+pub mod lifecycle;
+pub mod log;
+pub mod manifest;
+pub mod symbols;

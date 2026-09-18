@@ -16,6 +16,7 @@ ignored = [
     "ember-enshrouded",
     "ember-holistic",
     "ember-platform",
+    "ember-sigs",
     "serde",
     "serde_json",
     "thiserror",
@@ -26,6 +27,7 @@ ignored = [
 ember-enshrouded.workspace = true
 ember-holistic.workspace = true
 ember-platform.workspace = true
+ember-sigs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -8,3 +8,11 @@
 //!
 //! Scope is the engine and nothing above it. Anything true only because the game
 //! is Enshrouded belongs to `ember-enshrouded`.
+
+pub mod build;
+pub mod entity;
+pub mod error;
+pub mod frame;
+pub mod program;
+pub mod reflect;
+pub mod xref;
