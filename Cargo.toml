@@ -4,6 +4,7 @@ members = [
     "crates/ember-platform",
     "crates/ember-sigs",
     "crates/ember-holistic",
+    "crates/ember-kfc",
     "crates/ember-enshrouded",
     "crates/ember-sdk",
     "crates/ember-loader",
@@ -42,6 +43,9 @@ toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 windows-link = "0.100.0"
+# Decoding only, so the dictionary builder, the legacy frame formats and the
+# array helpers stay out of the C build.
+zstd = { version = "0.14.0", default-features = false }
 
 tempfile = "3.27.0"
 

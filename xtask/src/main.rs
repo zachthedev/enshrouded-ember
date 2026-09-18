@@ -34,6 +34,7 @@ const SCOPES: &[&str] = &[
     "loader",
     "sdk",
     "holistic",
+    "kfc",
     "enshrouded",
     "sigs",
     "platform",

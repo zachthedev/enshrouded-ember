@@ -7,7 +7,14 @@ export default {
     'scope-enum': [
       2,
       'always',
-      ['loader', 'sdk', 'holistic', 'enshrouded', 'sigs', 'platform', 'testkit', 'xtask', 'deps', 'ci', 'release'],
+      // The workspace crate names past the `ember-` prefix, plus the
+      // cross-cutting names no crate owns. `cargo xtask scopes` prints the
+      // same list.
+      // prettier-ignore
+      [
+        'loader', 'sdk', 'holistic', 'kfc', 'enshrouded', 'sigs',
+        'platform', 'testkit', 'xtask', 'deps', 'ci', 'release',
+      ],
     ],
     'body-max-line-length': [2, 'always', 72],
   },

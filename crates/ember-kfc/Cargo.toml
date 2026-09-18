@@ -1,0 +1,22 @@
+[package]
+name = "ember-kfc"
+description = "Reader for Keen's KFC3 resource containers: the directory, the zstd payload, and the content blobs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+# The integration suite lays a container set out on disk and hands the reader
+# frames it compressed itself, so it needs the same codec the crate reads with.
+tempfile.workspace = true
+zstd.workspace = true
+
+[lints]
+workspace = true
