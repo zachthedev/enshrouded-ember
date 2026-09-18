@@ -190,6 +190,24 @@ every pull checks what arrived against it before the bytes take their final
 name. R2 has no object versioning and no Object Lock, so an overwrite is final
 and that record is the only thing that would notice one.
 
+The archive job fetches a build with SteamCMD, the same tool and the same pinned
+container the watcher already uses for app info, narrowed to the two Keen files
+with `sDepotDownloadFileFilter`. That costs about 10 MB over the wire rather
+than the depot's 3.7 GB. A Linux SteamCMD selects depots by client platform and
+this depot declares `oslist windows`, so the fetch forces the platform; without
+that it writes nothing and reports `Missing configuration`.
+
+`app_update` takes no manifest parameter and always fetches the head of the
+branch, so `archive record` reads the manifest gid out of the app manifest the
+fetch leaves beside the payload, and refuses a row that would key those bytes
+under a different gid.
+
+**A historical manifest needs DepotDownloader, run by hand under a real Steam
+account.** `app_update` cannot ask for one and an anonymous session is refused
+one, so a build missed while its manifest was current is recovered that way
+rather than by continuous integration. That is how the four backfilled builds
+arrived, and `archive record` reads DepotDownloader's provenance too.
+
 `archive.json` at the repository root names the account and the bucket those
 commands reach. A fork points the pipeline at its own bucket by editing that
 file and nothing else. It is committed rather than kept in a secret, so a change

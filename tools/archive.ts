@@ -36,7 +36,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { mkdir, readdir, rename, rm } from "node:fs/promises";
+import { appendFile, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -495,6 +495,30 @@ function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+/**
+ * Hand one value to the workflow step that will read it, when one is listening.
+ *
+ * @remarks
+ * A line break in a value would declare an output name of its own, and GitHub
+ * takes the last value for a repeated name. `JSON.stringify` never emits a raw
+ * line break, so this refuses rather than escaping: a value that has one is a
+ * value this code did not build.
+ *
+ * @param name - The output name a later step reads.
+ * @param value - What to hand it.
+ */
+async function emitStepOutput(name: string, value: string): Promise<void> {
+  const path = process.env["GITHUB_OUTPUT"];
+  if (path === undefined || path.length === 0) {
+    return;
+  }
+  if (/[\r\n]/.test(value)) {
+    row(false, `the ${name} output carries a line break`);
+    summary("nothing was handed to the next job", true);
+  }
+  await appendFile(path, `${name}=${value}\n`, "utf8");
+}
+
 /** Print the closing line and pick the exit code. */
 function summary(text: string, failed: boolean): never {
   console.log("");
@@ -508,12 +532,26 @@ function summary(text: string, failed: boolean): never {
  * ///////////////////////////////////////////////
  */
 
-/** Hash a local build and append its row to the digest record. */
-async function commandRecord(options: Options): Promise<never> {
-  section("record");
+/**
+ * Hash a local build and build the row that describes it.
+ *
+ * @remarks
+ * The whole of what `record` did before it was split. `record` appends what
+ * this returns and `emit` prints it, so the checks that decide whether a build
+ * may be recorded at all happen once and in one place rather than in whichever
+ * verb a caller happened to use.
+ *
+ * @param options - The flags the command was given.
+ * @param recordPath - The record to check for an existing row.
+ * @returns The row, after every check it has to pass.
+ */
+async function buildRow(
+  options: Options,
+  recordPath: string,
+): Promise<BuildDigestRecord> {
   const dir = required(options, "dir");
   const manifestId = required(options, "manifest");
-  if ((await digestRow(manifestId)) !== null) {
+  if ((await digestRow(manifestId, recordPath)) !== null) {
     row(false, `${manifestId} already has a row`);
     summary(
       "a digest row is written once, because rewriting one would let a swap " +
@@ -566,7 +604,7 @@ async function commandRecord(options: Options): Promise<never> {
     row(true, `${fileName} ${digest.bytes} bytes ${dim(digest.sha256)}`);
   }
 
-  await appendRecord(BUILD_DIGESTS_PATH, BuildDigestRecord, {
+  return BuildDigestRecord.parse({
     manifestId,
     buildId: options.build ?? null,
     appId,
@@ -576,17 +614,99 @@ async function commandRecord(options: Options): Promise<never> {
     archivedAt: (options.date ?? new Date().toISOString()).slice(0, 10),
     files,
   });
-  summary(`one row appended to ${BUILD_DIGESTS_PATH}`, false);
+}
+
+/** Hash a local build and append its row to the digest record. */
+async function commandRecord(options: Options): Promise<never> {
+  section("record");
+  const recordPath = options.record ?? BUILD_DIGESTS_PATH;
+  const built = await buildRow(options, recordPath);
+  await appendRecord(recordPath, BuildDigestRecord, built);
+  summary(`one row appended to ${recordPath}`, false);
+}
+
+/**
+ * Hash a local build and print its row, without touching the record.
+ *
+ * @remarks
+ * A separate verb rather than a flag on `record`, because it is a different
+ * seam. `--record` moves where the append lands and leaves `record` meaning
+ * what it says. This changes whether an append happens at all, and a verb that
+ * sometimes writes and sometimes does not is the kind of thing a reader has to
+ * check the flags to understand.
+ *
+ * The job that fetches a build holds the credential that can overwrite the
+ * archive, and the job that commits the row holds a key that can push to main.
+ * Neither should hold the other, so the row crosses between them as a job
+ * output and this is what puts it there.
+ */
+async function commandEmit(options: Options): Promise<never> {
+  section("emit");
+  const recordPath = options.record ?? BUILD_DIGESTS_PATH;
+  const built = await buildRow(options, recordPath);
+  const line = JSON.stringify(built);
+
+  // Every field here is committed to a public repository moments later, so
+  // none of it is secret. A job output is readable by anyone who can read the
+  // run, which for this row is the same audience as the file.
+  await emitStepOutput("row", line);
+  console.log("");
+  console.log(line);
+  summary(`the row for ${built.manifestId} was not written to any file`, false);
+}
+
+/**
+ * Append a row that another job built.
+ *
+ * @remarks
+ * The row arrives as a string from outside this process, so it is validated
+ * against the same shape a read enforces, and checked for a duplicate again.
+ * The record may have gained that manifest between the job that built the row
+ * and this one.
+ */
+async function commandAppend(options: Options): Promise<never> {
+  section("append");
+  const recordPath = options.record ?? BUILD_DIGESTS_PATH;
+  const raw = required(options, "row");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    row(false, `--row is not JSON: ${(error as Error).message}`);
+    summary("nothing appended", true);
+  }
+  const checked = BuildDigestRecord.safeParse(parsed);
+  if (!checked.success) {
+    row(false, `--row is not a digest row: ${z.prettifyError(checked.error)}`);
+    summary("nothing appended", true);
+  }
+
+  if ((await digestRow(checked.data.manifestId, recordPath)) !== null) {
+    row(true, `${checked.data.manifestId} already has a row`);
+    summary(
+      "nothing appended, and nothing is wrong: the row this job was handed " +
+        "is already in the record",
+      false,
+    );
+  }
+
+  await appendRecord(recordPath, BuildDigestRecord, checked.data);
+  for (const [fileName, digest] of Object.entries(checked.data.files)) {
+    row(true, `${fileName} ${digest.bytes} bytes ${dim(digest.sha256)}`);
+  }
+  summary(`one row appended to ${recordPath}`, false);
 }
 
 /** Hash a local build and compare it to its committed row. */
 async function commandVerify(options: Options): Promise<never> {
   section("verify");
+  const recordPath = options.record ?? BUILD_DIGESTS_PATH;
   const dir = required(options, "dir");
   const manifestId = required(options, "manifest");
-  const record = await digestRow(manifestId);
+  const record = await digestRow(manifestId, recordPath);
   if (record === null) {
-    row(false, `${manifestId} has no row in ${BUILD_DIGESTS_PATH}`);
+    row(false, `${manifestId} has no row in ${recordPath}`);
     summary("nothing to verify against, so the bytes are unproven", true);
   }
 
@@ -617,14 +737,58 @@ async function commandVerify(options: Options): Promise<never> {
   );
 }
 
+/** What `push` does about one key. */
+export type UploadAction =
+  | { readonly action: "upload" }
+  | { readonly action: "skip" }
+  | { readonly action: "refuse"; readonly detail: string };
+
+/**
+ * Decide what to do about one object already in the bucket.
+ *
+ * @remarks
+ * This is what makes a retry converge rather than loop. A run that uploaded
+ * and then failed before its row was committed leaves `needs_archive` true, so
+ * the next run fetches and pushes again; skipping an object whose size already
+ * matches is what stops that second push from either refusing or overwriting.
+ * The bytes are the irreplaceable half and they are already safe, so the retry
+ * costs one fetch and finishes.
+ *
+ * A size mismatch is refused rather than overwritten, because R2 has no
+ * versioning and the object under a legitimate key is what continuous
+ * integration and developers run.
+ *
+ * @param expected - What the digest row says the file is.
+ * @param existingBytes - The size the bucket reports, or null when absent.
+ * @returns Whether to upload, skip, or refuse and why.
+ */
+export function uploadDecision(
+  expected: FileDigest,
+  existingBytes: number | null,
+): UploadAction {
+  if (existingBytes === null) {
+    return { action: "upload" };
+  }
+  // The local copy was verified against the row before this, so a size match
+  // means the object already holds the recorded bytes.
+  if (existingBytes === expected.bytes) {
+    return { action: "skip" };
+  }
+  return {
+    action: "refuse",
+    detail: `holds ${existingBytes} bytes, and the record says ${expected.bytes}`,
+  };
+}
+
 /** Verify a local build, then upload it under its manifest gid. */
 async function commandPush(options: Options): Promise<never> {
   section("push");
+  const recordPath = options.record ?? BUILD_DIGESTS_PATH;
   const dir = required(options, "dir");
   const manifestId = required(options, "manifest");
-  const record = await digestRow(manifestId);
+  const record = await digestRow(manifestId, recordPath);
   if (record === null) {
-    row(false, `${manifestId} has no row in ${BUILD_DIGESTS_PATH}`);
+    row(false, `${manifestId} has no row in ${recordPath}`);
     summary(
       "run `archive record` first, so the upload has a digest to prove",
       true,
@@ -657,17 +821,16 @@ async function commandPush(options: Options): Promise<never> {
       .file(key)
       .stat()
       .catch(() => null);
-    if (existing !== null) {
-      // The digests match the local copy, which was checked above, so a size
-      // match means the object already holds the recorded bytes.
-      if (existing.size === record.files[fileName]?.bytes) {
-        row(true, `${key} is already archived`);
-        continue;
-      }
-      row(
-        false,
-        `${key} holds ${existing.size} bytes, and the record says ${record.files[fileName]?.bytes}`,
-      );
+    const decided = uploadDecision(
+      record.files[fileName] as FileDigest,
+      existing?.size ?? null,
+    );
+    if (decided.action === "skip") {
+      row(true, `${key} is already archived`);
+      continue;
+    }
+    if (decided.action === "refuse") {
+      row(false, `${key} ${decided.detail}`);
       summary(
         "nothing further uploaded. R2 has no versioning, so an overwrite is " +
           "final and this tool never takes that decision on its own",
@@ -689,11 +852,12 @@ async function commandPush(options: Options): Promise<never> {
 /** Download a build, verify what arrived, and only then give it its name. */
 async function commandPull(options: Options): Promise<never> {
   section("pull");
+  const recordPath = options.record ?? BUILD_DIGESTS_PATH;
   const manifestId = required(options, "manifest");
   const out = required(options, "out");
-  const record = await digestRow(manifestId);
+  const record = await digestRow(manifestId, recordPath);
   if (record === null) {
-    row(false, `${manifestId} has no row in ${BUILD_DIGESTS_PATH}`);
+    row(false, `${manifestId} has no row in ${recordPath}`);
     summary(
       "refusing to download bytes with nothing to check them against",
       true,
@@ -791,11 +955,24 @@ interface Options {
   readonly revision?: string;
   readonly branch?: string;
   readonly date?: string;
+  /**
+   * The JSON Lines record to read and append to.
+   *
+   * @remarks
+   * Defaults to the committed one. A test points it at a sandbox so a case can
+   * drive the whole command without appending to the repository.
+   */
+  readonly record?: string;
+  /** A digest row another job built, as one JSON line. */
+  readonly row?: string;
   readonly file?: string[];
 }
 
 /** The flag a command cannot run without, or a usage failure naming it. */
-function required(options: Options, name: "dir" | "out" | "manifest"): string {
+function required(
+  options: Options,
+  name: "dir" | "out" | "manifest" | "row",
+): string {
   const value = options[name];
   if (value === undefined || value.length === 0) {
     console.error(`--${name} is required`);
@@ -807,6 +984,8 @@ function required(options: Options, name: "dir" | "out" | "manifest"): string {
 /** What each verb does, for the usage text. */
 const VERBS: Record<string, string> = {
   record: "hash a local build and append its digest row",
+  emit: "hash a local build and print its digest row, writing no file",
+  append: "append a digest row another job built",
   verify: "check a local build against its digest row",
   push: "verify a local build, then upload it to the archive",
   pull: "download a build and verify it before it is named",
@@ -826,6 +1005,8 @@ if (import.meta.main) {
       revision: { type: "string" },
       branch: { type: "string" },
       date: { type: "string" },
+      record: { type: "string" },
+      row: { type: "string" },
       file: { type: "string", multiple: true },
     },
   });
@@ -842,6 +1023,8 @@ if (import.meta.main) {
 
   try {
     if (verb === "record") await commandRecord(options);
+    if (verb === "emit") await commandEmit(options);
+    if (verb === "append") await commandAppend(options);
     if (verb === "verify") await commandVerify(options);
     if (verb === "push") await commandPush(options);
     if (verb === "pull") await commandPull(options);

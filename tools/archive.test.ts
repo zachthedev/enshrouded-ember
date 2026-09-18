@@ -14,8 +14,9 @@ import {
   DuplicateRowError,
   MissingCredentialError,
   objectKey,
+  uploadDecision,
 } from "./archive.ts";
-import { appendRecord, BuildDigestRecord } from "./records.ts";
+import { appendRecord, BuildDigestRecord, readRecords } from "./records.ts";
 
 /** Every sandbox this file made, removed once the case ends. */
 const sandboxes: string[] = [];
@@ -473,6 +474,320 @@ describe("fetchedManifest", () => {
     expect(await fetchedManifest(dir, 2278520, 2278521)).toBeNull();
   });
 });
+
+describe("the record command, driven end to end", () => {
+  /** A SteamCMD app manifest naming one gid for the server depot. */
+  const acf = (manifest: string): string =>
+    [
+      '"AppState"',
+      "{",
+      '\t"buildid"\t\t"23178631"',
+      '\t"InstalledDepots"',
+      "\t{",
+      '\t\t"2278521"',
+      "\t\t{",
+      `\t\t\t"manifest"\t\t"${manifest}"`,
+      "\t\t}",
+      "\t}",
+      "}",
+    ].join("\n");
+
+  /** A directory shaped like one a filtered SteamCMD fetch leaves behind. */
+  const fetched = async (manifest: string): Promise<string> => {
+    const dir = await sandbox();
+    await Bun.write(join(dir, "enshrouded_server.exe"), "abc");
+    await Bun.write(join(dir, "enshrouded_server.kfc"), "abc");
+    await Bun.write(
+      join(dir, "steamapps", "appmanifest_2278520.acf"),
+      acf(manifest),
+    );
+    return dir;
+  };
+
+  /**
+   * The real command, pointed at a sandbox record so no case can append to the
+   * repository's own. Running the command rather than a piece of it is the
+   * point: the refusal lives in the command, and a case over an extracted
+   * fragment would stay green if the command stopped calling it.
+   */
+  // No return annotation: the literal options below narrow stdout and stderr
+  // to strings, and naming the general type throws that away.
+  const record = (dir: string, manifestId: string, recordPath: string) =>
+    Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "run",
+        fileURLToPath(new URL("archive.ts", import.meta.url)),
+        "record",
+        "--dir",
+        dir,
+        "--manifest",
+        manifestId,
+        "--record",
+        recordPath,
+      ],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+  test("a fetch that matches what was asked for is recorded", async () => {
+    const dir = await fetched("2174935030716737236");
+    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const run = record(dir, "2174935030716737236", recordPath);
+    expect(run.stdout.toString()).toContain("confirmed by");
+    expect(run.exitCode).toBe(0);
+    expect(await readRecords(recordPath, BuildDigestRecord)).toHaveLength(1);
+  });
+
+  /**
+   * `app_update` always fetches the head of the branch, so a Keen release
+   * landing between the watch job and the archive job returns a build nobody
+   * asked for. Recording it would key the new bytes under the old gid, which is
+   * a wrong record rather than a failed run.
+   */
+  test("a fetch that returned another build is refused, and records nothing", async () => {
+    const dir = await fetched("9999999999999999999");
+    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const run = record(dir, "2174935030716737236", recordPath);
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout.toString()).toContain("9999999999999999999");
+    expect(await Bun.file(recordPath).exists()).toBe(false);
+  });
+
+  /**
+   * A file filter that matches nothing leaves SteamCMD reporting success over
+   * an empty directory, so an absent file has to be a refusal rather than a
+   * row naming less.
+   */
+  test("a fetch that wrote nothing is refused", async () => {
+    const dir = await sandbox();
+    await Bun.write(
+      join(dir, "steamapps", "appmanifest_2278520.acf"),
+      acf("2174935030716737236"),
+    );
+    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const run = record(dir, "2174935030716737236", recordPath);
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout.toString()).toContain("enshrouded_server.exe is not in");
+    expect(await Bun.file(recordPath).exists()).toBe(false);
+  });
+
+  /** A build that is already recorded is never recorded twice. */
+  test("a manifest that already has a row is refused", async () => {
+    const dir = await fetched("2174935030716737236");
+    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    expect(record(dir, "2174935030716737236", recordPath).exitCode).toBe(0);
+    const again = record(dir, "2174935030716737236", recordPath);
+    expect(again.exitCode).toBe(1);
+    expect(again.stdout.toString()).toContain("already has a row");
+    expect(await readRecords(recordPath, BuildDigestRecord)).toHaveLength(1);
+  });
+});
+
+describe("uploadDecision", () => {
+  const expected = { bytes: 22557696, sha256: ABC_SHA256 };
+
+  test("an absent object is uploaded", () => {
+    expect(uploadDecision(expected, null)).toEqual({ action: "upload" });
+  });
+
+  /**
+   * This is what makes a retry converge. A run that uploaded and then failed
+   * before its row was committed leaves `needs_archive` true, so the next run
+   * fetches and pushes again. Skipping an object whose size already matches is
+   * what stops that second push from refusing, which would loop forever, or
+   * overwriting, which R2 cannot undo.
+   */
+  test("an object already at the recorded size is skipped", () => {
+    expect(uploadDecision(expected, 22557696)).toEqual({ action: "skip" });
+  });
+
+  test.each([
+    ["shorter", 1024],
+    ["longer", 99999999],
+    ["empty", 0],
+  ])("an object that is %s is refused rather than overwritten", (_n, bytes) => {
+    const decided = uploadDecision(expected, bytes);
+    expect(decided.action).toBe("refuse");
+    expect(decided.action === "refuse" && decided.detail).toContain(
+      String(bytes),
+    );
+  });
+});
+
+describe("the emit and append verbs", () => {
+  /** A SteamCMD app manifest naming one gid for the server depot. */
+  const acf = (manifest: string): string =>
+    [
+      '"AppState"',
+      "{",
+      '\t"InstalledDepots"',
+      "\t{",
+      '\t\t"2278521"',
+      "\t\t{",
+      `\t\t\t"manifest"\t\t"${manifest}"`,
+      "\t\t}",
+      "\t}",
+      "}",
+    ].join("\n");
+
+  const fetched = async (manifest: string): Promise<string> => {
+    const dir = await sandbox();
+    await Bun.write(join(dir, "enshrouded_server.exe"), "abc");
+    await Bun.write(join(dir, "enshrouded_server.kfc"), "abc");
+    await Bun.write(
+      join(dir, "steamapps", "appmanifest_2278520.acf"),
+      acf(manifest),
+    );
+    return dir;
+  };
+
+  const run = (args: string[]) =>
+    Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        "run",
+        fileURLToPath(new URL("archive.ts", import.meta.url)),
+        ...args,
+      ],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+  /** The one line of JSON a run prints, which is the row. */
+  const emittedRow = (out: string): string =>
+    out.split("\n").find((text) => text.startsWith("{")) as string;
+
+  /**
+   * The job that fetches holds the credential that can overwrite the archive,
+   * and the job that commits holds a key that can push to main. Neither holds
+   * the other, so the row crosses between them as a string, and `emit` is what
+   * produces it without touching a file.
+   */
+  test("emit prints a row and writes no file", async () => {
+    const dir = await fetched("2174935030716737236");
+    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const emitted = run([
+      "emit",
+      "--dir",
+      dir,
+      "--manifest",
+      "2174935030716737236",
+      "--record",
+      recordPath,
+    ]);
+    expect(emitted.exitCode).toBe(0);
+    expect(await Bun.file(recordPath).exists()).toBe(false);
+
+    const parsed = BuildDigestRecord.parse(
+      JSON.parse(emittedRow(emitted.stdout.toString())),
+    );
+    expect(parsed.manifestId).toBe("2174935030716737236");
+    expect(Object.keys(parsed.files).sort()).toEqual([
+      "enshrouded_server.exe",
+      "enshrouded_server.kfc",
+    ]);
+  });
+
+  /** Every refusal `record` makes happens before a row can be emitted. */
+  test("emit refuses a build that is not the one asked for", async () => {
+    const dir = await fetched("9999999999999999999");
+    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const emitted = run([
+      "emit",
+      "--dir",
+      dir,
+      "--manifest",
+      "2174935030716737236",
+      "--record",
+      recordPath,
+    ]);
+    expect(emitted.exitCode).toBe(1);
+    expect(emitted.stdout.toString()).toContain("9999999999999999999");
+  });
+
+  test("append writes the row emit produced", async () => {
+    const dir = await fetched("2174935030716737236");
+    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const emitted = run([
+      "emit",
+      "--dir",
+      dir,
+      "--manifest",
+      "2174935030716737236",
+      "--record",
+      recordPath,
+    ]);
+    const appended = run([
+      "append",
+      "--row",
+      emittedRow(emitted.stdout.toString()),
+      "--record",
+      recordPath,
+    ]);
+    expect(appended.exitCode).toBe(0);
+    expect(await readRecords(recordPath, BuildDigestRecord)).toHaveLength(1);
+  });
+
+  /**
+   * The row crossed a job boundary as a string, so it is checked again rather
+   * than trusted.
+   */
+  test.each([
+    ["not JSON at all", "{"],
+    ["JSON that is not a row", '{"manifestId":"1"}'],
+    ["a row naming only one archived file", partialRow()],
+    ["a row with a corrupted digest", badDigestRow()],
+  ])("append refuses a row that is %s, and says why", async (_name, line) => {
+    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const appended = run(["append", "--row", line, "--record", recordPath]);
+    expect(appended.exitCode).toBe(1);
+    expect(await Bun.file(recordPath).exists()).toBe(false);
+    // The refusal names the flag the bad value arrived on. `appendRecord`
+    // would refuse this row too, so the exit code alone stays correct if the
+    // check here is removed; what would go is the sentence that tells a
+    // reader which input was wrong.
+    expect(appended.stdout.toString()).toContain("--row");
+  });
+
+  /**
+   * A rerun after the row already landed is not a failure. It is the shape a
+   * retry takes once the commit finally succeeds.
+   */
+  test("append is quiet and green when the row is already recorded", async () => {
+    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    await appendRecord(recordPath, BuildDigestRecord, row);
+    const again = run([
+      "append",
+      "--row",
+      JSON.stringify(row),
+      "--record",
+      recordPath,
+    ]);
+    expect(again.exitCode).toBe(0);
+    expect(again.stdout.toString()).toContain("already has a row");
+    expect(await readRecords(recordPath, BuildDigestRecord)).toHaveLength(1);
+  });
+});
+
+/** A row naming one archived file, which the shape refuses. */
+function partialRow(): string {
+  return JSON.stringify({
+    ...row,
+    files: { "enshrouded_server.exe": { bytes: 3, sha256: ABC_SHA256 } },
+  });
+}
+
+/** A row whose digest is not a SHA-256. */
+function badDigestRow(): string {
+  return JSON.stringify({
+    ...row,
+    files: {
+      "enshrouded_server.exe": { bytes: 3, sha256: "nope" },
+      "enshrouded_server.kfc": { bytes: 3, sha256: ABC_SHA256 },
+    },
+  });
+}
 
 describe("digestRow", () => {
   test("a manifest with no row reads as null", async () => {
