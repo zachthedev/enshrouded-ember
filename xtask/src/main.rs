@@ -1,10 +1,11 @@
 //! Repository automation, run as `cargo xtask <command>`.
 //!
-//! Three groups live here. `check` is the single gate that continuous
+//! Four groups live here. `check` is the single gate that continuous
 //! integration, the pre-push hook and `CONTRIBUTING.md` all call. `server`
 //! fetches a dedicated server build, seeds it, launches it with the loader
 //! injected, tails it and stops it. `schema` recovers the reflection schema
-//! from a build and diffs two recoveries.
+//! from a build and diffs two recoveries. `loca` writes a client's localization
+//! tables out, so a mod can name a tag id it looked up.
 //!
 //! Nothing recovered from a Keen binary is committed. Every extraction lands
 //! under the gitignored `.cache` directory and is regenerated from a build the
@@ -14,6 +15,7 @@ mod check;
 mod hooks;
 mod image;
 mod kfc;
+mod loca;
 mod proc;
 mod root;
 mod schema;
@@ -81,6 +83,9 @@ enum Command {
     /// Recover the reflection schema from a build, and diff two recoveries.
     #[command(subcommand)]
     Schema(SchemaCommand),
+    /// Write a client build's localization tables out, for looking up tag ids.
+    #[command(subcommand)]
+    Loca(LocaCommand),
 }
 
 #[derive(Subcommand)]
@@ -179,6 +184,33 @@ enum SchemaCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum LocaCommand {
+    /// Write one table per language to `<root>/.cache/loca/<buildid>`.
+    ///
+    /// Only a client ships a localization table. The dedicated server carries
+    /// none, so nothing here reads one.
+    Extract {
+        /// Client executable whose container set holds the tables.
+        #[arg(long, value_name = "EXE")]
+        client: PathBuf,
+        /// Buildid naming the output directory. Defaults to the one the app
+        /// manifest beside the client records.
+        #[arg(long, value_name = "BUILDID")]
+        build: Option<String>,
+        /// Directory to write into, instead of the one the buildid names.
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+        /// Language id to write. Repeatable. Defaults to every one the build
+        /// ships.
+        #[arg(long, value_name = "ID")]
+        language: Vec<u32>,
+        /// Overwrite an existing extraction.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let ui = ui::Ui::new(cli.global.quiet);
@@ -221,6 +253,10 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
         Command::Schema(command) => {
             let root = root::DevRoot::resolve(cli.global.root.as_deref())?;
             schema::run(command, &root, ui)
+        }
+        Command::Loca(command) => {
+            let root = root::DevRoot::resolve(cli.global.root.as_deref())?;
+            loca::run(command, &root, ui)
         }
     }
 }

@@ -29,6 +29,12 @@ pub const CACHE_DIR: &str = ".cache";
 /// The Steam application the dedicated server ships as.
 pub const APP_ID: &str = "2278520";
 
+/// The Steam application the game client ships as.
+///
+/// A separate application from the dedicated server, with a buildid of its own
+/// that rises independently, so the two numbers are never comparable.
+pub const CLIENT_APP_ID: &str = "1203620";
+
 /// Names Windows reserves for devices, which no directory can carry.
 const RESERVED_NAMES: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -76,6 +82,11 @@ impl DevRoot {
         self.cache().join("schema")
     }
 
+    /// Where localization extractions live, one directory per buildid.
+    pub fn loca_dir(&self) -> PathBuf {
+        self.cache().join("loca")
+    }
+
     /// Where `SteamCMD` lives.
     pub fn steamcmd(&self) -> PathBuf {
         self.cache().join("steamcmd").join("steamcmd.exe")
@@ -121,6 +132,19 @@ impl DevRoot {
         check_build_id(build)?;
         let path = self.schema_dir().join(build);
         crate::steam::ensure_outside_library(&path, "an extraction directory")?;
+        Ok(path)
+    }
+
+    /// The directory holding one build's localization tables.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the buildid is not a single path segment, or when
+    /// the directory resolves inside a Steam library.
+    pub fn loca_build_dir(&self, build: &str) -> Result<PathBuf> {
+        check_build_id(build)?;
+        let path = self.loca_dir().join(build);
+        crate::steam::ensure_outside_library(&path, "a localization directory")?;
         Ok(path)
     }
 
@@ -207,7 +231,7 @@ pub fn check_build_id(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// The buildid `SteamCMD` recorded in an install directory's app manifest.
+/// The buildid an app manifest under `install_dir` records for one application.
 ///
 /// The value is checked the way a typed buildid is, because it becomes a
 /// directory name the same way.
@@ -216,10 +240,10 @@ pub fn check_build_id(name: &str) -> Result<()> {
 ///
 /// Returns an error when the manifest is absent, carries no buildid, or
 /// carries one that is not a plain directory name.
-pub fn build_id_from_manifest(install_dir: &Path) -> Result<String> {
+pub fn build_id_from_manifest(install_dir: &Path, app: &str) -> Result<String> {
     let manifest = install_dir
         .join("steamapps")
-        .join(format!("appmanifest_{APP_ID}.acf"));
+        .join(format!("appmanifest_{app}.acf"));
     let text = std::fs::read_to_string(&manifest)
         .with_context(|| format!("reading {}", manifest.display()))?;
     for line in text.lines() {
@@ -287,7 +311,10 @@ mod tests {
             "steamapps/appmanifest_2278520.acf",
             b"\"AppState\"\n{\n\t\"appid\"\t\t\"2278520\"\n\t\"name\"\t\t\"Enshrouded Dedicated Server\"\n\t\"buildid\"\t\t\"23178631\"\n}\n",
         );
-        assert_eq!(build_id_from_manifest(dir.path()).unwrap(), "23178631");
+        assert_eq!(
+            build_id_from_manifest(dir.path(), super::APP_ID).unwrap(),
+            "23178631"
+        );
     }
 
     /// A manifest is a file an operator can edit, so its buildid is held to
@@ -307,7 +334,7 @@ mod tests {
                 "steamapps/appmanifest_2278520.acf",
                 format!("\"AppState\"\n{{\n\t\"buildid\"\t\t\"{value}\"\n}}\n").as_bytes(),
             );
-            let err = build_id_from_manifest(dir.path()).expect_err(value);
+            let err = build_id_from_manifest(dir.path(), super::APP_ID).expect_err(value);
             assert!(
                 format!("{err:#}").contains("not usable"),
                 "{value}: {err:#}"
@@ -322,14 +349,15 @@ mod tests {
             "steamapps/appmanifest_2278520.acf",
             b"\"AppState\"\n{\n\t\"appid\"\t\t\"2278520\"\n}\n",
         );
-        let err = build_id_from_manifest(dir.path()).expect_err("no buildid to read");
+        let err =
+            build_id_from_manifest(dir.path(), super::APP_ID).expect_err("no buildid to read");
         assert!(format!("{err}").contains("names no buildid"), "{err}");
     }
 
     #[test]
     fn a_missing_manifest_names_the_path_it_looked_for() {
         let dir = TestDir::new("manifest-missing");
-        let err = build_id_from_manifest(dir.path()).expect_err("nothing to read");
+        let err = build_id_from_manifest(dir.path(), super::APP_ID).expect_err("nothing to read");
         assert!(
             format!("{err:#}").contains("appmanifest_2278520.acf"),
             "{err:#}"
@@ -368,10 +396,11 @@ mod tests {
         dir.write("fake/SteamLibrary/steamapps/common/keep", b"");
         let library = dir.path().join("fake").join("SteamLibrary");
         let root = DevRoot { path: library };
-        let cases: [(&str, anyhow::Result<std::path::PathBuf>); 3] = [
+        let cases: [(&str, anyhow::Result<std::path::PathBuf>); 4] = [
             ("build", root.build_dir("23178631")),
             ("run", root.run_dir("23178631")),
             ("schema", root.schema_build_dir("23178631")),
+            ("loca", root.loca_build_dir("23178631")),
         ];
         for (label, outcome) in cases {
             let err = outcome.expect_err(label);
@@ -394,6 +423,7 @@ mod tests {
                 root.schema_build_dir(name).is_err(),
                 "schema_build_dir {name}"
             );
+            assert!(root.loca_build_dir(name).is_err(), "loca_build_dir {name}");
             assert!(root.build_id(Some(name)).is_err(), "build_id {name}");
         }
     }

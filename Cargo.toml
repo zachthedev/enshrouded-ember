@@ -23,6 +23,7 @@ authors = ["Zach <me@zachthe.dev>"]
 [workspace.dependencies]
 ember-enshrouded = { version = "0.0.0", path = "crates/ember-enshrouded" }
 ember-holistic = { version = "0.0.0", path = "crates/ember-holistic" }
+ember-kfc = { version = "0.0.0", path = "crates/ember-kfc" }
 ember-platform = { version = "0.0.0", path = "crates/ember-platform" }
 ember-sdk = { version = "0.0.0", path = "crates/ember-sdk" }
 ember-sigs = { version = "0.0.0", path = "crates/ember-sigs" }

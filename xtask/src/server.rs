@@ -157,7 +157,7 @@ fn fetch(root: &DevRoot, ui: &Ui, expected: Option<&str>) -> Result<bool> {
         );
     }
 
-    let actual = build_id_from_manifest(&staging)?;
+    let actual = build_id_from_manifest(&staging, APP_ID)?;
     let target = root.build_dir(&actual)?;
     if target.exists() {
         bail!(

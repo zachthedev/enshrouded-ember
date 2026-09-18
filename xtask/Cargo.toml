@@ -13,6 +13,7 @@ publish = false
 anyhow.workspace = true
 clap.workspace = true
 comfy-table.workspace = true
+ember-kfc.workspace = true
 goblin.workspace = true
 owo-colors.workspace = true
 serde.workspace = true

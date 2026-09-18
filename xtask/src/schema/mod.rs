@@ -200,7 +200,7 @@ fn locate_server(
         return Ok((path.to_path_buf(), named.to_string()));
     }
     let install = path.parent().unwrap_or(Path::new("."));
-    match crate::root::build_id_from_manifest(install) {
+    match crate::root::build_id_from_manifest(install, crate::root::APP_ID) {
         Ok(from_manifest) => Ok((path.to_path_buf(), from_manifest)),
         Err(err) => bail!(
             "{err:#}. Pass --build <buildid> to name the extraction directory for {}.",

@@ -919,6 +919,7 @@ dependencies = [
  "anyhow",
  "clap",
  "comfy-table",
+ "ember-kfc",
  "goblin",
  "owo-colors",
  "serde",
