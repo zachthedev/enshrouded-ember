@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Repository automation: signature checks, signature diffs, and packaging."
+description = "Repository automation: the check gate, the dev server loop, and the reflection extractors."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,21 @@ authors.workspace = true
 publish = false
 
 [dependencies]
+anyhow.workspace = true
 clap.workspace = true
+comfy-table.workspace = true
+goblin.workspace = true
+owo-colors.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-link.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

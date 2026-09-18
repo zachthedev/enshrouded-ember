@@ -1,0 +1,56 @@
+{
+  "name": "Ember dev server",
+  "saveDirectory": "{SAVE_DIRECTORY}",
+  "logDirectory": "{LOG_DIRECTORY}",
+  "ip": "127.0.0.1",
+  "queryPort": 15637,
+  "slotCount": 1,
+  "tags": [],
+  "voiceChatMode": "Proximity",
+  "enableVoiceChat": false,
+  "enableTextChat": true,
+  "gameSettingsPreset": "Default",
+  "userGroups": [
+    {
+      "name": "Admin",
+      "password": "{PASSWORD_ADMIN}",
+      "canKickBan": true,
+      "canAccessInventories": true,
+      "canEditWorld": true,
+      "canEditBase": true,
+      "canExtendBase": true,
+      "reservedSlots": 0
+    },
+    {
+      "name": "Friend",
+      "password": "{PASSWORD_FRIEND}",
+      "canKickBan": false,
+      "canAccessInventories": true,
+      "canEditWorld": true,
+      "canEditBase": true,
+      "canExtendBase": false,
+      "reservedSlots": 0
+    },
+    {
+      "name": "Guest",
+      "password": "{PASSWORD_GUEST}",
+      "canKickBan": false,
+      "canAccessInventories": false,
+      "canEditWorld": true,
+      "canEditBase": false,
+      "canExtendBase": false,
+      "reservedSlots": 0
+    },
+    {
+      "name": "Visitor",
+      "password": "{PASSWORD_VISITOR}",
+      "canKickBan": false,
+      "canAccessInventories": false,
+      "canEditWorld": false,
+      "canEditBase": false,
+      "canExtendBase": false,
+      "reservedSlots": 0
+    }
+  ],
+  "bans": []
+}

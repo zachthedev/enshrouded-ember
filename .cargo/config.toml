@@ -1,0 +1,5 @@
+[alias]
+# The one entry point for repository automation. CONTRIBUTING.md, the pre-push
+# hook and continuous integration all call `cargo xtask check`, so the three
+# cannot drift apart.
+xtask = "run --package xtask --quiet --"

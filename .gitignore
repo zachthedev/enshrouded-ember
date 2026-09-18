@@ -23,11 +23,11 @@ target
 # Repository tooling
 /node_modules
 
-# SteamCMD, cached server builds keyed by revision, and run directories.
-/.local
+# SteamCMD, fetched server builds keyed by Steam buildid, and run directories.
+/.cache
 
-# Local path overrides for a sibling checkout.
-/.cargo/config.toml
+# Per-machine Claude Code settings, layered over the committed ones.
+/.claude/settings.local.json
 
 # Recovered artifacts, never committed.
 *.pdb
