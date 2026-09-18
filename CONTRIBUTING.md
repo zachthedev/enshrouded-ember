@@ -6,9 +6,9 @@
 cargo command. A C toolchain is needed for the MinHook engine.
 [Bun](https://bun.sh) runs the repository's own tooling.
 
-The gate calls four cargo subcommands that rustup does not install.
-`.github/cargo-tools` pins their versions and is the only place those numbers
-live, so this installs what continuous integration installs:
+The gate calls five tools that rustup does not install. `.github/cargo-tools`
+pins their versions and is the only place those numbers live, so this installs
+what continuous integration installs:
 
 ```powershell
 cargo install --locked @(Get-Content .github/cargo-tools | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })
@@ -30,15 +30,24 @@ cargo xtask check
 
 It runs, in order and stopping at the first failure:
 
-| Step       | Command                                                              |
-| ---------- | -------------------------------------------------------------------- |
-| `fmt`      | `cargo fmt --check`                                                  |
-| `clippy`   | `cargo clippy --workspace --all-targets -- -D warnings`              |
-| `tests`    | `cargo nextest run --workspace`                                      |
-| `deny`     | `cargo deny check`                                                   |
-| `machete`  | `cargo machete`                                                      |
-| `audit`    | `cargo audit`                                                        |
-| `prettier` | `bunx --no-install --bun prettier --check` over markdown, YAML, JSON |
+| Step       | Command                                                 |
+| ---------- | ------------------------------------------------------- |
+| `fmt`      | `cargo fmt --check`                                     |
+| `taplo`    | `taplo fmt --check`                                     |
+| `clippy`   | `cargo clippy --workspace --all-targets -- -D warnings` |
+| `tests`    | `cargo nextest run --workspace`                         |
+| `doctests` | `cargo test --workspace --doc`                          |
+| `deny`     | `cargo deny check`                                      |
+| `machete`  | `cargo machete crates xtask`                            |
+| `audit`    | `cargo audit`                                           |
+| `prettier` | `bunx --no-install --bun prettier --check`              |
+
+`taplo` reads `.taplo.toml` for the files it covers. `prettier` covers `.md`,
+`.yml`, `.yaml`, `.json`, `.js`, `.mjs`, `.cjs` and `.ts`.
+
+`doctests` runs whether or not `cargo-nextest` is installed, because
+`cargo nextest` runs none of them and a doctest that stops compiling would
+otherwise pass the gate in silence.
 
 `tests` falls back to `cargo test --workspace` when `cargo-nextest` is absent,
 and the summary says which runner ran. Any other missing tool stops the gate and
@@ -48,9 +57,14 @@ The pre-push hook and continuous integration call the same command, so the three
 cannot drift apart.
 
 Continuous integration also runs a Linux leg: `cargo check --workspace` plus the
-tests for `ember-sigs` and `ember-platform`. The resolution path carries no
-`cfg(windows)` and every Linux backend is a stub that returns `Unsupported`, so
-both have to keep compiling on a host with no Windows API.
+tests for `ember-sigs`, `ember-platform` and `ember-kfc`. The resolution path
+carries no `cfg(windows)` and every Linux backend is a stub that returns
+`Unsupported`, so both have to keep compiling on a host with no Windows API.
+`ember-kfc` reads container files and touches no operating system at all, so its
+whole offline suite runs there too.
+
+That leg compiles `zstd-sys`, which is C. The ubuntu runner image ships a C
+toolchain, so the leg installs nothing for it.
 
 ## Hooks
 
@@ -75,7 +89,7 @@ Either one points `core.hooksPath` at `.githooks`.
 `commit-msg` hook. Run `cargo xtask scopes` for the live scope list, which is
 the same list `commitlint.config.js` enforces:
 
-`loader`, `sdk`, `holistic`, `enshrouded`, `sigs`, `platform`, `testkit`,
+`loader`, `sdk`, `holistic`, `kfc`, `enshrouded`, `sigs`, `platform`, `testkit`,
 `xtask`, `deps`, `ci`, `release`.
 
 Scopes are the workspace crate names past the `ember-` prefix, plus three

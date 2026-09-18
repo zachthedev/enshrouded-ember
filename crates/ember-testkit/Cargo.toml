@@ -13,8 +13,15 @@ publish = false
 # Dependencies this crate declares and no module references yet. Listing them
 # keeps `cargo machete` quiet without dropping the declaration, and a name
 # leaves the list when code starts using it.
-ignored = ["ember-enshrouded", "ember-holistic", "ember-sdk", "serde", "serde_json",
-    "thiserror", "tracing"]
+ignored = [
+    "ember-enshrouded",
+    "ember-holistic",
+    "ember-sdk",
+    "serde",
+    "serde_json",
+    "thiserror",
+    "tracing",
+]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

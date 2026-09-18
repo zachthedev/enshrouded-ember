@@ -13,9 +13,9 @@ cd enshrouded-ember
 cargo command. A C toolchain is needed for the MinHook engine; on Windows that
 is Visual Studio Build Tools.
 
-The gate calls four cargo subcommands rustup does not ship.
-`.github/cargo-tools` pins their versions and is the only place those numbers
-live, so this installs what continuous integration installs:
+The gate calls five tools rustup does not ship. `.github/cargo-tools` pins their
+versions and is the only place those numbers live, so this installs what
+continuous integration installs:
 
 ```powershell
 cargo install --locked @(Get-Content .github/cargo-tools | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })
@@ -89,23 +89,50 @@ lives under `.cache`, and is regenerated rather than shared.
 
 The loop is fetch, extract, check.
 
+## 3a. Extract the localization tables, when a mod displays text
+
+```sh
+cargo xtask loca extract --client "<steam library>\steamapps\common\Enshrouded\enshrouded.exe"
+```
+
+This writes one tab-separated table per language into `.cache/loca/<buildid>/`,
+with the tag id, the two argument counts and the text. A mod that shows a line
+names a `LocaTagId`, so a developer reads the text here to find the id and
+commits the id alone.
+
+Only a client ships a localization table. The dedicated server carries none, so
+this step needs an installed client rather than a fetched server. The buildid
+naming the directory is the client's, read from its own Steam app manifest, and
+it is a different series from the dedicated server's.
+
+The same rule applies as to every other extraction: Keen's written text is
+derived data, stays under `.cache`, and is never committed.
+
 ## 4. Run the gate
 
 ```sh
 cargo xtask check
 ```
 
-Seven steps, in order, stopping at the first failure:
+Nine steps, in order, stopping at the first failure:
 
 ```text
 fmt       cargo fmt --check
+taplo     taplo fmt --check
 clippy    cargo clippy --workspace --all-targets -- -D warnings
 tests     cargo nextest run --workspace
+doctests  cargo test --workspace --doc
 deny      cargo deny check
-machete   cargo machete
+machete   cargo machete crates xtask
 audit     cargo audit
-prettier  bunx --no-install --bun prettier --check over markdown, YAML and JSON
+prettier  bunx --no-install --bun prettier --check
 ```
+
+`taplo` reads `.taplo.toml` for the files it covers. `prettier` covers `.md`,
+`.yml`, `.yaml`, `.json`, `.js`, `.mjs`, `.cjs` and `.ts`.
+
+`doctests` runs whether or not `cargo-nextest` is installed, because
+`cargo nextest` runs none of them.
 
 `tests` falls back to `cargo test --workspace` when `cargo-nextest` is absent,
 and the summary says which one ran. Any other missing tool stops the gate and
@@ -124,6 +151,7 @@ cargo xtask server stop           # ask it to shut down, and wait
 cargo xtask schema extract        # read the schema out of a fetched build
 cargo xtask schema list           # list the extractions under .cache/schema
 cargo xtask schema diff old new   # compare two extractions by buildid
+cargo xtask loca extract          # write a client build's localization tables
 ```
 
 A command that acts on one build takes `--build <buildid>` and otherwise picks

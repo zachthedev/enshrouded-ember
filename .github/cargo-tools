@@ -1,6 +1,10 @@
-# The cargo subcommands the gate runs, pinned. One version per tool, here and
-# nowhere else: the ci workflow reads this file, and CONTRIBUTING.md and
-# docs/dev.md point at it rather than restating a number.
+# The tools the gate runs that rustup does not install, pinned. One version per
+# tool, here and nowhere else: the ci workflow reads this file, and
+# CONTRIBUTING.md and docs/dev.md point at it rather than restating a number.
+#
+# Every name is a crates.io package, so `cargo install` and
+# taiki-e/install-action both take this list unchanged. taplo-cli installs a
+# binary named taplo.
 #
 # Nothing bumps these automatically. Dependabot has no ecosystem for a binary
 # installed with `cargo install`, so a human edits this file.
@@ -8,3 +12,4 @@ cargo-nextest@0.9.145
 cargo-deny@0.20.2
 cargo-machete@0.9.2
 cargo-audit@0.22.2
+taplo-cli@0.10.0

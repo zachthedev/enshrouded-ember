@@ -35,11 +35,16 @@ struct Step {
 }
 
 /// Every step, in the order they run.
-const STEPS: [Step; 7] = [
+const STEPS: [Step; 9] = [
     Step {
         name: "fmt",
         requires: "cargo-fmt",
         install: "rustup component add rustfmt",
+    },
+    Step {
+        name: "taplo",
+        requires: "taplo",
+        install: "cargo install --locked taplo-cli",
     },
     Step {
         name: "clippy",
@@ -48,6 +53,11 @@ const STEPS: [Step; 7] = [
     },
     Step {
         name: "tests",
+        requires: "cargo",
+        install: "rustup toolchain install",
+    },
+    Step {
+        name: "doctests",
         requires: "cargo",
         install: "rustup toolchain install",
     },
@@ -174,6 +184,20 @@ const CRATE_ENV: &[&str] = &[
 /// manifests belong to whoever owns that tree.
 const MACHETE_DIRS: [&str; 2] = ["crates", "xtask"];
 
+/// The doctest command.
+///
+/// `cargo nextest` runs no doctests at all, so the tests step leaves every
+/// documented example unbuilt and a doctest that stops compiling would pass the
+/// gate in silence.
+const DOCTEST_ARGS: [&str; 3] = ["test", "--workspace", "--doc"];
+
+/// The test runner the tests step prefers.
+///
+/// The step declares `cargo` as its requirement, because it falls back to
+/// `cargo test` when this runner is absent. The choice is made at run time from
+/// `PATH`, so this is the only place the name appears.
+const PREFERRED_TEST_RUNNER: &str = "cargo-nextest";
+
 /// A target directory of the test step's own.
 ///
 /// `cargo xtask check` runs out of `target/debug/xtask.exe`, and a test build
@@ -185,6 +209,9 @@ const TEST_TARGET_DIR: &str = "target/check";
 fn invoke(name: &str, root: &Path) -> Result<(Outcome, Option<Output>)> {
     match name {
         "fmt" => run_one(root, "cargo", &["fmt", "--check"], String::new(), None),
+        // The files and the exclusions are in .taplo.toml, so the same set is
+        // formatted whether the gate or an editor runs the tool.
+        "taplo" => run_one(root, "taplo", &["fmt", "--check"], String::new(), None),
         "clippy" => run_one(
             root,
             "cargo",
@@ -201,7 +228,7 @@ fn invoke(name: &str, root: &Path) -> Result<(Outcome, Option<Output>)> {
         ),
         "tests" => {
             let target = Some(root.join(TEST_TARGET_DIR));
-            if on_path("cargo-nextest") {
+            if on_path(PREFERRED_TEST_RUNNER) {
                 run_one(
                     root,
                     "cargo",
@@ -219,6 +246,18 @@ fn invoke(name: &str, root: &Path) -> Result<(Outcome, Option<Output>)> {
                 )
             }
         }
+        // The step runs unconditionally, which costs a second run of the
+        // doctests on the rare host where the tests step fell back to
+        // `cargo test`. What the gate covers then does not depend on which test
+        // runner is installed. The build goes where the test build goes, so the
+        // doctests reuse what the step above just compiled.
+        "doctests" => run_one(
+            root,
+            "cargo",
+            &DOCTEST_ARGS,
+            String::new(),
+            Some(root.join(TEST_TARGET_DIR)),
+        ),
         "deny" => run_one(root, "cargo", &["deny", "check"], String::new(), None),
         "machete" => {
             let mut args = vec!["machete"];
@@ -233,7 +272,7 @@ fn invoke(name: &str, root: &Path) -> Result<(Outcome, Option<Output>)> {
                 root,
                 "bunx",
                 &borrowed,
-                "markdown, YAML and JSON".to_string(),
+                "markup, JavaScript and TypeScript".to_string(),
                 None,
             )
         }
@@ -260,7 +299,10 @@ fn prettier_args(root: &Path) -> Vec<String> {
         args.push("--ignore-path".to_string());
         args.push(".prettierignore".to_string());
     }
-    args.push("**/*.{md,yml,yaml,json}".to_string());
+    // A PostToolUse hook formats .js on every edit, so the glob covers every
+    // extension prettier owns here rather than the markup alone. .ts is in the
+    // list before the first one lands.
+    args.push("**/*.{md,yml,yaml,json,js,mjs,cjs,ts}".to_string());
     args
 }
 
@@ -348,17 +390,36 @@ fn workspace_root() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{CRATE_ENV, MACHETE_DIRS, STEPS, on_path, prettier_args};
+    use super::{
+        CRATE_ENV, DOCTEST_ARGS, MACHETE_DIRS, PREFERRED_TEST_RUNNER, STEPS, on_path, prettier_args,
+    };
     use crate::testutil::TestDir;
 
     #[test]
-    fn the_gate_runs_the_seven_steps_in_the_documented_order() {
+    fn the_gate_runs_the_nine_steps_in_the_documented_order() {
         let names: Vec<&str> = STEPS.iter().map(|step| step.name).collect();
         assert_eq!(
             names,
             vec![
-                "fmt", "clippy", "tests", "deny", "machete", "audit", "prettier"
+                "fmt", "taplo", "clippy", "tests", "doctests", "deny", "machete", "audit",
+                "prettier"
             ]
+        );
+    }
+
+    /// `cargo nextest run` runs no doctests, so a gate whose only test step is
+    /// nextest lets a doctest that stops compiling through in silence. The step
+    /// is unconditional, so what the gate covers does not depend on which test
+    /// runner the host has.
+    #[test]
+    fn the_gate_runs_doctests_in_their_own_step() {
+        assert!(
+            STEPS.iter().any(|step| step.name == "doctests"),
+            "the gate has no doctests step"
+        );
+        assert!(
+            DOCTEST_ARGS.contains(&"--doc"),
+            "the doctests step runs the whole suite again, got {DOCTEST_ARGS:?}"
         );
     }
 
@@ -700,8 +761,425 @@ mod tests {
         assert!(with_ignore.contains(&".prettierignore".to_string()));
         assert_eq!(
             with_ignore.last().map(String::as_str),
-            Some("**/*.{md,yml,yaml,json}")
+            Some("**/*.{md,yml,yaml,json,js,mjs,cjs,ts}")
         );
+    }
+
+    /// A `PostToolUse` hook formats JavaScript on every edit. An extension
+    /// prettier owns and the gate does not check is a file whose formatting
+    /// nothing enforces.
+    #[test]
+    fn prettier_checks_every_extension_it_owns_here() {
+        let dir = TestDir::new("prettier-extensions");
+        let args = prettier_args(dir.path());
+        let glob = args.last().expect("the step names a glob");
+        let list = glob
+            .strip_prefix("**/*.{")
+            .and_then(|rest| rest.strip_suffix('}'))
+            .unwrap_or_else(|| panic!("{glob} is not a brace list of extensions"));
+        let covered: Vec<&str> = list.split(',').collect();
+
+        for extension in ["md", "yml", "yaml", "json", "js", "mjs", "cjs", "ts"] {
+            assert!(
+                covered.contains(&extension),
+                "the prettier glob skips .{extension}, got {glob}"
+            );
+        }
+    }
+
+    /// Every string literal in a JavaScript source, paired with the bracket
+    /// depth it sits at, in source order.
+    ///
+    /// Characters inside a literal open no bracket and comments are skipped, so
+    /// a URL, an apostrophe in a sentence and a commented-out list all read
+    /// correctly.
+    fn js_string_literals(source: &str) -> Vec<(usize, String)> {
+        let chars: Vec<char> = source.chars().collect();
+        let mut found: Vec<(usize, String)> = Vec::new();
+        let mut depth: usize = 0;
+        let mut index = 0;
+        while index < chars.len() {
+            match chars[index] {
+                '/' if chars.get(index + 1) == Some(&'/') => {
+                    while index < chars.len() && chars[index] != '\n' {
+                        index += 1;
+                    }
+                }
+                '/' if chars.get(index + 1) == Some(&'*') => {
+                    index += 2;
+                    while index < chars.len()
+                        && !(chars[index] == '*' && chars.get(index + 1) == Some(&'/'))
+                    {
+                        index += 1;
+                    }
+                    index += 2;
+                }
+                '[' => {
+                    depth += 1;
+                    index += 1;
+                }
+                ']' => {
+                    depth = depth.saturating_sub(1);
+                    index += 1;
+                }
+                quote @ ('\'' | '"' | '`') => {
+                    index += 1;
+                    let mut text = String::new();
+                    while index < chars.len() && chars[index] != quote {
+                        if chars[index] == '\\' {
+                            index += 1;
+                            if index >= chars.len() {
+                                break;
+                            }
+                        }
+                        text.push(chars[index]);
+                        index += 1;
+                    }
+                    index += 1;
+                    found.push((depth, text));
+                }
+                _ => index += 1,
+            }
+        }
+        found
+    }
+
+    /// The scope list `commitlint.config.js` enforces.
+    ///
+    /// The `scope-enum` rule is `[level, applicability, [scopes]]`, so the
+    /// scopes are the run of literals two brackets deeper than the rule's own
+    /// name. An empty result means the file declares no such rule.
+    fn commitlint_scopes(source: &str) -> Vec<String> {
+        let literals = js_string_literals(source);
+        let Some(rule) = literals.iter().position(|(_, text)| text == "scope-enum") else {
+            return Vec::new();
+        };
+        let wanted = literals[rule].0 + 2;
+        literals[rule + 1..]
+            .iter()
+            .skip_while(|(depth, _)| *depth != wanted)
+            .take_while(|(depth, _)| *depth == wanted)
+            .map(|(_, text)| text.clone())
+            .collect()
+    }
+
+    /// One `##` section of a markdown document, its heading excluded.
+    ///
+    /// A heading is a stabler anchor than the sentence under it, so a section
+    /// can be reworded without moving what reads it.
+    fn section<'a>(markdown: &'a str, heading: &str) -> Option<&'a str> {
+        let opening = format!("\n## {heading}\n");
+        let start = markdown.find(&opening)? + opening.len();
+        let rest = &markdown[start..];
+        Some(rest.find("\n## ").map_or(rest, |end| &rest[..end]))
+    }
+
+    /// Every inline code span in a markdown fragment.
+    fn code_spans(text: &str) -> Vec<String> {
+        text.split('`')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Every paragraph of a markdown fragment that is a bare list of inline
+    /// code spans, as the spans it holds.
+    ///
+    /// Anchoring on the paragraph's shape rather than on the sentence above it
+    /// means rewording the section around it leaves the check working.
+    fn code_span_lists(markdown: &str) -> Vec<Vec<String>> {
+        markdown
+            .split("\n\n")
+            .filter_map(|paragraph| {
+                let spans = code_spans(paragraph);
+                if spans.is_empty() {
+                    return None;
+                }
+                let mut rest = paragraph.to_string();
+                for span in &spans {
+                    rest = rest.replacen(&format!("`{span}`"), "", 1);
+                }
+                rest.chars()
+                    .all(|c| c == ',' || c == '.' || c.is_whitespace())
+                    .then_some(spans)
+            })
+            .collect()
+    }
+
+    /// The first cell of every body row of the first markdown table in a
+    /// fragment, with its inline code markers removed.
+    fn table_first_column(markdown: &str) -> Vec<String> {
+        markdown
+            .lines()
+            .filter(|line| line.starts_with('|'))
+            .skip(2)
+            .filter_map(|line| {
+                let cell = line.split('|').nth(1)?.trim();
+                Some(cell.trim_matches('`').to_string())
+            })
+            .collect()
+    }
+
+    /// The package an install command names, for a command that is a
+    /// `cargo install`.
+    ///
+    /// The flag and the package can come in either order, so the package is the
+    /// first word past `cargo install` that is not a flag.
+    fn cargo_install_package(install: &str) -> Option<&str> {
+        let mut words = install.split_whitespace();
+        if words.next()? != "cargo" || words.next()? != "install" {
+            return None;
+        }
+        words.find(|word| !word.starts_with('-'))
+    }
+
+    /// A file at the workspace root, read whole.
+    fn read(relative: &str) -> String {
+        let path = super::workspace_root().join(relative);
+        std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()))
+    }
+
+    /// The pinned tools, as `(name, version)`.
+    fn pinned_tools() -> Vec<(String, String)> {
+        read(".github/cargo-tools")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| {
+                let (name, version) = line
+                    .split_once('@')
+                    .unwrap_or_else(|| panic!("{line:?} is not name@version"));
+                assert!(!version.is_empty(), "{line:?} has no version");
+                (name.to_string(), version.to_string())
+            })
+            .collect()
+    }
+
+    /// The commit scope vocabulary lives in three places: the constant
+    /// `cargo xtask scopes` prints, the rule the commit hook enforces, and the
+    /// sentence `CONTRIBUTING.md` restates. A contributor who reads one and a
+    /// hook that enforces another disagree silently.
+    #[test]
+    fn every_copy_of_the_scope_list_agrees() {
+        let declared: Vec<String> = crate::SCOPES
+            .iter()
+            .map(|scope| (*scope).to_string())
+            .collect();
+        assert!(!declared.is_empty(), "xtask/src/main.rs declares no scopes");
+
+        let commitlint = commitlint_scopes(&read("commitlint.config.js"));
+        let contributing = read("CONTRIBUTING.md");
+        let commits = section(&contributing, "Commit messages")
+            .expect("CONTRIBUTING.md has a Commit messages section");
+        let documented = code_span_lists(commits);
+        assert_eq!(
+            documented.len(),
+            1,
+            "the Commit messages section holds {} paragraphs that are a bare list of code spans, so which one restates the scopes is ambiguous",
+            documented.len()
+        );
+
+        let mut disagree: Vec<String> = Vec::new();
+        if commitlint != declared {
+            disagree.push(format!(
+                "commitlint.config.js scope-enum has {commitlint:?}"
+            ));
+        }
+        if documented[0] != declared {
+            disagree.push(format!("CONTRIBUTING.md restates {:?}", documented[0]));
+        }
+        assert!(
+            disagree.is_empty(),
+            "xtask/src/main.rs SCOPES has {declared:?}, and {}",
+            disagree.join("; ")
+        );
+    }
+
+    /// The README's crate table is the map a reader opens first. A member it
+    /// omits is a crate nobody looking at the table knows exists.
+    ///
+    /// The order is asserted too, because the table and `[workspace.members]`
+    /// are both in dependency order and are meant to be read side by side.
+    #[test]
+    fn the_crate_table_lists_every_workspace_member_in_order() {
+        let workspace: toml::Value =
+            toml::from_str(&read("Cargo.toml")).expect("the workspace manifest parses");
+        let members: Vec<String> = workspace
+            .get("workspace")
+            .and_then(|w| w.get("members"))
+            .and_then(toml::Value::as_array)
+            .expect("the workspace lists members")
+            .iter()
+            .filter_map(|member| member.as_str())
+            .map(|member| member.rsplit('/').next().unwrap_or(member).to_string())
+            .collect();
+
+        let readme = read("README.md");
+        let crates = section(&readme, "Crates").expect("README.md has a Crates section");
+        let tabled = table_first_column(crates);
+
+        assert_eq!(
+            tabled, members,
+            "the README crate table and [workspace.members] disagree"
+        );
+    }
+
+    /// Every tool the gate installs with `cargo install` carries a version, in
+    /// one file. A second copy of a version is a copy that drifts.
+    ///
+    /// The check runs both ways. A step whose tool is unpinned installs
+    /// whatever the registry serves today, and a pinned entry no step installs
+    /// is a version continuous integration fetches for nothing.
+    #[test]
+    fn the_pinned_tool_file_and_the_gate_name_the_same_tools() {
+        let pinned = pinned_tools();
+        assert!(!pinned.is_empty(), "the pinned tool file names nothing");
+
+        // The tests step prefers cargo-nextest at run time rather than
+        // declaring it, so its name reaches the pinned file from here.
+        assert_eq!(
+            pinned
+                .iter()
+                .filter(|(name, _)| name == PREFERRED_TEST_RUNNER)
+                .count(),
+            1,
+            "{PREFERRED_TEST_RUNNER} is not pinned once in .github/cargo-tools"
+        );
+        let mut installed: Vec<String> = vec![PREFERRED_TEST_RUNNER.to_string()];
+        for step in &STEPS {
+            let Some(package) = cargo_install_package(step.install) else {
+                continue;
+            };
+            let found = pinned.iter().filter(|(name, _)| name == package).count();
+            assert_eq!(
+                found, 1,
+                "{package} appears {found} times in .github/cargo-tools"
+            );
+            installed.push(package.to_string());
+        }
+
+        let unused: Vec<&String> = pinned
+            .iter()
+            .map(|(name, _)| name)
+            .filter(|name| !installed.contains(name))
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "no gate step installs {unused:?} from .github/cargo-tools"
+        );
+    }
+
+    /// Ember's manifests are formatted by `taplo`, which reads `.taplo.toml`.
+    /// A gate step whose configuration is absent formats whatever the tool
+    /// defaults to.
+    #[test]
+    fn the_toml_formatter_has_a_configuration_file() {
+        let config: toml::Value = toml::from_str(&read(".taplo.toml")).expect(".taplo.toml parses");
+
+        assert!(
+            config.get("include").is_some(),
+            ".taplo.toml names no files to format"
+        );
+    }
+
+    /// The parser reads the rule's nested array and leaves every other literal
+    /// in the file alone, including one inside a comment and one holding a
+    /// bracket.
+    #[test]
+    fn commitlint_scopes_reads_the_nested_rule_array() {
+        let cases = [
+            (
+                "\
+export default {
+  extends: ['@commitlint/config-conventional'],
+  ignores: [(message) => message.includes('Signed-off-by: dependabot[bot]')],
+  rules: {
+    'scope-enum': [2, 'always', ['one', 'two']],
+    'body-max-line-length': [2, 'always', 72],
+  },
+};
+",
+                vec!["one", "two"],
+            ),
+            (
+                "\
+export default {
+  rules: {
+    'scope-enum': [
+      2,
+      'always',
+      // A list at https://example.invalid that isn't the rule's own.
+      /* 'commented' */
+      ['one', 'two', 'three'],
+    ],
+  },
+};
+",
+                vec!["one", "two", "three"],
+            ),
+            ("export default { rules: {} };", vec![]),
+        ];
+
+        for (source, expected) in cases {
+            assert_eq!(commitlint_scopes(source), expected, "{source}");
+        }
+    }
+
+    /// A paragraph of prose holding code spans is not a list, a bullet is not a
+    /// bare paragraph, and a table yields its first column alone.
+    #[test]
+    fn the_markdown_readers_take_the_shapes_they_name() {
+        let markdown = "\
+# Title
+
+## First
+
+Run `cargo xtask scopes` for the live list.
+
+`one`, `two`, `three`.
+
+- `four`, `five`
+
+## Second
+
+| Crate   | Holds        |
+| ------- | ------------ |
+| `alpha` | The first    |
+| `beta`  | The second   |
+
+## Third
+
+three
+";
+        let first = section(markdown, "First").expect("a First section");
+        assert_eq!(code_span_lists(first), [["one", "two", "three"]]);
+
+        let second = section(markdown, "Second").expect("a Second section");
+        assert_eq!(table_first_column(second), ["alpha", "beta"]);
+
+        assert_eq!(section(markdown, "Fourth"), None);
+    }
+
+    /// The flag and the package name come in either order, and a step that
+    /// installs through rustup or bun names no package at all.
+    #[test]
+    fn cargo_install_package_reads_either_argument_order() {
+        let cases = [
+            ("cargo install --locked cargo-deny", Some("cargo-deny")),
+            ("cargo install cargo-deny --locked", Some("cargo-deny")),
+            ("cargo install --locked taplo-cli", Some("taplo-cli")),
+            ("rustup component add rustfmt", None),
+            ("rustup toolchain install", None),
+            ("install Bun from https://bun.sh", None),
+            ("cargo install", None),
+            ("cargo install --locked", None),
+            ("", None),
+        ];
+
+        for (install, expected) in cases {
+            assert_eq!(cargo_install_package(install), expected, "{install:?}");
+        }
     }
 
     #[test]

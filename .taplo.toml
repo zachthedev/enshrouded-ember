@@ -1,0 +1,11 @@
+# Every TOML file in this repository, formatted by `taplo fmt`. The gate runs
+# `taplo fmt --check`.
+#
+# taplo reads .gitignore, so target/ and .cache/ stay out without being named.
+
+include = ["**/*.toml"]
+
+[formatting]
+# .editorconfig sets four spaces for every file type but markup, and `cargo add`
+# writes manifests the same way.
+indent_string = "    "
