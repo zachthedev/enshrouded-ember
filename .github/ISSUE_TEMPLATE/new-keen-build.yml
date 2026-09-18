@@ -1,0 +1,63 @@
+name: New Keen build
+description:
+  A dedicated server build the mods here have not been checked against.
+title: "build: r"
+labels: ["build"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every field below is read from a server build you fetched yourself.
+        Nothing recovered from the binary belongs in this issue beyond the
+        identifiers and the diff summary.
+  - type: input
+    id: build_id
+    attributes:
+      label: Steam build id
+      description: >
+        The buildid of the Windows depot for app 2278520. It names the directory
+        the build is fetched into.
+      placeholder: "23178631"
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: >
+        The number in the first 512 bytes of enshrouded_server.kfc, beside the
+        branch path and the build date.
+      placeholder: "1024233"
+    validations:
+      required: true
+  - type: input
+    id: fingerprint
+    attributes:
+      label: Fingerprint
+      description: The CodeView RSDS GUID and age, as the loader reads them.
+      placeholder: "ae33b44863803d4eb31f31d4d84ae242 age 293"
+    validations:
+      required: true
+  - type: textarea
+    id: schema_diff
+    attributes:
+      label: Schema diff summary
+      description: The summary printed by `cargo xtask schema diff`.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: dedicated_server
+    attributes:
+      label: Does Keen say dedicated servers need this build?
+      options:
+        - "Yes"
+        - "No"
+        - "Not stated"
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: What broke, what still works, and what you have not checked.

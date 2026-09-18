@@ -5,32 +5,67 @@ on:
     branches: [main]
   pull_request:
 
+# The token can read the checkout and nothing else, so a compromised action on
+# a runner cannot push, release or write to the repository.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
+# Every action is pinned to a commit. A tag can be retargeted by its owner with
+# no pull request and no cooldown; a commit cannot. Dependabot bumps the hash
+# and keeps the version comment current.
 jobs:
   gate:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.13
+      - id: cargo-tools
+        shell: pwsh
+        run: |
+          $tools = Get-Content .github/cargo-tools |
+              Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() }
+          "list=$($tools -join ',')" >> $env:GITHUB_OUTPUT
+      - uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+        with:
+          tool: ${{ steps.cargo-tools.outputs.list }}
+      - run: bun install --frozen-lockfile
+      - run: cargo xtask check
+
+  # The resolution path carries no cfg(windows), and every Linux backend is a
+  # stub that returns Unsupported. Both have to keep compiling on a host that
+  # has no Windows API at all.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo check --workspace
+      - run: cargo test --package ember-sigs --package ember-platform
 
   deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
 
   commits:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.13
       - run: bun install --frozen-lockfile
-      - run: bunx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
+      - run:
+          bunx --no-install commitlint --from ${{
+          github.event.pull_request.base.sha }} --to ${{
+          github.event.pull_request.head.sha }}

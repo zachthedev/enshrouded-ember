@@ -1,0 +1,82 @@
+name: Signature miss
+description: A symbol Ember could not resolve on a build the release supports.
+title: "sigs: "
+labels: ["sigs"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ember fails closed: a mod whose required symbols are missing is disabled
+        and every missing symbol is named in the startup report. Paste that
+        report below rather than describing it.
+  - type: input
+    id: symbol
+    attributes:
+      label: Symbol
+      description: The `SymbolId` the report names, exactly as printed.
+      placeholder: "game.crafting.craft_once"
+    validations:
+      required: true
+  - type: input
+    id: build_id
+    attributes:
+      label: Steam build id
+      description: The buildid of the Windows depot for app 2278520.
+      placeholder: "23178631"
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: >
+        The number in the first 512 bytes of enshrouded_server.kfc, beside the
+        branch path and the build date.
+      placeholder: "1024233"
+    validations:
+      required: true
+  - type: input
+    id: fingerprint
+    attributes:
+      label: Fingerprint
+      description: The CodeView RSDS GUID and age the loader matched on.
+      placeholder: "ae33b44863803d4eb31f31d4d84ae242 age 293"
+    validations:
+      required: true
+  - type: textarea
+    id: resolver_report
+    attributes:
+      label: Resolver report
+      description: >
+        The startup report from `ember/logs`, covering every tier that ran for
+        this symbol and what each one produced.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Which tier disagreed?
+      options:
+        - Cross-reference from a format string
+        - Wildcard byte pattern
+        - Recorded offset
+        - Every tier failed
+        - Not stated in the report
+    validations:
+      required: true
+  - type: input
+    id: mods_disabled
+    attributes:
+      label: Mods the miss disabled
+      description: The mod ids the report names, or none.
+  - type: dropdown
+    id: host
+    attributes:
+      label: Host
+      options:
+        - Windows
+        - Wine
+        - Proton
+    validations:
+      required: true

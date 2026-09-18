@@ -1,0 +1,8 @@
+# Rust is formatted by cargo fmt, and prettier never sees it.
+
+# Build output and repository tooling.
+target/
+node_modules/
+
+# SteamCMD, fetched server builds, and run directories.
+.cache/

@@ -1,0 +1,9 @@
+# Line endings are the same on every machine, whatever a contributor's
+# core.autocrlf says. The git hooks run under sh, which rejects a carriage
+# return at the end of a line.
+* text=auto eol=lf
+
+# Recovered artifacts, if one is ever forced in by hand.
+*.pdb binary
+*.BinExport binary
+*.gzf binary

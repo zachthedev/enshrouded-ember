@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: zachthedev's mods, which load through Ember
+    url: https://github.com/zachthedev/enshrouded-mods/issues
+    about: Anything about how one of those mods behaves in game.
