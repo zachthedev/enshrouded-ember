@@ -2,8 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import {
   appendRecord,
+  BUILD_DIGESTS_PATH,
   BuildDigestRecord,
   RecordError,
   readRecords,
@@ -49,7 +51,7 @@ const digestRow = {
   depotId: 2278521,
   revision: 1024233,
   branch: "^/game38/branches/ea_update_08",
-  archivedAt: "2026-09-18",
+  recordedAt: "2026-09-18",
   files: {
     "enshrouded_server.exe": anyDigest,
     "enshrouded_server.kfc": { ...anyDigest, bytes: 4415488 },
@@ -235,7 +237,7 @@ describe("BuildDigestRecord", () => {
   test("a file named __proto__ is dropped, and cannot empty the row", () => {
     const onlyProto = JSON.parse(
       `{"manifestId":"1","buildId":null,"appId":1,"depotId":1,"revision":null,` +
-        `"branch":null,"archivedAt":"2026-09-18","files":{"__proto__":` +
+        `"branch":null,"recordedAt":"2026-09-18","files":{"__proto__":` +
         `{"bytes":1,"sha256":"${"a".repeat(64)}"}}}`,
     ) as unknown;
     expect(BuildDigestRecord.safeParse(onlyProto).success).toBe(false);
@@ -273,6 +275,21 @@ describe("BuildDigestRecord", () => {
     );
   });
 
+  /**
+   * A key the shape does not name would parse and be dropped, and still sit
+   * in the committed file asserting something nothing reads. A row claiming a
+   * build is archived is the one that matters: only the bucket can say so.
+   */
+  test.each([
+    ["archivedAt", "2026-09-18"],
+    ["archived", true],
+    ["uploadedAt", "2026-09-18"],
+  ])("a row carrying %s is refused, and the key is named", (key, value) => {
+    const parsed = BuildDigestRecord.safeParse({ ...digestRow, [key]: value });
+    expect(parsed.success).toBe(false);
+    expect(parsed.success ? "" : z.prettifyError(parsed.error)).toContain(key);
+  });
+
   test("a row naming both archived files, and more, is accepted", () => {
     const value = {
       ...digestRow,
@@ -288,7 +305,7 @@ describe("BuildDigestRecord", () => {
     ["a short digest", shortDigest(), false],
     [
       "a date with a time on it",
-      { ...digestRow, archivedAt: "2026-09-18T00:00:00Z" },
+      { ...digestRow, recordedAt: "2026-09-18T00:00:00Z" },
       false,
     ],
   ])("%s parses: %o", (_name, value, want) => {
@@ -335,3 +352,17 @@ function shortDigest(): unknown {
     },
   };
 }
+
+describe("the committed digest record", () => {
+  /**
+   * Every row is read by `status`, `emit`, `push` and `pull`, and a row that
+   * does not parse stops all four. A hand edit is the way one gets in, and
+   * nothing else in the gate reads the committed file.
+   */
+  test("every committed row parses, one row per manifest", async () => {
+    const rows = await readRecords(BUILD_DIGESTS_PATH, BuildDigestRecord);
+    expect(rows.length).toBeGreaterThan(0);
+    const manifests = rows.map((row) => row.manifestId);
+    expect(new Set(manifests).size).toBe(manifests.length);
+  });
+});

@@ -4,8 +4,12 @@
  * @remarks
  * Two files live there. `steam-builds.jsonl` is what Steam advertises, gaining
  * a row whenever a build id or a manifest gid moves. `build-digests.jsonl` is
- * what each archived build's files hash to, and it is the only thing standing
+ * what each recorded build's files hash to, and it is the only thing standing
  * between a swapped object in the archive and a developer who runs it.
+ *
+ * Neither file says whether the archive holds a build. A digest row pins bytes
+ * and is not a receipt for an upload. Only the bucket knows what it holds, so
+ * `archive status` asks it.
  *
  * Both are JSON Lines rather than JSON. A row is appended and never rewritten,
  * so a diff shows one added line, and prettier never reflows a file that two
@@ -175,16 +179,19 @@ export const FileDigest = z.object({
 export type FileDigest = z.infer<typeof FileDigest>;
 
 /**
- * What one archived build's files hash to.
+ * What one build's files hash to.
  *
  * @remarks
  * Keyed by depot manifest gid, which is the anchor that proves where the bytes
- * came from and the only identifier every archived build has. A build pulled
+ * came from and the only identifier every recorded build has. A build pulled
  * from a historical manifest carries no recoverable Steam build id, so
- * `buildId` is filled only for a build archived while its manifest was
- * current.
+ * `buildId` is filled only for a build fetched while its manifest was current.
+ *
+ * Strict, so a key this shape does not name is refused rather than dropped. A
+ * dropped key still sits in the committed file, asserting something nothing
+ * reads or checks.
  */
-export const BuildDigestRecord = z.object({
+export const BuildDigestRecord = z.strictObject({
   manifestId: steamId,
   buildId: steamId.nullable(),
   appId: z.number().int().positive(),
@@ -193,7 +200,14 @@ export const BuildDigestRecord = z.object({
   revision: z.number().int().positive().nullable(),
   /** The branch path the same header carries. */
   branch: branchPath.nullable(),
-  archivedAt: z.iso.date(),
+  /**
+   * The day the files were hashed.
+   *
+   * @remarks
+   * It dates the digests and says nothing about the archive. Whether the
+   * bucket holds this build is asked of the bucket.
+   */
+  recordedAt: z.iso.date(),
   /**
    * What each archived file hashes to.
    *
@@ -211,7 +225,7 @@ export const BuildDigestRecord = z.object({
     ),
 });
 
-/** What one archived build's files hash to. */
+/** What one build's files hash to. */
 export type BuildDigestRecord = z.infer<typeof BuildDigestRecord>;
 
 /**
@@ -228,7 +242,7 @@ export const STEAM_BUILDS_PATH = fileURLToPath(
   new URL("steam-builds.jsonl", dataDir),
 );
 
-/** Every archived build's file digests. */
+/** Every recorded build's file digests. */
 export const BUILD_DIGESTS_PATH = fileURLToPath(
   new URL("build-digests.jsonl", dataDir),
 );

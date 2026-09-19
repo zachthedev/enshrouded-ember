@@ -166,8 +166,9 @@ how a mod repository keeps its fetched server under its own tree.
 
 ## The build watcher and the archive
 
-`tools/` holds two Bun scripts. `build-watch.yml` runs the first one hourly and
-the second one when a build moves.
+`tools/` holds two Bun scripts. `build-watch.yml` runs the watcher hourly, then
+has the archive client ask the bucket whether the build the public branch names
+is archived, and archives it when it is not.
 
 `watch-builds.ts` reads the output of SteamCMD `app_info_print` and appends a
 row to `data/steam-builds.jsonl` when a branch build id or a depot manifest gid
@@ -181,14 +182,34 @@ polling window needs an authenticated pull by hand to recover. The archive is
 the primary copy, not a convenience.
 
 ```sh
+bun run archive status --manifest <gid>
 bun run archive verify --dir <path> --manifest <gid>
 bun run archive pull --manifest <gid> --out <path>
+bun run archive push --dir <path> --manifest <gid>
 ```
 
-`data/build-digests.jsonl` is what each archived build's files hash to, and
+`data/build-digests.jsonl` is what each recorded build's files hash to, and
 every pull checks what arrived against it before the bytes take their final
 name. R2 has no object versioning and no Object Lock, so an overwrite is final
-and that record is the only thing that would notice one.
+and that record is the only thing that would notice one. `push` hashes an object
+already at a key before it calls the build archived, and refuses to write over
+one that holds anything else.
+
+A row pins bytes and is not a receipt for an upload, so it says nothing about
+whether the bucket holds a build. `archive status` asks the bucket with the read
+token. A build is archived when it has a row and every file the row names is in
+the bucket at the recorded size. A missing row or a missing object sends the
+archive job back to work, so a failure anywhere in the archive path is tried
+again the next hour rather than lost. An object at a size the row does not state
+fails the check instead, because `push` refuses to write over it and a person
+has to look. The job that asks holds no environment, so the hourly run never
+waits on an approval, and the archive job asks for one only when there is work.
+
+`status` then sweeps every other recorded build and fails the run when one of
+them is not in the archive. The archive job fetches the head of the branch and
+can repair that build alone, so the rest are the ones whose loss is absolute.
+The sweep runs after the answer is handed on, so a historical build that has
+gone missing never holds back the one build that can still be archived.
 
 The archive job fetches a build with SteamCMD, the same tool and the same pinned
 container the watcher already uses for app info, narrowed to the two Keen files
@@ -198,15 +219,30 @@ this depot declares `oslist windows`, so the fetch forces the platform; without
 that it writes nothing and reports `Missing configuration`.
 
 `app_update` takes no manifest parameter and always fetches the head of the
-branch, so `archive record` reads the manifest gid out of the app manifest the
+branch, so `archive emit` reads the manifest gid out of the app manifest the
 fetch leaves beside the payload, and refuses a row that would key those bytes
-under a different gid.
+under a different gid. A build that already has a row keeps it: `emit` checks
+the fetched bytes against that row and hands on the row unchanged.
+
+Both fetching routes leave that evidence, SteamCMD in `steamapps/` and
+DepotDownloader in `.DepotDownloader/`, so a directory carrying neither is
+refused rather than recorded. `--unattested` records it anyway, on the word of
+whoever typed the gid, and prints that in the output. No workflow passes it,
+which a case enforces.
+
+`revision` and `branch` come from the first 512 bytes of
+`enshrouded_server.kfc`, where the container's version line names the content
+revision and the Subversion branch the build was cut from. The supported-build
+table matches on that revision and no Steam field carries it. `--revision` and
+`--branch` still win, for a container this reader cannot parse.
 
 **A historical manifest needs DepotDownloader, run by hand under a real Steam
 account.** `app_update` cannot ask for one and an anonymous session is refused
 one, so a build missed while its manifest was current is recovered that way
 rather than by continuous integration. That is how the four backfilled builds
-arrived, and `archive record` reads DepotDownloader's provenance too.
+arrived, and `archive record` reads DepotDownloader's provenance too. A build
+recovered by hand reaches the bucket by hand too: `archive record` for its row,
+then `archive push` with the write token in the environment.
 
 `archive.json` at the repository root names the account and the bucket those
 commands reach. A fork points the pipeline at its own bucket by editing that
@@ -217,8 +253,9 @@ one that starts to. Nothing reads the destination from the environment, which a
 case proves by running a process with every plausible override name set and
 checking where a request would still have gone.
 
-Both R2 commands read their credential from the environment and say which
-variables are missing when it is absent. A pull without one creates nothing.
+Every command that reaches R2 reads its credential from the environment and
+names the variables that are missing when it is absent: `status` and `pull` the
+read token, `push` the write token. A pull without one creates nothing.
 
 ## Tests that need a real server
 

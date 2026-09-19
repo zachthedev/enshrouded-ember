@@ -26,8 +26,6 @@ import { z } from "zod";
 import {
   appendRecord,
   BranchTable,
-  BUILD_DIGESTS_PATH,
-  BuildDigestRecord,
   ManifestTable,
   readRecords,
   STEAM_BUILDS_PATH,
@@ -292,32 +290,6 @@ export function movedBranches(result: WatchResult): string[] {
 }
 
 /**
- * Whether the archive is missing the build the public branch now names.
- *
- * @remarks
- * This is what the archive job gates on, rather than on whether this run's
- * observation differed from the last one. The observation record says what
- * Steam advertised; the digest record says what was actually stored. Gating on
- * the first means a run that observes a build and then fails to archive it is
- * never retried, because the next run sees no change. Gating on the second
- * means the job retries every hour until the build is really in the archive.
- *
- * @param manifestId - The gid of the depot the archive stores, if one is named.
- * @param path - The digest record to read.
- * @returns True when that manifest has no digest row yet.
- */
-export async function needsArchive(
-  manifestId: string | undefined,
-  path: string = BUILD_DIGESTS_PATH,
-): Promise<boolean> {
-  if (manifestId === undefined || manifestId.length === 0) {
-    return false;
-  }
-  const rows = await readRecords(path, BuildDigestRecord);
-  return !rows.some((row) => row.manifestId === manifestId);
-}
-
-/**
  * ///////////////////////////////////////////////
  * Command line
  * ///////////////////////////////////////////////
@@ -335,6 +307,10 @@ function dim(text: string): string {
  * A step that decides what to do next reads these rather than grepping this
  * command's own prose, which would make the wording load-bearing.
  *
+ * Whether the build is archived is not among them. This job holds no archive
+ * credential, so it cannot ask the bucket, and `archive status` answers that
+ * in a job of its own.
+ *
  * @param result - What the run concluded.
  * @param depotId - The depot whose manifest gid to publish, if any. The
  * archive job needs it to name the build it fetches.
@@ -343,7 +319,6 @@ function dim(text: string): string {
 export function stepOutputs(
   result: WatchResult,
   depotId: string | undefined,
-  archiveMissing: boolean,
 ): string[] {
   const moved = movedBranches(result);
   return [
@@ -357,7 +332,6 @@ export function stepOutputs(
     `change_number=${result.record.changeNumber ?? ""}`,
     `branches_moved=${moved.join(" ")}`,
     `public_moved=${moved.includes(PUBLIC_BRANCH)}`,
-    `needs_archive=${archiveMissing}`,
   ];
 }
 
@@ -389,13 +363,12 @@ function manifestFor(result: WatchResult, depotId: string | undefined): string {
 async function emitStepOutputs(
   result: WatchResult,
   depotId: string | undefined,
-  archiveMissing: boolean,
 ): Promise<void> {
   const path = process.env["GITHUB_OUTPUT"];
   if (path === undefined || path.length === 0) {
     return;
   }
-  const lines = stepOutputs(result, depotId, archiveMissing);
+  const lines = stepOutputs(result, depotId);
   // A line break inside a value declares an output name of its own, and GitHub
   // takes the last value for a repeated name, so an injected `changed=false`
   // would win over the real one. Every field these lines are built from is
@@ -417,7 +390,7 @@ async function emitStepOutputs(
 }
 
 /** Print what the run concluded. */
-function report(result: WatchResult, archiveMissing: boolean): void {
+function report(result: WatchResult): void {
   console.log("build watch");
   console.log("");
   const glyph = result.changed ? "✓" : "·";
@@ -434,9 +407,7 @@ function report(result: WatchResult, archiveMissing: boolean): void {
     const from = before !== undefined && before !== gid ? ` was ${before}` : "";
     console.log(`    ${dim("depot")} ${depotId} ${gid}${from}`);
   }
-  if (archiveMissing) {
-    console.log(`    ${dim("archive")} this build has no digest row yet`);
-  }
+
   console.log("");
   console.log(
     result.changed
@@ -472,11 +443,6 @@ if (import.meta.main) {
     branches: info.branches,
     manifests: info.manifests,
   });
-  const archiveMissing = await needsArchive(
-    values.depot === undefined
-      ? undefined
-      : result.record.manifests[values.depot],
-  );
-  await emitStepOutputs(result, values.depot, archiveMissing);
-  report(result, archiveMissing);
+  await emitStepOutputs(result, values.depot);
+  report(result);
 }

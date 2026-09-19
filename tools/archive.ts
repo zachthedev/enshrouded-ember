@@ -21,12 +21,18 @@
  * diff a reviewer sees. A fork points the pipeline at its own bucket by
  * editing that one file. Only the key pairs come from the environment.
  *
- * `push` refuses a key that is already in the bucket, and that refusal is
- * advisory rather than atomic. R2 honors `If-None-Match: *` on a put, and Bun
- * 1.3.13's S3 client exposes no way to send it, so the check and the write are
- * two requests. Two writers racing the same key is the uncovered case, and
- * `concurrency: build-watch` is what keeps the scheduled job from being one of
- * them.
+ * Whether a build is archived is asked of the bucket and never read from the
+ * digest record. `status` asks with the read token every hour, and its answer
+ * is what decides whether the archive job runs at all. It sweeps every other
+ * recorded build in the same run, because the archive job can refetch the head
+ * of the branch and nothing else.
+ *
+ * `push` skips a key that already holds the recorded bytes and refuses one
+ * that holds anything else, and that refusal is advisory rather than atomic.
+ * R2 honors `If-None-Match: *` on a put, and Bun 1.3.13's S3 client exposes no
+ * way to send it, so the check and the write are two requests. Two writers
+ * racing the same key is the uncovered case, and `concurrency: build-watch` is
+ * what keeps the scheduled job from being one of them.
  *
  * @example
  * ```sh
@@ -238,6 +244,80 @@ export async function fetchedManifest(
 
 /**
  * ///////////////////////////////////////////////
+ * The version line the build carries
+ * ///////////////////////////////////////////////
+ */
+
+/** What a build's resource container says about the content it was cut from. */
+export interface KfcVersion {
+  /** The content revision, which the supported-build table matches on. */
+  readonly revision: number;
+  /** The Subversion branch path the content came from. */
+  readonly branch: string;
+}
+
+/** The ASCII bytes `KFC3`, which open a Keen resource container. */
+const KFC_MAGIC = "KFC3";
+
+/** Where the container's location records start. */
+const KFC_LOCATIONS_AT = 0x10;
+
+/** The most bytes a version line is read from, which is far more than it needs. */
+const KFC_VERSION_CAP = 512;
+
+/**
+ * Read the version line out of `enshrouded_server.kfc`.
+ *
+ * @remarks
+ * The container opens with `KFC3` and a table of location records, each a
+ * relative offset and a count. The first record points at the version line,
+ * which is the content revision, the branch path and a timestamp joined by
+ * `|`. `ember-kfc` reads the same two fields the same way, and this is the
+ * only reader on this side of the pipeline.
+ *
+ * Reading it here is what fills `revision` and `branch` on a row continuous
+ * integration writes. They name the content a build was cut from, which is
+ * what the supported-build table matches on, and no Steam field carries
+ * either.
+ *
+ * @param path - The container to read.
+ * @returns The revision and the branch, or null when the file is not a
+ * container, does not use the slot, or does not carry the two fields.
+ */
+export async function kfcVersion(path: string): Promise<KfcVersion | null> {
+  const file = Bun.file(path);
+  const header = new Uint8Array(
+    await file.slice(0, KFC_LOCATIONS_AT + 8).arrayBuffer(),
+  );
+  if (header.byteLength < KFC_LOCATIONS_AT + 8) {
+    return null;
+  }
+  if (new TextDecoder().decode(header.slice(0, 4)) !== KFC_MAGIC) {
+    return null;
+  }
+  const record = new DataView(
+    header.buffer,
+    header.byteOffset + KFC_LOCATIONS_AT,
+    8,
+  );
+  // A relative offset of zero marks a location the build does not use, and the
+  // offset is relative to the record that holds it.
+  const relative = record.getUint32(0, true);
+  const count = record.getUint32(4, true);
+  if (relative === 0 || count === 0 || count > KFC_VERSION_CAP) {
+    return null;
+  }
+  const at = KFC_LOCATIONS_AT + relative;
+  const line = await file.slice(at, at + count).text();
+  const parsed = /^(\d{1,9})\|(\^\/[A-Za-z0-9._/-]+)\|/.exec(line);
+  if (parsed === null) {
+    return null;
+  }
+  return { revision: Number(parsed[1]), branch: parsed[2] as string };
+}
+
+/**
+ * ///////////////////////////////////////////////
  * Credentials
  * ///////////////////////////////////////////////
  */
@@ -347,9 +427,177 @@ function client(access: Access): Bun.S3Client {
 
 /**
  * ///////////////////////////////////////////////
+ * Asking the bucket
+ * ///////////////////////////////////////////////
+ */
+
+/** Raised when the bucket answers with neither an object nor its absence. */
+export class ArchiveUnreachableError extends Error {
+  constructor(key: string, cause: unknown) {
+    const code = (cause as { code?: unknown } | null)?.code;
+    super(
+      `${key} could not be checked in the archive` +
+        (typeof code === "string" ? `, which answered ${code}` : "") +
+        ". A token without read access, a revoked token and an R2 outage " +
+        "all answer this way, so nothing was decided from it.",
+    );
+    this.name = "ArchiveUnreachableError";
+  }
+}
+
+/**
+ * The size of one object, or null when the bucket says the key is absent.
+ *
+ * @remarks
+ * Only a missing key reads as null. Bun reports that as `NoSuchKey` and a
+ * refused or failed request as something else, and anything else is thrown.
+ * Read as absent, a token that lost its read access would make every build
+ * look unarchived, and `push` would take that as leave to write over a key it
+ * never looked inside.
+ *
+ * @param bucket - The client to ask. A test points one at a loopback server.
+ * @param key - The object key.
+ * @returns The object's size in bytes, or null when the key is absent.
+ * @throws {@link ArchiveUnreachableError} When the bucket answered anything
+ * other than the object or its absence.
+ */
+export async function objectSize(
+  bucket: Bun.S3Client,
+  key: string,
+): Promise<number | null> {
+  try {
+    return (await bucket.file(key).stat()).size;
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === "NoSuchKey") {
+      return null;
+    }
+    throw new ArchiveUnreachableError(key, error);
+  }
+}
+
+/**
+ * What the bucket holds for one build.
+ *
+ * @remarks
+ * A build with no row is asked about under {@link ARCHIVE_FILES}, so every run
+ * sends a request whatever the record says. The answer for such a build is
+ * already settled, and asking is what exercises the credential: a token that
+ * was revoked or scoped wrong is found in the hour it happens rather than at
+ * the next upload.
+ *
+ * @param bucket - The client to ask. A test points one at a loopback server.
+ * @param manifestId - The build to ask about.
+ * @param record - The row naming the files, or null for a build with none.
+ * @returns Each file's size in the bucket, keyed by file name, with null for
+ * an absent object.
+ * @throws {@link ArchiveUnreachableError} When the bucket could not be asked
+ * about one of them.
+ */
+export async function bucketSizes(
+  bucket: Bun.S3Client,
+  manifestId: string,
+  record: BuildDigestRecord | null,
+): Promise<Record<string, number | null>> {
+  const names = record === null ? ARCHIVE_FILES : Object.keys(record.files);
+  const sizes: Record<string, number | null> = {};
+  for (const fileName of names) {
+    sizes[fileName] = await objectSize(bucket, objectKey(manifestId, fileName));
+  }
+  return sizes;
+}
+
+/** Whether the archive job has work to do for one build. */
+export type ArchiveState =
+  | { readonly state: "archived" }
+  | { readonly state: "missing"; readonly detail: string }
+  | { readonly state: "conflict"; readonly detail: string };
+
+/**
+ * Decide whether one build is archived, from its row and what the bucket holds.
+ *
+ * @remarks
+ * A build is archived when it has a digest row and every file the row names
+ * is in the bucket at the recorded size. It takes both halves. A row with no
+ * objects is a build that was hashed and never uploaded. Objects with no row
+ * are an upload whose row never reached the record, and `pull` refuses a build
+ * it has nothing to check against. The archive job finishes either one by
+ * running again.
+ *
+ * An object at a size the row does not state is a conflict rather than work.
+ * `push` refuses to write over it, so running the archive job cannot settle
+ * it, and it needs a person.
+ *
+ * Presence and size are all this reads. The bytes are checked by `pull`, which
+ * hashes everything it fetches, and by `push`, which hashes an object before
+ * it calls one archived.
+ *
+ * @param manifestId - The build's depot manifest gid.
+ * @param record - The build's digest row, or null when it has none.
+ * @param sizes - What the bucket reports for each file the row names, keyed by
+ * file name, with null for an absent object.
+ * @returns Archived, missing with the reason, or a conflict with the reason.
+ */
+export function archiveState(
+  manifestId: string,
+  record: BuildDigestRecord | null,
+  sizes: Readonly<Record<string, number | null>>,
+): ArchiveState {
+  if (record === null) {
+    return {
+      state: "missing",
+      detail: `${manifestId} has no digest row, so the build was never recorded`,
+    };
+  }
+  const absent: string[] = [];
+  const conflicts: string[] = [];
+  for (const [fileName, want] of Object.entries(record.files)) {
+    const key = objectKey(manifestId, fileName);
+    const got = Object.hasOwn(sizes, fileName)
+      ? (sizes[fileName] ?? null)
+      : null;
+    if (got === null) {
+      absent.push(key);
+    } else if (got !== want.bytes) {
+      conflicts.push(
+        `${key} holds ${got} bytes, and the record says ${want.bytes}`,
+      );
+    }
+  }
+  if (conflicts.length > 0) {
+    return { state: "conflict", detail: conflicts.join("; ") };
+  }
+  if (absent.length > 0) {
+    return {
+      state: "missing",
+      detail: `${absent.join(" and ")} ${absent.length === 1 ? "is" : "are"} not in the bucket`,
+    };
+  }
+  return { state: "archived" };
+}
+
+/**
+ * ///////////////////////////////////////////////
  * Digests
  * ///////////////////////////////////////////////
  */
+
+/**
+ * Hash a stream of bytes without holding it in memory.
+ *
+ * @param stream - The bytes, from a file on disk or an object in the bucket.
+ * @returns Their count and their lowercase hex SHA-256.
+ */
+export async function digestStream(
+  stream: ReadableStream<Uint8Array>,
+): Promise<FileDigest> {
+  const hasher = new Bun.CryptoHasher("sha256");
+  let bytes = 0;
+  for await (const chunk of stream) {
+    hasher.update(chunk);
+    bytes += chunk.byteLength;
+  }
+  return { bytes, sha256: hasher.digest("hex") };
+}
 
 /**
  * Hash one file without holding it in memory.
@@ -358,13 +606,7 @@ function client(access: Access): Bun.S3Client {
  * @returns Its size in bytes and its lowercase hex SHA-256.
  */
 export async function digestFile(path: string): Promise<FileDigest> {
-  const hasher = new Bun.CryptoHasher("sha256");
-  let bytes = 0;
-  for await (const chunk of Bun.file(path).stream()) {
-    hasher.update(chunk);
-    bytes += chunk.byteLength;
-  }
-  return { bytes, sha256: hasher.digest("hex") };
+  return digestStream(Bun.file(path).stream());
 }
 
 /** One way a file failed to match the row that describes it. */
@@ -533,13 +775,73 @@ function summary(text: string, failed: boolean): never {
  */
 
 /**
+ * Refuse a directory whose fetch says it holds another build than the one named.
+ *
+ * @remarks
+ * A fetch that cannot pin a manifest returns the head of the branch, so a Keen
+ * release landing mid-run would otherwise be filed under the previous gid, and
+ * the row would describe a build that is not there.
+ *
+ * A directory carrying no evidence at all is refused rather than trusted.
+ * Both fetching routes leave some, so bytes without any arrived some other
+ * way: a restore from backup, a copy that skipped hidden entries, an unpack
+ * that dropped them. Recording those keys them to whatever gid was typed, in a
+ * bucket with no versioning, and every later check compares them against that
+ * same row. `--unattested` records them anyway, and puts the assumption in the
+ * command that took it.
+ *
+ * @param dir - The directory the fetch filled.
+ * @param manifestId - The manifest the caller asked for.
+ * @param appId - The Steam application that was fetched.
+ * @param depotId - The depot whose manifest is compared.
+ * @param unattested - Whether the caller accepts a directory with no evidence.
+ */
+async function confirmProvenance(
+  dir: string,
+  manifestId: string,
+  appId: number,
+  depotId: number,
+  unattested: boolean,
+): Promise<void> {
+  const fetched = await fetchedManifest(dir, appId, depotId);
+  if (fetched === null) {
+    if (!unattested) {
+      row(false, `${dir} carries no record of which manifest it came from`);
+      summary(
+        "nothing recorded. SteamCMD leaves an app manifest and " +
+          "DepotDownloader leaves a cached one, so bytes with neither are " +
+          "attributed by whoever typed the gid. Pass --unattested to record " +
+          "them on that basis",
+        true,
+      );
+    }
+    row(
+      true,
+      dim(`${manifestId} is the caller's word: ${dir} carries no fetch record`),
+    );
+  } else if (fetched.manifestId !== manifestId) {
+    row(
+      false,
+      `${fetched.source} says this build came from manifest ` +
+        `${fetched.manifestId}, and the row would say ${manifestId}`,
+    );
+    summary(
+      "nothing recorded. The bytes are a different build than the one asked " +
+        "for, so the row would key them under the wrong manifest",
+      true,
+    );
+  } else {
+    row(true, `${manifestId} confirmed by ${dim(fetched.source)}`);
+  }
+}
+
+/**
  * Hash a local build and build the row that describes it.
  *
  * @remarks
- * The whole of what `record` did before it was split. `record` appends what
- * this returns and `emit` prints it, so the checks that decide whether a build
- * may be recorded at all happen once and in one place rather than in whichever
- * verb a caller happened to use.
+ * `record` appends what this returns and `emit` prints it, so the checks that
+ * decide whether a build may be recorded at all happen once and in one place
+ * rather than in whichever verb a caller happened to use.
  *
  * @param options - The flags the command was given.
  * @param recordPath - The record to check for an existing row.
@@ -562,28 +864,13 @@ async function buildRow(
 
   const appId = Number(options.app ?? APP_ID);
   const depotId = Number(options.depot ?? DEPOT_ID);
-
-  // What the fetch says it got, against what it was asked for. A fetch that
-  // cannot pin a manifest returns the head of the branch, so a Keen release
-  // landing mid-run would otherwise be filed under the previous gid and the
-  // row would describe a build that is not there.
-  const fetched = await fetchedManifest(dir, appId, depotId);
-  if (fetched === null) {
-    row(true, dim(`${dir} carries no record of which manifest it came from`));
-  } else if (fetched.manifestId !== manifestId) {
-    row(
-      false,
-      `${fetched.source} says this build came from manifest ` +
-        `${fetched.manifestId}, and the row would say ${manifestId}`,
-    );
-    summary(
-      "nothing recorded. The bytes are a different build than the one asked " +
-        "for, so the row would key them under the wrong manifest",
-      true,
-    );
-  } else {
-    row(true, `${manifestId} confirmed by ${dim(fetched.source)}`);
-  }
+  await confirmProvenance(
+    dir,
+    manifestId,
+    appId,
+    depotId,
+    options.unattested === true,
+  );
 
   const files: Record<string, FileDigest> = {};
   for (const fileName of options.file ?? ARCHIVE_FILES) {
@@ -604,16 +891,79 @@ async function buildRow(
     row(true, `${fileName} ${digest.bytes} bytes ${dim(digest.sha256)}`);
   }
 
+  // The container names the content the build was cut from, and no Steam field
+  // does. A flag still wins, because a caller reading a build this tool cannot
+  // parse has to be able to say what it is.
+  const version = await kfcVersion(join(dir, "enshrouded_server.kfc"));
+  if (version === null) {
+    row(true, dim("enshrouded_server.kfc carries no version line"));
+  } else {
+    row(true, `revision ${version.revision} on ${dim(version.branch)}`);
+  }
+
   return BuildDigestRecord.parse({
     manifestId,
     buildId: options.build ?? null,
     appId,
     depotId,
-    revision: options.revision === undefined ? null : Number(options.revision),
-    branch: options.branch ?? null,
-    archivedAt: (options.date ?? new Date().toISOString()).slice(0, 10),
+    revision:
+      options.revision === undefined
+        ? (version?.revision ?? null)
+        : Number(options.revision),
+    branch: options.branch ?? version?.branch ?? null,
+    recordedAt: (options.date ?? new Date().toISOString()).slice(0, 10),
     files,
   });
+}
+
+/**
+ * Check a fetched build against the row already committed for it.
+ *
+ * @remarks
+ * A build can be recorded before it is archived: hashed from a local copy, or
+ * recorded by a run whose upload then failed. The archive job fetches such a
+ * build again, and once the fetched bytes match the committed row, that row is
+ * what it hands on, unchanged.
+ *
+ * Bytes that do not match are refused rather than recorded again. The row is
+ * the integrity record, and a fetch that disagrees with it is either a swapped
+ * build or a wrong row, which a person settles.
+ *
+ * @param options - The flags the command was given.
+ * @param dir - The directory the fetch filled.
+ * @param record - The committed row for the build that was asked for.
+ * @returns The committed row, once every file it names matches.
+ */
+async function confirmRow(
+  options: Options,
+  dir: string,
+  record: BuildDigestRecord,
+): Promise<BuildDigestRecord> {
+  await confirmProvenance(
+    dir,
+    record.manifestId,
+    record.appId,
+    record.depotId,
+    options.unattested === true,
+  );
+  const problems = compareDigests(
+    await digestDirectory(dir, record),
+    record.files,
+  );
+  if (problems.length > 0) {
+    for (const problem of problems) {
+      row(false, `${problem.fileName} ${problem.detail}`);
+    }
+    summary(
+      "nothing handed on. The fetched bytes are not the ones the committed " +
+        `row pins for ${record.manifestId}`,
+      true,
+    );
+  }
+  for (const fileName of Object.keys(record.files)) {
+    row(true, `${fileName} matches the committed row`);
+  }
+  return record;
 }
 
 /** Hash a local build and append its row to the digest record. */
@@ -639,11 +989,20 @@ async function commandRecord(options: Options): Promise<never> {
  * archive, and the job that commits the row holds a key that can push to main.
  * Neither should hold the other, so the row crosses between them as a job
  * output and this is what puts it there.
+ *
+ * A build that already has a row gets that row back, once the fetched bytes
+ * match it. The archive job runs for any build the bucket lacks, recorded or
+ * not, and a recorded one is uploaded under the digests its row already pins.
  */
 async function commandEmit(options: Options): Promise<never> {
   section("emit");
   const recordPath = options.record ?? BUILD_DIGESTS_PATH;
-  const built = await buildRow(options, recordPath);
+  const dir = required(options, "dir");
+  const committed = await digestRow(required(options, "manifest"), recordPath);
+  const built =
+    committed === null
+      ? await buildRow(options, recordPath)
+      : await confirmRow(options, dir, committed);
   const line = JSON.stringify(built);
 
   // Every field here is committed to a public repository moments later, so
@@ -737,6 +1096,143 @@ async function commandVerify(options: Options): Promise<never> {
   );
 }
 
+/** The step output the archive job's gate reads. */
+export const NEEDS_ARCHIVE = "needs_archive";
+
+/** What one recorded build looks like in the bucket. */
+export interface ArchiveSweep {
+  /** The build's depot manifest gid. */
+  readonly manifestId: string;
+  /** What the bucket holds for it. */
+  readonly state: ArchiveState;
+}
+
+/**
+ * The state of every recorded build except one.
+ *
+ * @remarks
+ * The archive job can only ever fetch the head of the branch, so it repairs
+ * the current build and no other. The rest cannot be refetched from Steam at
+ * all, which makes them the builds whose loss is absolute and the ones worth
+ * looking at every hour.
+ *
+ * @param bucket - The client to ask.
+ * @param records - Every row in the digest record.
+ * @param except - The build the caller already asked about.
+ * @returns One entry per other recorded build, in record order.
+ * @throws {@link ArchiveUnreachableError} When the bucket could not be asked.
+ */
+export async function sweepArchive(
+  bucket: Bun.S3Client,
+  records: readonly BuildDigestRecord[],
+  except: string,
+): Promise<ArchiveSweep[]> {
+  const swept: ArchiveSweep[] = [];
+  for (const record of records) {
+    if (record.manifestId === except) {
+      continue;
+    }
+    const sizes = await bucketSizes(bucket, record.manifestId, record);
+    swept.push({
+      manifestId: record.manifestId,
+      state: archiveState(record.manifestId, record, sizes),
+    });
+  }
+  return swept;
+}
+
+/**
+ * Ask the bucket whether one build is archived, and tell the workflow.
+ *
+ * @remarks
+ * The hourly gate on the archive job. It holds the read token and nothing
+ * else, so it answers without waiting on the approval the write token sits
+ * behind, and the archive job asks for that approval only when there is work.
+ *
+ * It hands on `needs_archive=true` for a build with work left and
+ * `needs_archive=false` for one that is archived. It fails on a conflict, and
+ * on a bucket it could not ask, and hands on nothing either way: a check that
+ * could not decide must not read as a decision.
+ *
+ * The answer is handed on before the rest of the record is swept, so a
+ * historical build that has gone missing turns this job red without stopping
+ * the one build the archive job can still repair.
+ *
+ * @param options - The flags the command was given.
+ * @param bucket - The client to ask, which defaults to the read token. A test
+ * passes one pointed at a loopback server, the same seam {@link bucketSizes}
+ * takes.
+ */
+export async function commandStatus(
+  options: Options,
+  bucket: Bun.S3Client = client("read"),
+): Promise<never> {
+  section("status");
+  const recordPath = options.record ?? BUILD_DIGESTS_PATH;
+  const manifestId = required(options, "manifest");
+  const record = await digestRow(manifestId, recordPath);
+
+  const sizes = await bucketSizes(bucket, manifestId, record);
+  if (record === null) {
+    row(false, `${manifestId} has no row in ${recordPath}`);
+  }
+  for (const [fileName, size] of Object.entries(sizes)) {
+    const key = objectKey(manifestId, fileName);
+    const want = record?.files[fileName];
+    if (size === null) {
+      row(false, `${key} is not in the bucket`);
+    } else if (want !== undefined && size !== want.bytes) {
+      row(
+        false,
+        `${key} holds ${size} bytes, and the record says ${want.bytes}`,
+      );
+    } else {
+      row(true, `${key} ${size} bytes`);
+    }
+  }
+
+  const decided = archiveState(manifestId, record, sizes);
+  if (decided.state === "conflict") {
+    summary(
+      "the bucket holds bytes the record does not describe. push refuses to " +
+        "write over them, so this needs a person rather than another run",
+      true,
+    );
+  }
+  const needsArchive = decided.state === "missing";
+  row(
+    !needsArchive,
+    needsArchive
+      ? `${manifestId} needs archiving: ${decided.detail}`
+      : `${manifestId} is archived`,
+  );
+  await emitStepOutput(NEEDS_ARCHIVE, String(needsArchive));
+
+  const swept = await sweepArchive(
+    bucket,
+    await readRecords(recordPath, BuildDigestRecord),
+    manifestId,
+  );
+  for (const other of swept) {
+    if (other.state.state === "archived") {
+      row(true, dim(`${other.manifestId} is archived`));
+    } else {
+      row(false, `${other.manifestId} ${other.state.detail}`);
+    }
+  }
+
+  const lost = swept.filter((other) => other.state.state !== "archived");
+  const answer = needsArchive
+    ? `build ${manifestId} needs archiving`
+    : `build ${manifestId} is archived`;
+  summary(
+    lost.length === 0
+      ? `${answer}, and every other recorded build is in the archive`
+      : `${answer}, and ${count(lost.length, "other recorded build is", "other recorded builds are")} not. Steam serves none of them any more`,
+    lost.length > 0,
+  );
+}
+
 /** What `push` does about one key. */
 export type UploadAction =
   | { readonly action: "upload" }
@@ -744,40 +1240,53 @@ export type UploadAction =
   | { readonly action: "refuse"; readonly detail: string };
 
 /**
- * Decide what to do about one object already in the bucket.
+ * Decide what to do about one key, from what the bucket already holds there.
  *
  * @remarks
  * This is what makes a retry converge rather than loop. A run that uploaded
- * and then failed before its row was committed leaves `needs_archive` true, so
- * the next run fetches and pushes again; skipping an object whose size already
- * matches is what stops that second push from either refusing or overwriting.
- * The bytes are the irreplaceable half and they are already safe, so the retry
- * costs one fetch and finishes.
+ * and then failed before its row was committed leaves the build unrecorded, so
+ * the next run fetches and pushes again, and so does a second run of the
+ * one-time seed. Skipping an object that already holds the recorded bytes is
+ * what stops that second push from either refusing or overwriting. The bytes
+ * are the irreplaceable half and they are already safe, so the retry costs one
+ * fetch and finishes.
  *
- * A size mismatch is refused rather than overwritten, because R2 has no
- * versioning and the object under a legitimate key is what continuous
- * integration and developers run.
+ * An object is skipped only once it hashes to the record. A matching size
+ * says nothing about the bytes, and an object skipped on its size alone would
+ * be reported archived while holding something else.
+ *
+ * Anything else already at the key is refused rather than overwritten,
+ * because R2 has no versioning and the object under a legitimate key is what
+ * continuous integration and developers run.
  *
  * @param expected - What the digest row says the file is.
  * @param existingBytes - The size the bucket reports, or null when absent.
+ * @param existingSha256 - Hashes the object in the bucket. It is called only
+ * when the size already matches, because it downloads the object.
  * @returns Whether to upload, skip, or refuse and why.
  */
-export function uploadDecision(
+export async function uploadDecision(
   expected: FileDigest,
   existingBytes: number | null,
-): UploadAction {
+  existingSha256: () => Promise<string>,
+): Promise<UploadAction> {
   if (existingBytes === null) {
     return { action: "upload" };
   }
-  // The local copy was verified against the row before this, so a size match
-  // means the object already holds the recorded bytes.
-  if (existingBytes === expected.bytes) {
-    return { action: "skip" };
+  if (existingBytes !== expected.bytes) {
+    return {
+      action: "refuse",
+      detail: `holds ${existingBytes} bytes, and the record says ${expected.bytes}`,
+    };
   }
-  return {
-    action: "refuse",
-    detail: `holds ${existingBytes} bytes, and the record says ${expected.bytes}`,
-  };
+  const sha256 = await existingSha256();
+  if (sha256 !== expected.sha256) {
+    return {
+      action: "refuse",
+      detail: `hashes to ${sha256}, and the record says ${expected.sha256}`,
+    };
+  }
+  return { action: "skip" };
 }
 
 /** Verify a local build, then upload it under its manifest gid. */
@@ -817,16 +1326,13 @@ async function commandPush(options: Options): Promise<never> {
   let uploaded = 0;
   for (const fileName of Object.keys(record.files)) {
     const key = objectKey(manifestId, fileName);
-    const existing = await bucket
-      .file(key)
-      .stat()
-      .catch(() => null);
-    const decided = uploadDecision(
+    const decided = await uploadDecision(
       record.files[fileName] as FileDigest,
-      existing?.size ?? null,
+      await objectSize(bucket, key),
+      async () => (await digestStream(bucket.file(key).stream())).sha256,
     );
     if (decided.action === "skip") {
-      row(true, `${key} is already archived`);
+      row(true, `${key} already holds the recorded bytes`);
       continue;
     }
     if (decided.action === "refuse") {
@@ -880,6 +1386,25 @@ async function commandPull(options: Options): Promise<never> {
   // leaves the filesystem exactly as it found it.
   const bucket = client("read");
 
+  // Every object's own size is checked before a byte is streamed or a
+  // directory is made. Comparing digests afterwards catches the same object,
+  // but only once it is on the disk, so an object far larger than the record
+  // says would fill the disk before anything refused it.
+  for (const fileName of Object.keys(record.files)) {
+    const expected = record.files[fileName] as FileDigest;
+    const key = objectKey(manifestId, fileName);
+    const size = await objectSize(bucket, key);
+    if (size === null || size !== expected.bytes) {
+      row(
+        false,
+        size === null
+          ? `${key} is not in the bucket`
+          : `${key} advertises ${size} bytes, and the record says ${expected.bytes}`,
+      );
+      summary("nothing was downloaded", true);
+    }
+  }
+
   // Every file lands in a staging directory beside the output, and the whole
   // directory is renamed once. A crash part way through leaves the output
   // directory as it was, rather than holding one file of this build and one of
@@ -889,28 +1414,8 @@ async function commandPull(options: Options): Promise<never> {
   await mkdir(staging, { recursive: true });
   const actual: Record<string, FileDigest | null> = {};
   for (const fileName of Object.keys(record.files)) {
-    const expected = record.files[fileName] as FileDigest;
-    const key = objectKey(manifestId, fileName);
-    // The object's own size is checked before a byte is streamed. Comparing
-    // digests afterwards catches the same object, but only once it is on the
-    // disk, so an object far larger than the record says would fill the disk
-    // before anything refused it.
-    const stat = await bucket
-      .file(key)
-      .stat()
-      .catch(() => null);
-    if (stat === null || stat.size !== expected.bytes) {
-      await rm(staging, { recursive: true, force: true });
-      row(
-        false,
-        stat === null
-          ? `${key} is not in the bucket`
-          : `${key} advertises ${stat.size} bytes, and the record says ${expected.bytes}`,
-      );
-      summary("nothing was downloaded", true);
-    }
     const partial = join(staging, fileName);
-    await Bun.write(partial, bucket.file(key));
+    await Bun.write(partial, bucket.file(objectKey(manifestId, fileName)));
     actual[fileName] = await digestFile(partial);
   }
 
@@ -966,6 +1471,14 @@ interface Options {
   /** A digest row another job built, as one JSON line. */
   readonly row?: string;
   readonly file?: string[];
+  /**
+   * Whether to record a build whose directory carries no fetch evidence.
+   *
+   * @remarks
+   * The gid is then the caller's word. Continuous integration never passes it,
+   * and a case refuses a workflow that does.
+   */
+  readonly unattested?: boolean;
 }
 
 /** The flag a command cannot run without, or a usage failure naming it. */
@@ -984,9 +1497,10 @@ function required(
 /** What each verb does, for the usage text. */
 const VERBS: Record<string, string> = {
   record: "hash a local build and append its digest row",
-  emit: "hash a local build and print its digest row, writing no file",
+  emit: "hash a local build and print its digest row, or the committed one it matches",
   append: "append a digest row another job built",
   verify: "check a local build against its digest row",
+  status: "ask the bucket about a build, and sweep every other recorded one",
   push: "verify a local build, then upload it to the archive",
   pull: "download a build and verify it before it is named",
 };
@@ -1008,6 +1522,7 @@ if (import.meta.main) {
       record: { type: "string" },
       row: { type: "string" },
       file: { type: "string", multiple: true },
+      unattested: { type: "boolean" },
     },
   });
   const verb = positionals[0];
@@ -1026,6 +1541,7 @@ if (import.meta.main) {
     if (verb === "emit") await commandEmit(options);
     if (verb === "append") await commandAppend(options);
     if (verb === "verify") await commandVerify(options);
+    if (verb === "status") await commandStatus(options);
     if (verb === "push") await commandPush(options);
     if (verb === "pull") await commandPull(options);
   } catch (error) {
@@ -1034,14 +1550,20 @@ if (import.meta.main) {
     // needs and a refusal is not helped by one.
     if (
       error instanceof MissingCredentialError ||
-      error instanceof DuplicateRowError ||
-      error instanceof RecordError
+      error instanceof ArchiveUnreachableError
     ) {
       row(false, error.message);
       summary(
         error instanceof MissingCredentialError
           ? "no archive was reached"
-          : `${BUILD_DIGESTS_PATH} has to be repaired before this can run`,
+          : "the archive could not be asked, so nothing was decided",
+        true,
+      );
+    }
+    if (error instanceof DuplicateRowError || error instanceof RecordError) {
+      row(false, error.message);
+      summary(
+        `${BUILD_DIGESTS_PATH} has to be repaired before this can run`,
         true,
       );
     }
