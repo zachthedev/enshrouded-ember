@@ -49,6 +49,11 @@ import { parseArgs } from "node:util";
 import * as VDF from "vdf-parser";
 import { z } from "zod";
 import {
+  compareToManifest,
+  DdManifestError,
+  readDdManifest,
+} from "./dd-manifest.ts";
+import {
   ARCHIVE_FILES,
   appendRecord,
   BUILD_DIGESTS_PATH,
@@ -181,18 +186,37 @@ export interface FetchedManifest {
   readonly manifestId: string;
   /** The file that said so, so a reader can check it by hand. */
   readonly source: string;
+  /**
+   * Which tool left the file.
+   *
+   * @remarks
+   * It decides what the evidence is worth. SteamCMD's app manifest is a
+   * KeyValues table naming a gid, and nothing in it describes the bytes.
+   * DepotDownloader's cached manifest is Valve's own, and it carries a digest
+   * per file, so the attribution can be checked rather than taken.
+   */
+  readonly by: "SteamCMD" | "DepotDownloader";
 }
 
 /**
- * The manifest gid the tool that filled a directory says it fetched.
+ * Every record a directory carries of the manifest it was fetched from.
  *
  * @remarks
- * Both fetching routes leave this behind, in different places. SteamCMD writes
+ * Both fetching routes leave one behind, in different places. SteamCMD writes
  * `steamapps/appmanifest_<app>.acf` beside the payload, whose `InstalledDepots`
  * table names a manifest per depot; it is read by depot, because that table
  * lists depots a file filter wrote nothing from. DepotDownloader names its
  * cached manifest `<depot>_<gid>.manifest` under `.DepotDownloader`, so the gid
- * is in the file name.
+ * is in the file name. That name is a claim, and {@link attestFetch} is what
+ * checks it against the manifest's own metadata and Valve's digests.
+ *
+ * Every record is returned rather than the first one found. A directory whose
+ * history mixed the two routes carries both, and the caller requires all of
+ * them to name the same manifest. Returning one would let the weaker record
+ * stand for the stronger, so a cached manifest sitting right there would go
+ * unchecked. A depot with more than one cached manifest is the same problem in
+ * one route, and it is settled the same way, because the gid is in the file
+ * name and two files state two gids.
  *
  * It matters because a fetch can return a different build than the one asked
  * for. SteamCMD's `app_update` takes no manifest parameter and always fetches
@@ -203,13 +227,19 @@ export interface FetchedManifest {
  * @param dir - The directory the fetch filled.
  * @param appId - The Steam application that was fetched.
  * @param depotId - The depot whose manifest is wanted.
- * @returns What the directory says, or null when it carries no evidence.
+ * @returns Each record, app manifest first, and an empty array for a directory
+ * that carries none.
+ * @throws {@link DdManifestError} When `.DepotDownloader` is there and
+ * cannot be listed. Evidence that cannot be read is not the same as none, and
+ * `--unattested` is allowed to wave through only the second one.
  */
-export async function fetchedManifest(
+export async function fetchedManifests(
   dir: string,
   appId: number,
   depotId: number,
-): Promise<FetchedManifest | null> {
+): Promise<FetchedManifest[]> {
+  const found: FetchedManifest[] = [];
+
   const acf = join(dir, "steamapps", `appmanifest_${appId}.acf`);
   if (await Bun.file(acf).exists()) {
     // The same two options the app info parser passes, for the same two
@@ -226,20 +256,46 @@ export async function fetchedManifest(
       Record<string, unknown> | undefined;
     const manifestId = entry?.["manifest"];
     if (typeof manifestId === "string" && /^\d{1,20}$/.test(manifestId)) {
-      return { manifestId, source: acf };
+      found.push({ manifestId, source: acf, by: "SteamCMD" });
     }
   }
 
   const cache = join(dir, ".DepotDownloader");
   const pattern = new RegExp(`^${depotId}_(\\d{1,20})\\.manifest$`);
-  for (const name of await readdir(cache).catch(() => [] as string[])) {
+  for (const name of await listCache(cache)) {
     const match = pattern.exec(name);
     if (match !== null) {
-      return { manifestId: match[1] as string, source: join(cache, name) };
+      found.push({
+        manifestId: match[1] as string,
+        source: join(cache, name),
+        by: "DepotDownloader",
+      });
     }
   }
 
-  return null;
+  return found;
+}
+
+/**
+ * The names in a DepotDownloader cache, or none when there is no cache.
+ *
+ * @param cache - The `.DepotDownloader` directory.
+ * @returns Its entries, and an empty array when it is not there.
+ * @throws {@link DdManifestError} When it is there and cannot be listed.
+ */
+async function listCache(cache: string): Promise<string[]> {
+  try {
+    return await readdir(cache);
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === "ENOENT") {
+      return [];
+    }
+    throw new DdManifestError(
+      cache,
+      `could not be listed${typeof code === "string" ? `, which failed with ${code}` : ""}`,
+    );
+  }
 }
 
 /**
@@ -776,6 +832,76 @@ function summary(text: string, failed: boolean): never {
  */
 
 /**
+ * Check a cached depot manifest against itself and against the bytes beside it.
+ *
+ * @remarks
+ * This is what separates evidence from a claim. The gid DepotDownloader puts
+ * in a file name survives a rename, so on its own it attributes a build to
+ * whatever somebody typed. The manifest inside that file is Valve's, and it
+ * states its own depot and gid and a SHA-1 for every file in the depot, so a
+ * build that passes here is attributed by the content rather than by the name.
+ *
+ * Hashing the build costs one pass over it, and only a build seeded by hand
+ * from a historical manifest ever takes this path. The scheduled archive job
+ * fetches with SteamCMD, which leaves no manifest of this kind.
+ *
+ * @param dir - The directory the fetch filled.
+ * @param fetched - The evidence, whose source is the cached manifest.
+ * @param depotId - The depot the build is supposed to come from.
+ * @param fileNames - The files to check, already accepted as plain names.
+ * @throws {@link DdManifestError} When the manifest is absent, does not
+ * match its checksum, or does not decode.
+ */
+async function attestFetch(
+  dir: string,
+  fetched: FetchedManifest,
+  depotId: number,
+  fileNames: readonly string[],
+): Promise<void> {
+  const manifest = await readDdManifest(fetched.source);
+  const refuse = (detail: string): never => {
+    row(false, `${fetched.source} ${detail}`);
+    return summary(
+      "nothing recorded. The manifest beside these bytes does not attribute " +
+        "them, and a gid in a file name is a claim rather than evidence",
+      true,
+    );
+  };
+  if (manifest.manifestId !== fetched.manifestId) {
+    refuse(
+      `states manifest ${manifest.manifestId} inside, and its name says ` +
+        fetched.manifestId,
+    );
+  }
+  if (manifest.depotId !== depotId) {
+    refuse(
+      `describes depot ${manifest.depotId}, and this build is depot ${depotId}`,
+    );
+  }
+  if (manifest.filenamesEncrypted) {
+    refuse(
+      "carries encrypted file names, so no file in it can be matched by name",
+    );
+  }
+
+  row(true, `${fetched.manifestId} confirmed by ${dim(fetched.source)}`);
+  const problems = await compareToManifest(manifest, dir, fileNames);
+  if (problems.length > 0) {
+    for (const problem of problems) {
+      row(false, `${problem.fileName} ${problem.detail}`);
+    }
+    summary(
+      "nothing recorded. The bytes are not the ones Valve's manifest for " +
+        `${fetched.manifestId} describes`,
+      true,
+    );
+  }
+  for (const fileName of fileNames) {
+    row(true, `${fileName} matches Valve's digest in ${dim(fetched.source)}`);
+  }
+}
+
+/**
  * Refuse a directory whose fetch says it holds another build than the one named.
  *
  * @remarks
@@ -791,10 +917,24 @@ function summary(text: string, failed: boolean): never {
  * same row. `--unattested` records them anyway, and puts the assumption in the
  * command that took it.
  *
+ * The flag covers a directory with no evidence and nothing else. Evidence that
+ * is there and disagrees is a refusal on any flag, because a manifest that
+ * describes other bytes is a fact rather than a gap.
+ *
+ * Every record the directory carries has to name the manifest the caller asked
+ * for, and every cached manifest among them is attested. A directory whose
+ * history mixed the two fetch routes carries both, and taking the first would
+ * leave a cached manifest unread beside the bytes it describes. That one rule
+ * also settles two records that disagree with each other: one of them
+ * disagrees with the caller, so the directory is refused rather than resolved.
+ *
  * @param dir - The directory the fetch filled.
  * @param manifestId - The manifest the caller asked for.
  * @param appId - The Steam application that was fetched.
  * @param depotId - The depot whose manifest is compared.
+ * @param fileNames - The files the row will name, already accepted as plain
+ * names. Validating them first keeps a path the caller invented out of
+ * {@link attestFetch}, which hashes what it is given.
  * @param unattested - Whether the caller accepts a directory with no evidence.
  */
 async function confirmProvenance(
@@ -802,10 +942,11 @@ async function confirmProvenance(
   manifestId: string,
   appId: number,
   depotId: number,
+  fileNames: readonly string[],
   unattested: boolean,
 ): Promise<void> {
-  const fetched = await fetchedManifest(dir, appId, depotId);
-  if (fetched === null) {
+  const fetched = await fetchedManifests(dir, appId, depotId);
+  if (fetched.length === 0) {
     if (!unattested) {
       row(false, `${dir} carries no record of which manifest it came from`);
       summary(
@@ -820,19 +961,30 @@ async function confirmProvenance(
       true,
       dim(`${manifestId} is the caller's word: ${dir} carries no fetch record`),
     );
-  } else if (fetched.manifestId !== manifestId) {
-    row(
-      false,
-      `${fetched.source} says this build came from manifest ` +
-        `${fetched.manifestId}, and the row would say ${manifestId}`,
-    );
-    summary(
-      "nothing recorded. The bytes are a different build than the one asked " +
-        "for, so the row would key them under the wrong manifest",
-      true,
-    );
-  } else {
-    row(true, `${manifestId} confirmed by ${dim(fetched.source)}`);
+    return;
+  }
+
+  for (const one of fetched) {
+    if (one.manifestId !== manifestId) {
+      row(
+        false,
+        `${one.source} says this build came from manifest ` +
+          `${one.manifestId}, and the row would say ${manifestId}`,
+      );
+      summary(
+        "nothing recorded. The bytes are a different build than the one " +
+          "asked for, so the row would key them under the wrong manifest",
+        true,
+      );
+    }
+  }
+
+  for (const one of fetched) {
+    if (one.by === "DepotDownloader") {
+      await attestFetch(dir, one, depotId, fileNames);
+    } else {
+      row(true, `${manifestId} confirmed by ${dim(one.source)}`);
+    }
   }
 }
 
@@ -865,23 +1017,30 @@ async function buildRow(
 
   const appId = Number(options.app ?? APP_ID);
   const depotId = Number(options.depot ?? DEPOT_ID);
+
+  // Checked before any file is opened, and before the provenance check, which
+  // hashes every name it is handed. Validating afterwards would print the size
+  // and digest of whatever path was typed, which for `../secret` is a hash
+  // oracle over the filesystem.
+  const fileNames = options.file ?? ARCHIVE_FILES;
+  for (const fileName of fileNames) {
+    if (!isArchiveFileName(fileName)) {
+      row(false, `${fileName} is not one plain archived file name`);
+      summary("nothing recorded", true);
+    }
+  }
+
   await confirmProvenance(
     dir,
     manifestId,
     appId,
     depotId,
+    fileNames,
     options.unattested === true,
   );
 
   const files: Record<string, FileDigest> = {};
-  for (const fileName of options.file ?? ARCHIVE_FILES) {
-    // Checked before the file is opened. Validating it afterwards would print
-    // the size and digest of whatever path was typed, which for `../secret`
-    // is a hash oracle over the filesystem.
-    if (!isArchiveFileName(fileName)) {
-      row(false, `${fileName} is not one plain archived file name`);
-      summary("nothing recorded", true);
-    }
+  for (const fileName of fileNames) {
     const path = join(dir, fileName);
     if (!(await Bun.file(path).exists())) {
       row(false, `${fileName} is not in ${dir}`);
@@ -945,6 +1104,7 @@ async function confirmRow(
     record.manifestId,
     record.appId,
     record.depotId,
+    Object.keys(record.files),
     options.unattested === true,
   );
   const problems = compareDigests(
@@ -1558,6 +1718,14 @@ if (import.meta.main) {
         error instanceof MissingCredentialError
           ? "no archive was reached"
           : "the archive could not be asked, so nothing was decided",
+        true,
+      );
+    }
+    if (error instanceof DdManifestError) {
+      row(false, error.message);
+      summary(
+        "nothing recorded. The manifest that would attribute these bytes " +
+          "cannot be read, so the gid is nobody's evidence",
         true,
       );
     }
