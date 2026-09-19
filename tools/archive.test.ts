@@ -21,7 +21,7 @@ import {
   digestFile,
   DESTINATION,
   digestRow,
-  fetchedManifest,
+  fetchedManifests,
   DuplicateRowError,
   MissingCredentialError,
   objectKey,
@@ -29,6 +29,7 @@ import {
   sweepArchive,
   uploadDecision,
 } from "./archive.ts";
+import { DdManifestError } from "./dd-manifest.ts";
 import { appendRecord, BuildDigestRecord, readRecords } from "./records.ts";
 
 /** Every sandbox this file made, removed once the case ends. */
@@ -456,7 +457,7 @@ describe("compareDigests", () => {
   });
 });
 
-describe("fetchedManifest", () => {
+describe("fetchedManifests", () => {
   /** A SteamCMD app manifest, which is KeyValues rather than JSON. */
   const acf = (depots: Record<string, string>): string =>
     [
@@ -477,8 +478,10 @@ describe("fetchedManifest", () => {
       "}",
     ].join("\n");
 
-  test("a directory with no evidence reads as null", async () => {
-    expect(await fetchedManifest(await sandbox(), 2278520, 2278521)).toBeNull();
+  test("a directory with no evidence carries no record", async () => {
+    expect(await fetchedManifests(await sandbox(), 2278520, 2278521)).toEqual(
+      [],
+    );
   });
 
   /**
@@ -491,9 +494,12 @@ describe("fetchedManifest", () => {
       join(dir, "steamapps", "appmanifest_2278520.acf"),
       acf({ "1004": "7604377918839582995", "2278521": "2174935030716737236" }),
     );
-    const found = await fetchedManifest(dir, 2278520, 2278521);
+    const [found] = await fetchedManifests(dir, 2278520, 2278521);
     expect(found?.manifestId).toBe("2174935030716737236");
     expect(found?.source).toContain("appmanifest_2278520.acf");
+    // Which tool left it decides what the evidence is worth, and only
+    // DepotDownloader's is Valve's own manifest.
+    expect(found?.by).toBe("SteamCMD");
   });
 
   /**
@@ -506,7 +512,7 @@ describe("fetchedManifest", () => {
       join(dir, "steamapps", "appmanifest_2278520.acf"),
       acf({ "1004": "7604377918839582995" }),
     );
-    expect(await fetchedManifest(dir, 2278520, 2278521)).toBeNull();
+    expect(await fetchedManifests(dir, 2278520, 2278521)).toEqual([]);
   });
 
   test("a gid that is not decimal is no evidence", async () => {
@@ -515,7 +521,7 @@ describe("fetchedManifest", () => {
       join(dir, "steamapps", "appmanifest_2278520.acf"),
       acf({ "2278521": "../../../evil" }),
     );
-    expect(await fetchedManifest(dir, 2278520, 2278521)).toBeNull();
+    expect(await fetchedManifests(dir, 2278520, 2278521)).toEqual([]);
   });
 
   /** DepotDownloader puts the gid in the name of the manifest it cached. */
@@ -526,8 +532,51 @@ describe("fetchedManifest", () => {
       "binary",
     );
     await Bun.write(join(dir, ".DepotDownloader", "depot.config"), "binary");
-    const found = await fetchedManifest(dir, 2278520, 2278521);
+    const [found] = await fetchedManifests(dir, 2278520, 2278521);
     expect(found?.manifestId).toBe("5177045887918896292");
+    // What the file holds is checked by the caller, and this says which check
+    // the caller owes. The cases for it are in `dd-manifest.test.ts`.
+    expect(found?.by).toBe("DepotDownloader");
+  });
+
+  /**
+   * A directory whose history mixed the two routes carries both. Returning the
+   * first would let the app manifest stand for a cached manifest sitting right
+   * there, and only the cached one can be checked against the bytes.
+   */
+  test("a directory carrying both records yields both", async () => {
+    const dir = await sandbox();
+    await Bun.write(
+      join(dir, "steamapps", "appmanifest_2278520.acf"),
+      acf({ "2278521": "2174935030716737236" }),
+    );
+    await Bun.write(
+      join(dir, ".DepotDownloader", "2278521_2174935030716737236.manifest"),
+      "binary",
+    );
+    expect(
+      (await fetchedManifests(dir, 2278520, 2278521)).map((one) => one.by),
+    ).toEqual(["SteamCMD", "DepotDownloader"]);
+  });
+
+  /**
+   * Two cached manifests state two gids, because the gid is in the file name.
+   * Yielding both is what lets the caller refuse rather than resolve by
+   * directory order.
+   */
+  test("two cached manifests for one depot both yield", async () => {
+    const dir = await sandbox();
+    for (const gid of ["2174935030716737236", "5177045887918896292"]) {
+      await Bun.write(
+        join(dir, ".DepotDownloader", `2278521_${gid}.manifest`),
+        "binary",
+      );
+    }
+    expect(
+      (await fetchedManifests(dir, 2278520, 2278521))
+        .map((one) => one.manifestId)
+        .sort(),
+    ).toEqual(["2174935030716737236", "5177045887918896292"]);
   });
 
   test("a cached manifest for another depot is not taken", async () => {
@@ -536,7 +585,7 @@ describe("fetchedManifest", () => {
       join(dir, ".DepotDownloader", "1004_7604377918839582995.manifest"),
       "binary",
     );
-    expect(await fetchedManifest(dir, 2278520, 2278521)).toBeNull();
+    expect(await fetchedManifests(dir, 2278520, 2278521)).toEqual([]);
   });
 
   /**
@@ -549,7 +598,20 @@ describe("fetchedManifest", () => {
       join(dir, "steamapps", "appmanifest_228980.acf"),
       '"AppState"\n{\n\t"appid"\t\t"228980"\n}\n',
     );
-    expect(await fetchedManifest(dir, 2278520, 2278521)).toBeNull();
+    expect(await fetchedManifests(dir, 2278520, 2278521)).toEqual([]);
+  });
+
+  /**
+   * A cache that is there and cannot be listed is not a cache that is absent.
+   * Reading it as absent would put the directory in the branch `--unattested`
+   * is allowed to wave through.
+   */
+  test("a cache that cannot be listed is refused, naming it", async () => {
+    const dir = await sandbox();
+    await Bun.write(join(dir, ".DepotDownloader"), "not a directory");
+    const failure = fetchedManifests(dir, 2278520, 2278521);
+    expect(failure).rejects.toThrow(DdManifestError);
+    expect(failure).rejects.toThrow(/\.DepotDownloader could not be listed/);
   });
 });
 
