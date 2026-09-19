@@ -15,9 +15,9 @@
  * so a diff shows one added line, and prettier never reflows a file that two
  * writers append to.
  *
- * Every Steam identifier is kept as a decimal string. A manifest gid such as
- * 2174935030716737236 is larger than `Number.MAX_SAFE_INTEGER`, so a reader
- * that converts it to a number silently changes it.
+ * Every Steam identifier is kept as a decimal string. A manifest gid is a
+ * 64-bit value that can exceed `Number.MAX_SAFE_INTEGER`, so a reader that
+ * converts it to a number can silently change it.
  */
 
 import { appendFile } from "node:fs/promises";
@@ -156,8 +156,8 @@ export const SteamBuildRecord = z.object({
    *
    * @remarks
    * Recorded for provenance and never used as a trigger. It advances for
-   * reasons unrelated to builds: it moved on 2026-09-17 while app 2278520 sat
-   * on the build it has carried since May.
+   * reasons unrelated to builds: on 2026-09-17 it moved while the server's
+   * public build did not.
    */
   changeNumber: steamId.nullable(),
   /** Branch name to build id, for every branch the application advertises. */

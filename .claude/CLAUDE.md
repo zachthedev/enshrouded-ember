@@ -22,21 +22,11 @@ before changing anything.
   `.github/commit-scopes.json`, the file the commit hook reads. Omit the scope
   rather than invent one.
 
-## Which repository a change belongs in
+## Where a change belongs
 
-Ask what the code describes:
-
-- Keen's engine or Keen's game: it goes here
-- A mod's own idea: it goes in that mod's repository, such as
-  [enshrouded-mods](https://github.com/zachthedev/enshrouded-mods)
-
-Inside this repository: the engine goes in `ember-holistic`, the Enshrouded
-server in `ember-enshrouded`, and the operating system in `ember-platform`.
+[CONTRIBUTING.md](../CONTRIBUTING.md#where-code-goes) says which crate, and
+which repository, a change belongs in.
 
 ## The documentation
 
-| File                                  | Holds                                      |
-| ------------------------------------- | ------------------------------------------ |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | The gate, the commit convention, the hooks |
-| [docs/dev.md](../docs/dev.md)         | The first run, end to end                  |
-| [README.md](../README.md)             | What Ember is and how it loads             |
+[README.md](../README.md#documentation) lists every document and what it holds.

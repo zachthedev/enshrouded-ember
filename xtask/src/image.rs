@@ -5,9 +5,9 @@
 //! have at its preferred base or a file offset into the bytes on disk.
 //!
 //! One rule governs the translation. A section's virtual size can exceed its
-//! raw size, and this build's `.data` section exceeds it by 8.5 MB. A virtual
-//! address landing in that gap has no bytes behind it, so [`Image::offset_of`]
-//! returns `None` rather than a zero-filled read.
+//! raw size, and a server build's `.data` section exceeds it by megabytes. A
+//! virtual address landing in that gap has no bytes behind it, so
+//! [`Image::offset_of`] returns `None` rather than a zero-filled read.
 
 use std::path::Path;
 

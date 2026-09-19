@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! EMBER_SERVER_EXE=<path>\enshrouded_server.exe
-//! EMBER_SCHEMA=<path>\.cache\schema\23178631
+//! EMBER_SCHEMA=<path>\.cache\schema\<buildid>
 //! cargo test -p xtask -- --ignored
 //! ```
 //!

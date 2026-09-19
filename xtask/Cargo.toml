@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Repository automation: the check gate, the dev server loop, and the reflection extractors."
+description = "Repository automation for Ember."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

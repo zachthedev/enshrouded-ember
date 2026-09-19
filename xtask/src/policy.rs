@@ -545,14 +545,423 @@ fn cargo_install_package(install: &str) -> Option<&str> {
     words.find(|word| !word.starts_with('-'))
 }
 
+/// The link target of every first cell of every body row of every table in
+/// `events`.
+fn first_column_links(events: &[Event<'_>]) -> Vec<String> {
+    let mut links: Vec<String> = Vec::new();
+    let mut first_cell_of_row = false;
+    let mut in_first_cell = false;
+    let mut in_head = false;
+    for event in events {
+        match event {
+            Event::Start(Tag::TableHead) => in_head = true,
+            Event::End(TagEnd::TableHead) => in_head = false,
+            Event::Start(Tag::TableRow) => first_cell_of_row = true,
+            Event::Start(Tag::TableCell) => in_first_cell = first_cell_of_row && !in_head,
+            Event::End(TagEnd::TableCell) => {
+                in_first_cell = false;
+                first_cell_of_row = false;
+            }
+            Event::Start(Tag::Link { dest_url, .. }) if in_first_cell => {
+                links.push(dest_url.to_string());
+            }
+            _ => {}
+        }
+    }
+    links
+}
+
+// ///////////////////////////////////////////////
+// Versions restated outside their pin
+// ///////////////////////////////////////////////
+
+/// Whether `release` is three runs of digits separated by dots, and nothing
+/// else.
+///
+/// The digits are read as characters rather than parsed, because an integer
+/// parse takes a leading `+` and this is a shape rather than a number. The
+/// same rule holds in `tools/workflows.test.ts`, which reads the Bun pin.
+fn is_exact_release(release: &str) -> bool {
+    let parts: Vec<&str> = release.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Whether `text` holds `version` whole: no digit, and no dot followed by a
+/// digit, continues it on either side. A version is then not read inside a
+/// longer one on either side, and a leading `v` does not hide it.
+fn holds_version(text: &str, version: &str) -> bool {
+    text.match_indices(version).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let mut after = text[at + version.len()..].chars();
+        let next = after.next();
+        let continued_before = before.is_some_and(|c| c.is_ascii_digit() || c == '.');
+        let continued_after = next.is_some_and(|c| c.is_ascii_digit())
+            || (next == Some('.') && after.next().is_some_and(|c| c.is_ascii_digit()));
+        !continued_before && !continued_after
+    })
+}
+
+// ///////////////////////////////////////////////
+// `cargo xtask` references against the command tree
+// ///////////////////////////////////////////////
+
+/// The command every reference opens with, split so this file's own cases
+/// never spell it.
+const XTASK: &str = concat!("cargo", " xtask");
+
+/// Characters that end a command outside a quoted word: a shell separator, a
+/// closing bracket or a code span's closing backtick.
+const COMMAND_ENDS: &str = ";|&)`";
+
+/// Every `cargo xtask` command `text` spells out, as the line it starts on and
+/// the words after `cargo xtask`.
+///
+/// A reference opening a code span runs to the closing backtick, across line
+/// breaks, with each continuation line's indentation and comment marker
+/// dropped, so a span wrapped inside a doc comment or a YAML block reads
+/// whole. Any other reference runs to the end of its line, which is the shape
+/// of a shell line, a workflow `run:` and a fenced block. Either way it stops
+/// at a shell comment or a separator.
+fn xtask_references(text: &str) -> Vec<(usize, Vec<String>)> {
+    let mut found: Vec<(usize, Vec<String>)> = Vec::new();
+    let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+    for (at, _) in text.match_indices(XTASK) {
+        let before = text[..at].chars().next_back();
+        let rest = &text[at + XTASK.len()..];
+        if before.is_some_and(is_word) || rest.chars().next().is_some_and(is_word) {
+            continue;
+        }
+        let first_line = rest.split('\n').next().unwrap_or("");
+        let command = match rest.find('`') {
+            Some(end) if before == Some('`') && !rest[..end].contains("\n\n") => {
+                continued_lines(&rest[..end])
+            }
+            _ => first_line.to_string(),
+        };
+        let line = text[..at].matches('\n').count() + 1;
+        found.push((line, command_words(&command)));
+    }
+    found
+}
+
+/// `text` as one line, with each continuation line's indentation and comment
+/// marker dropped.
+fn continued_lines(text: &str) -> String {
+    text.split('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                return line;
+            }
+            let trimmed = line.trim_start();
+            ["///", "//!", "//", "#", "*"]
+                .iter()
+                .find_map(|marker| trimmed.strip_prefix(marker))
+                .unwrap_or(trimmed)
+        })
+        .collect::<Vec<&str>>()
+        .join(" ")
+}
+
+/// The words of one command line, the way a shell splits them: a quoted word
+/// is one word, a `#` opening a word starts a comment, and a separator ends
+/// the command. A word closed by `:*`, the permission wildcard, ends it too.
+/// Sentence punctuation closing a word is dropped, so a reference at the end
+/// of a sentence reads as the command.
+fn command_words(command: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    let mut chars = command.chars().peekable();
+    loop {
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        let Some(&first) = chars.peek() else {
+            break;
+        };
+        if first == '#' || COMMAND_ENDS.contains(first) {
+            break;
+        }
+        if first == '"' || first == '\'' {
+            chars.next();
+            let quoted: String = chars.by_ref().take_while(|c| *c != first).collect();
+            words.push(quoted);
+            continue;
+        }
+        let mut word = String::new();
+        while let Some(c) = chars.next_if(|c| {
+            !c.is_whitespace() && !COMMAND_ENDS.contains(*c) && *c != '"' && *c != '\''
+        }) {
+            word.push(c);
+        }
+        if let Some(stem) = word.strip_suffix(":*") {
+            words.push(stem.to_string());
+            break;
+        }
+        if word != "..." {
+            word.truncate(word.trim_end_matches(['.', ',', ':']).len());
+        }
+        words.push(word);
+    }
+    words
+}
+
+/// Every inline code span in `prose` that opens with a command group and one of
+/// its subcommands, as the words it holds. `schema diff` is one; `schema` alone,
+/// or a span opening with `cargo`, is not.
+fn bare_references(cli: &clap::Command, prose: &str) -> Vec<Vec<String>> {
+    let mut spans: Vec<Vec<String>> = Vec::new();
+    let mut rest = prose;
+    while let Some(open) = rest.find('`') {
+        let run = rest[open..].chars().take_while(|c| *c == '`').count();
+        let after = &rest[open + run..];
+        if run >= 3 {
+            rest = after;
+            continue;
+        }
+        let fence = "`".repeat(run);
+        let Some(close) = after.find(&fence) else {
+            break;
+        };
+        let words: Vec<String> = command_words(&after[..close]);
+        let group = words.first().and_then(|word| cli.find_subcommand(word));
+        let opens_with_a_subcommand = group
+            .zip(words.get(1))
+            .is_some_and(|(group, word)| group.find_subcommand(word).is_some());
+        if opens_with_a_subcommand {
+            spans.push(words);
+        }
+        rest = &after[close + run..];
+    }
+    spans
+}
+
+/// Why `words` do not parse against `cli`, or `None` when they do.
+///
+/// Every subcommand and every flag has to exist where it is written, and a
+/// value-taking flag takes the word after it. A required argument may be
+/// missing, because a list of commands leaves them out. `...` stands for any
+/// arguments, `<name>` for any one value or subcommand, and an argument that
+/// forwards everything after it to another program ends the check. `cli` has
+/// to be built, so every global flag reaches each subcommand.
+fn reference_problem(cli: &clap::Command, words: &[String]) -> Option<String> {
+    let mut command = cli;
+    let mut path: Vec<&str> = Vec::new();
+    let mut taken = 0;
+    let mut index = 0;
+    while let Some(word) = words.get(index) {
+        let word = word.as_str();
+        index += 1;
+        let shown = || path.join(" ");
+        if word == "..." {
+            return None;
+        }
+        if word == "--" {
+            let remaining = words.len() - index;
+            return match positional_slot(command, taken) {
+                Some(slot) if forwards(slot) => None,
+                _ if remaining == 0 => None,
+                _ => positional_slot(command, taken + remaining - 1)
+                    .is_none()
+                    .then(|| format!("`{}` takes no argument after --", shown())),
+            };
+        }
+        let flag = if let Some(long) = word.strip_prefix("--") {
+            let (name, inline) = long
+                .split_once('=')
+                .map_or((long, false), |(name, _)| (name, true));
+            let found = command.get_arguments().find(|arg| {
+                arg.get_long() == Some(name)
+                    || arg
+                        .get_all_aliases()
+                        .is_some_and(|aliases| aliases.contains(&name))
+            });
+            match found {
+                Some(arg) => Some((arg, inline)),
+                None => return Some(format!("`{}` takes no --{name}", shown())),
+            }
+        } else if let Some(short) = word.strip_prefix('-')
+            && let Some(letter) = short.chars().next()
+            && short.len() == letter.len_utf8()
+        {
+            let found = command.get_arguments().find(|arg| {
+                arg.get_short() == Some(letter)
+                    || arg
+                        .get_all_short_aliases()
+                        .is_some_and(|aliases| aliases.contains(&letter))
+            });
+            match found {
+                Some(arg) => Some((arg, false)),
+                None => return Some(format!("`{}` takes no -{letter}", shown())),
+            }
+        } else if word.starts_with('-') && word.len() > 1 {
+            return Some(format!("`{}` cannot read {word}", shown()));
+        } else {
+            None
+        };
+        if let Some((arg, inline)) = flag {
+            let takes_value = arg.get_action().takes_values();
+            if takes_value && !inline && words.get(index).is_some_and(|next| !next.starts_with('-'))
+            {
+                index += 1;
+            }
+            continue;
+        }
+        let placeholder = word.starts_with('<') && word.ends_with('>');
+        if taken == 0
+            && !placeholder
+            && let Some(sub) = command.find_subcommand(word)
+        {
+            command = sub;
+            path.push(sub.get_name());
+            continue;
+        }
+        if let Some(slot) = positional_slot(command, taken) {
+            if forwards(slot) {
+                return None;
+            }
+            taken += 1;
+            continue;
+        }
+        if placeholder && command.has_subcommands() {
+            return None;
+        }
+        return Some(if command.has_subcommands() {
+            format!("`{}` has no subcommand `{word}`", shown())
+        } else {
+            format!("`{}` takes no argument `{word}`", shown())
+        });
+    }
+    None
+}
+
+/// The positional argument the value at `taken` fills, if the command has room
+/// for it.
+fn positional_slot(command: &clap::Command, taken: usize) -> Option<&clap::Arg> {
+    let mut capacity: usize = 0;
+    for arg in command.get_positionals() {
+        let most = arg.get_num_args().map_or(1, |range| range.max_values());
+        capacity = capacity.saturating_add(most);
+        if taken < capacity {
+            return Some(arg);
+        }
+    }
+    None
+}
+
+/// Whether `arg` hands everything after it to another program unread.
+fn forwards(arg: &clap::Arg) -> bool {
+    arg.is_trailing_var_arg_set() && arg.is_allow_hyphen_values_set()
+}
+
+// ///////////////////////////////////////////////
+// Environment variables and recorded builds
+// ///////////////////////////////////////////////
+
+/// Every string literal in a Rust source's code that is exactly an `EMBER_`
+/// name, which is how every variable the code reads is spelled. Comment lines
+/// are skipped, and a longer string that merely mentions a name is not one.
+fn ember_variable_literals(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .flat_map(|line| {
+            line.match_indices("\"EMBER_").filter_map(|(at, _)| {
+                let name: String = line[at + 1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                    .collect();
+                line[at + 1 + name.len()..].starts_with('"').then_some(name)
+            })
+        })
+        .collect()
+}
+
+/// Every `EMBER_` name `text` mentions.
+fn ember_names(text: &str) -> Vec<String> {
+    text.match_indices("EMBER_")
+        .filter(|(at, _)| {
+            !text[..*at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+        .map(|(at, _)| {
+            text[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                .collect()
+        })
+        .collect()
+}
+
+/// Every maximal run of ASCII digits in `text`.
+fn digit_runs(text: &str) -> Vec<&str> {
+    text.split(|c: char| !c.is_ascii_digit())
+        .filter(|run| !run.is_empty())
+        .collect()
+}
+
+/// The directories under `.cache` a build lands in, each named by an id.
+const BUILD_DIRECTORIES: &[&str] = &["server", "schema", "run", "loca", "archive", "build"];
+
+/// Every path in `text` that names a build directory by a concrete id, as the
+/// directory and the id, such as `server/<id>`. A placeholder is not an id.
+fn build_directory_ids(text: &str) -> Vec<String> {
+    text.split(|c: char| c.is_whitespace() || c == '`')
+        .flat_map(|token| {
+            let segments: Vec<&str> = token.split(['/', '\\']).collect();
+            segments
+                .windows(2)
+                .filter(|pair| {
+                    BUILD_DIRECTORIES.contains(&pair[0])
+                        && !pair[1].is_empty()
+                        && pair[1].bytes().all(|b| b.is_ascii_digit())
+                })
+                .map(|pair| format!("{}/{}", pair[0], pair[1]))
+                .collect::<Vec<String>>()
+        })
+        .collect()
+}
+
+/// An issue form with its `placeholder:` values removed, block scalars
+/// included. A placeholder is an example by construction and is never
+/// submitted.
+fn without_placeholders(form: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut skipping_below: Option<usize> = None;
+    for line in form.lines() {
+        let indent = line.len() - line.trim_start().len();
+        if let Some(depth) = skipping_below {
+            if line.trim().is_empty() || indent > depth {
+                continue;
+            }
+            skipping_below = None;
+        }
+        if let Some(value) = line.trim_start().strip_prefix("placeholder:") {
+            if matches!(value.trim(), "|" | ">" | "|-" | ">-") {
+                skipping_below = Some(indent);
+            }
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    use clap::CommandFactory;
 
     use super::{
-        cargo_install_package, code_span_lists, first_column, names_taken_from_the_workspace,
-        prose_files, prose_kind, prose_paragraphs, references_crate, rust_sources, section,
-        stated_counts, workspace_root,
+        XTASK, bare_references, build_directory_ids, cargo_install_package, code_span_lists,
+        digit_runs, ember_names, ember_variable_literals, first_column, first_column_links,
+        holds_version, is_exact_release, names_taken_from_the_workspace, prose_files, prose_kind,
+        prose_paragraphs, reference_problem, references_crate, rust_sources, section,
+        stated_counts, without_placeholders, workspace_root, xtask_references,
     };
     use crate::check::{PREFERRED_TEST_RUNNER, STEPS};
 
@@ -599,24 +1008,13 @@ mod tests {
             .collect()
     }
 
-    /// A crate's manifest under the workspace, with the names its cargo-machete
-    /// ignore list carries.
+    /// Every member's manifest, with the names its cargo-machete ignore list
+    /// carries, for each member that has one.
     fn ignore_lists() -> Vec<(std::path::PathBuf, Vec<String>)> {
-        let root = workspace_root();
-        let mut manifests: Vec<std::path::PathBuf> = vec![root.join("xtask").join("Cargo.toml")];
-        if let Ok(entries) = std::fs::read_dir(root.join("crates")) {
-            manifests.extend(
-                entries
-                    .filter_map(std::result::Result::ok)
-                    .map(|entry| entry.path().join("Cargo.toml"))
-                    .filter(|path| path.is_file()),
-            );
-        }
-        manifests
+        let (_, members) = workspace_and_members();
+        members
             .into_iter()
-            .filter_map(|manifest| {
-                let text = std::fs::read_to_string(&manifest).ok()?;
-                let value: toml::Value = toml::from_str(&text).ok()?;
+            .filter_map(|(manifest, value)| {
                 let ignored = value
                     .get("package")?
                     .get("metadata")?
@@ -1038,7 +1436,7 @@ mod tests {
             ("13 libraries and 344 functions", &[]),
             ("the four before it", &[]),
             ("a three-way merge", &[]),
-            ("the steps cargo xtask check runs", &[]),
+            ("the steps `cargo xtask check` runs", &[]),
             ("", &[]),
         ];
 
@@ -1303,5 +1701,703 @@ mod tests {
         for (install, expected) in cases {
             assert_eq!(cargo_install_package(install), expected, "{install:?}");
         }
+    }
+
+    // ///////////////////////////////////////////////
+    // Facts bound to their source
+    // ///////////////////////////////////////////////
+
+    /// `path` relative to the workspace root, with forward slashes on every
+    /// host.
+    fn shown(path: &Path) -> String {
+        path.strip_prefix(workspace_root())
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
+    /// Every file under the workspace the prose check reads, with its text.
+    ///
+    /// A file of such a kind that is not UTF-8 is left out here, and
+    /// `no_prose_states_a_count_of_gate_steps_or_pinned_tools` fails on it.
+    fn prose_texts() -> Vec<(PathBuf, String)> {
+        prose_files(&workspace_root())
+            .into_iter()
+            .filter(|path| prose_kind(path).is_some())
+            .filter_map(|path| {
+                let text = std::fs::read_to_string(&path).ok()?;
+                Some((path, text))
+            })
+            .collect()
+    }
+
+    /// Every version a pin file holds, as the file and the version.
+    ///
+    /// The toolchain contributes its channel and that channel's minor release,
+    /// because prose names a Rust release either way.
+    fn pinned_versions() -> Vec<(&'static str, String)> {
+        let mut pins: Vec<(&'static str, String)> = Vec::new();
+
+        let toolchain: toml::Value =
+            toml::from_str(&read("rust-toolchain.toml")).expect("rust-toolchain.toml parses");
+        let channel = toolchain["toolchain"]["channel"]
+            .as_str()
+            .expect("rust-toolchain.toml names a channel")
+            .to_string();
+        let minor: String = channel.split('.').take(2).collect::<Vec<&str>>().join(".");
+        pins.push(("rust-toolchain.toml", channel));
+        pins.push(("rust-toolchain.toml", minor));
+
+        for (_, version) in pinned_tools() {
+            pins.push((".github/cargo-tools", version));
+        }
+        for entry in pinned_go_tools() {
+            let (_, version) = entry.split_once('@').expect("module@version");
+            pins.push((
+                ".github/go-tools",
+                version.trim_start_matches('v').to_string(),
+            ));
+        }
+        pins.push((".bun-version", read(".bun-version").trim().to_string()));
+        for line in read(".github/workflows/ci.yml").lines() {
+            if let Some(value) = line.trim().strip_prefix("go-version:") {
+                pins.push((
+                    ".github/workflows/ci.yml",
+                    value.trim().trim_matches(['"', '\'']).to_string(),
+                ));
+            }
+        }
+        pins
+    }
+
+    /// A version restated outside the file that pins it is a copy the next
+    /// bump leaves behind. Every pin is read from its file: the toolchain
+    /// channel and its minor release, each `.github/cargo-tools` and
+    /// `.github/go-tools` entry, `.bun-version`, and the Go release the gate
+    /// job's setup-go step takes. None of them may appear in prose, which is
+    /// what the count check reads: every Markdown file and issue form whole,
+    /// and the comments of code, configuration and workflows.
+    ///
+    /// What passes: a version in a value, such as the pins themselves,
+    /// `rust-version` in `Cargo.toml` and every lockfile; an action's version
+    /// comment, which Dependabot moves with its hash; a version of anything no
+    /// file here pins; and a pin's previous value, which no longer names a
+    /// pin.
+    #[test]
+    fn no_prose_restates_a_pinned_version() {
+        let pins = pinned_versions();
+        for source in [
+            "rust-toolchain.toml",
+            ".github/cargo-tools",
+            ".github/go-tools",
+            ".bun-version",
+            ".github/workflows/ci.yml",
+        ] {
+            assert!(
+                pins.iter().any(|(from, _)| *from == source),
+                "no version was read from {source}, so its pin goes unchecked"
+            );
+        }
+        assert!(
+            pins.iter().all(|(_, version)| !version.is_empty()),
+            "a pin file holds an empty version: {pins:?}"
+        );
+
+        let mut restated: Vec<String> = Vec::new();
+        for (path, text) in prose_texts() {
+            for paragraph in prose_paragraphs(&path, &text) {
+                for (source, version) in &pins {
+                    if holds_version(&paragraph, version) {
+                        restated.push(format!("{}: {version}, pinned in {source}", shown(&path)));
+                    }
+                }
+            }
+        }
+        restated.sort();
+        restated.dedup();
+        assert!(
+            restated.is_empty(),
+            "prose restates a pinned version, which the next bump leaves behind. Name the file \
+             that pins it instead: {restated:#?}"
+        );
+    }
+
+    /// A pinned release is three runs of digits and nothing else, on both
+    /// sides of the project: this rule and the one `tools/workflows.test.ts`
+    /// holds the Bun pin to answer alike.
+    ///
+    /// What passes: a leading zero and a number no release will ever reach.
+    /// Both fail closed at the download, and refusing them here would say
+    /// something about releases rather than about shape.
+    #[test]
+    fn is_exact_release_reads_three_runs_of_digits() {
+        let cases = [
+            ("1.4.2", true),
+            ("1.98.1", true),
+            ("01.04.02", true),
+            ("99999999999.0.0", true),
+            ("1.+4.2", false),
+            ("v1.4.2", false),
+            ("^1.4.2", false),
+            ("1.4", false),
+            ("1.4.2.1", false),
+            ("1..2", false),
+            ("1.4.2-canary.1", false),
+            ("latest", false),
+            ("", false),
+        ];
+        for (release, expected) in cases {
+            assert_eq!(is_exact_release(release), expected, "{release:?}");
+        }
+    }
+
+    /// A version reads whole, whatever sits beside it.
+    #[test]
+    fn holds_version_reads_a_version_whole() {
+        let cases = [
+            ("Rust 1.98.1, pinned", "1.98.1", true),
+            ("Bun v1.4.2.", "1.4.2", true),
+            ("(1.4.2)", "1.4.2", true),
+            ("11.4.2", "1.4.2", false),
+            ("1.4.25", "1.4.2", false),
+            ("1.1.4.2", "1.4.2", false),
+            ("1.4.2.1", "1.4.2", false),
+            ("Rust 1.98 or later", "1.98", true),
+            ("Rust 1.98.1", "1.98", false),
+            ("", "1.4.2", false),
+        ];
+        for (text, version, expected) in cases {
+            assert_eq!(
+                holds_version(text, version),
+                expected,
+                "{text:?} holds {version:?}"
+            );
+        }
+    }
+
+    /// `rust-version` claims the oldest toolchain that builds the workspace,
+    /// and the only one anything builds on is the one `rust-toolchain.toml`
+    /// pins. Holding the claim to that channel's minor release keeps it proven
+    /// by every build, and a toolchain bump that leaves it behind goes red here.
+    #[test]
+    fn rust_version_is_the_pinned_toolchains_minor_release() {
+        let toolchain: toml::Value =
+            toml::from_str(&read("rust-toolchain.toml")).expect("rust-toolchain.toml parses");
+        let channel = toolchain["toolchain"]["channel"]
+            .as_str()
+            .expect("rust-toolchain.toml names a channel");
+        assert!(
+            is_exact_release(channel),
+            "rust-toolchain.toml pins {channel:?}, which is not one exact release"
+        );
+        let parts: Vec<&str> = channel.split('.').collect();
+
+        let (workspace, _) = workspace_and_members();
+        let declared = workspace["workspace"]["package"]["rust-version"]
+            .as_str()
+            .expect("[workspace.package] declares rust-version");
+        assert_eq!(
+            declared,
+            parts[..2].join("."),
+            "rust-version says {declared} and rust-toolchain.toml pins {channel}"
+        );
+    }
+
+    /// The real command tree, built so every global flag reaches each
+    /// subcommand.
+    fn command_tree() -> clap::Command {
+        let mut cli = crate::Cli::command();
+        cli.build();
+        cli
+    }
+
+    /// Every `cargo xtask` command written anywhere in the repository parses
+    /// against the command tree clap builds: every subcommand exists, and every
+    /// flag exists on the command it follows. A reference that names a flag or
+    /// a subcommand the tree lacks is a command a reader runs and gets refused.
+    ///
+    /// Every file is read, code and configuration included, because an error
+    /// message telling somebody what to run is as much a copy as a document.
+    /// Prose also contributes every code span that opens with a command group
+    /// and one of its subcommands, written without the `cargo xtask` in front.
+    ///
+    /// What passes: a missing required argument, because a list of commands
+    /// leaves them out; any value given to a flag or a positional; a
+    /// subcommand group named alone; a span naming a group and nothing under
+    /// it; and a flag named apart from any command, which cannot be
+    /// attributed to one.
+    #[test]
+    fn every_cargo_xtask_reference_parses() {
+        let cli = command_tree();
+        let mut problems: Vec<String> = Vec::new();
+        let mut carriers: BTreeSet<String> = BTreeSet::new();
+        for path in prose_files(&workspace_root()) {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let file = shown(&path);
+            for (line, words) in xtask_references(&text) {
+                carriers.insert(file.clone());
+                if let Some(problem) = reference_problem(&cli, &words) {
+                    problems.push(format!(
+                        "{file}:{line}: `{XTASK} {}`: {problem}",
+                        words.join(" ")
+                    ));
+                }
+            }
+            for paragraph in prose_paragraphs(&path, &text) {
+                for words in bare_references(&cli, &paragraph) {
+                    if let Some(problem) = reference_problem(&cli, &words) {
+                        problems.push(format!("{file}: `{}`: {problem}", words.join(" ")));
+                    }
+                }
+            }
+        }
+
+        for carrier in [
+            ".githooks/pre-push",
+            ".github/workflows/ci.yml",
+            ".claude/settings.json",
+            "CONTRIBUTING.md",
+            "xtask/src/main.rs",
+        ] {
+            assert!(
+                carriers.contains(carrier),
+                "no reference was read from {carrier}, so the scan misses that kind of file"
+            );
+        }
+        assert!(
+            problems.is_empty(),
+            "these references do not parse against the command tree: {problems:#?}"
+        );
+    }
+
+    /// Each shape a reference is written in reads as the words of the
+    /// command.
+    #[test]
+    fn xtask_references_read_each_shape_a_reference_takes() {
+        let cases: Vec<(String, Vec<Vec<&str>>)> = vec![
+            (
+                format!("Run `{XTASK} server fetch --build 1` first."),
+                vec![vec!["server", "fetch", "--build", "1"]],
+            ),
+            (
+                format!("/// Run `{XTASK}\n/// scopes` for the list"),
+                vec![vec!["scopes"]],
+            ),
+            (
+                format!("key: >\n  `{XTASK} server\n  seed` then"),
+                vec![vec!["server", "seed"]],
+            ),
+            (
+                format!("{XTASK} schema diff old new   # compare"),
+                vec![vec!["schema", "diff", "old", "new"]],
+            ),
+            (
+                format!("{XTASK} loca extract --client \"<steam library>\\enshrouded.exe\""),
+                vec![vec![
+                    "loca",
+                    "extract",
+                    "--client",
+                    "<steam library>\\enshrouded.exe",
+                ]],
+            ),
+            (
+                format!("\"Bash({XTASK} schema extract:*)\","),
+                vec![vec!["schema", "extract"]],
+            ),
+            (
+                format!("\"PowerShell({XTASK} check)\","),
+                vec![vec!["check"]],
+            ),
+            (format!("Then run {XTASK} check."), vec![vec!["check"]]),
+            (
+                format!("      - run: {XTASK} check\n      - run: other"),
+                vec![vec!["check"]],
+            ),
+            (format!("exec {XTASK} check"), vec![vec!["check"]]),
+            (
+                format!("`{XTASK} server ...` forwards"),
+                vec![vec!["server", "..."]],
+            ),
+            (
+                format!("`{XTASK} scopes` and `{XTASK} check`"),
+                vec![vec!["scopes"], vec!["check"]],
+            ),
+            (format!("`{XTASK}` alone"), vec![vec![]]),
+            (format!("my{XTASK} check"), vec![]),
+            (format!("{XTASK}s check"), vec![]),
+            (String::new(), vec![]),
+        ];
+        for (text, expected) in cases {
+            let found: Vec<Vec<String>> = xtask_references(&text)
+                .into_iter()
+                .map(|(_, words)| words)
+                .collect();
+            assert_eq!(found, expected, "{text:?}");
+        }
+    }
+
+    /// A reference parses exactly when the command tree accepts it, and a
+    /// refusal names what the tree lacks.
+    #[test]
+    fn reference_problem_holds_a_reference_to_the_command_tree() {
+        let cli = command_tree();
+        let accepted: &[&[&str]] = &[
+            &[],
+            &["check"],
+            &["scopes"],
+            &["hooks", "install"],
+            &["server", "fetch"],
+            &["server", "fetch", "--build", "1"],
+            &["server", "fetch", "--build=1"],
+            &["server", "fetch", "--root", "elsewhere"],
+            &["--quiet", "check"],
+            &["server", "logs", "-n", "5", "--follow"],
+            &["server", "stop", "--timeout", "5", "--force"],
+            &["server", "fetch", "--help"],
+            &["schema", "diff", "old", "new"],
+            &["schema", "diff", "<old>", "<new>"],
+            &["schema", "extract", "--force"],
+            &["loca", "extract", "--client", "<path>"],
+            &["loca"],
+            &["<command>"],
+            &["server", "..."],
+        ];
+        for words in accepted {
+            let words: Vec<String> = words.iter().map(|word| (*word).to_string()).collect();
+            assert_eq!(reference_problem(&cli, &words), None, "{words:?}");
+        }
+
+        let refused: &[(&[&str], &str)] = &[
+            (&["server", "fetch", "--validate"], "--validate"),
+            (&["server", "fecth"], "fecth"),
+            (&["package"], "package"),
+            (&["schema", "diff", "a", "b", "c"], "`c`"),
+            (&["scopes", "extra"], "`extra`"),
+            (&["check", "--force"], "--force"),
+            (&["server", "logs", "-x"], "-x"),
+            (&["server", "fetch", "-vv"], "-vv"),
+            (&["schema", "diff", "--", "a", "b", "c"], "--"),
+        ];
+        for (words, reason) in refused {
+            let words: Vec<String> = words.iter().map(|word| (*word).to_string()).collect();
+            let problem = reference_problem(&cli, &words);
+            assert!(
+                problem
+                    .as_deref()
+                    .is_some_and(|problem| problem.contains(reason)),
+                "{words:?} gave {problem:?}, which does not name {reason}"
+            );
+        }
+    }
+
+    /// A span naming a group and one of its subcommands is a reference, and
+    /// nothing else in a span is.
+    #[test]
+    fn bare_references_read_a_group_and_its_subcommand() {
+        let cli = command_tree();
+        let cases: &[(&str, &[&[&str]])] = &[
+            ("run `server fetch` again", &[&["server", "fetch"]]),
+            (
+                "`schema diff old new` compares",
+                &[&["schema", "diff", "old", "new"]],
+            ),
+            ("`server` and `schema` forward", &[]),
+            ("the `check` step", &[]),
+            ("`archive status` asks", &[]),
+            ("```sh\nserver fetch\n```", &[]),
+            ("``hooks install`` points it", &[&["hooks", "install"]]),
+            ("", &[]),
+        ];
+        for (prose, expected) in cases {
+            let found = bare_references(&cli, prose);
+            assert_eq!(found, *expected, "{prose:?}");
+        }
+    }
+
+    /// The README's documentation table is the list a reader opens first. A
+    /// document it leaves out is one nobody reading the table knows exists,
+    /// and a link to a file that is gone is a dead end.
+    #[test]
+    fn the_documentation_table_links_every_document() {
+        let root = workspace_root();
+        let readme = read("README.md");
+        let table =
+            section(&readme, "Documentation").expect("README.md has a Documentation section");
+        let linked = first_column_links(&table);
+        assert!(
+            !linked.is_empty(),
+            "the Documentation section links nothing"
+        );
+
+        for target in &linked {
+            assert!(
+                root.join(target).is_file(),
+                "README.md links {target}, which does not exist"
+            );
+        }
+        let documents: Vec<String> = std::fs::read_dir(root.join("docs"))
+            .expect("docs/ is readable")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+            .filter_map(|path| {
+                let name = path.file_name()?.to_string_lossy().into_owned();
+                Some(format!("docs/{name}"))
+            })
+            .collect();
+        assert!(!documents.is_empty(), "docs/ holds no document");
+        for document in documents {
+            assert!(
+                linked.contains(&document),
+                "the README documentation table does not link {document}"
+            );
+        }
+    }
+
+    /// Every environment variable the code reads is named in `docs/dev.md`,
+    /// and every `EMBER_` name any document gives is one the code reads or a
+    /// workflow secret. A variable nobody documents is an override nobody
+    /// knows to set, and a documented one the code never reads is a setting
+    /// that does nothing.
+    ///
+    /// A read is a Rust string literal that is exactly an `EMBER_` name, in
+    /// any member's sources. What passes: a variable outside the `EMBER_`
+    /// namespace, such as the archive credentials `archive.ts` names itself
+    /// when they are missing and the ones the runner sets; a read in
+    /// TypeScript; and a name built at run time.
+    #[test]
+    fn every_variable_the_code_reads_is_documented_and_no_other() {
+        let (_, members) = workspace_and_members();
+        let own = workspace_root().join("xtask").join("src").join("policy.rs");
+        let mut read_names: BTreeSet<String> = BTreeSet::new();
+        for (manifest, _) in &members {
+            let crate_dir = manifest.parent().expect("a manifest has a directory");
+            for source in rust_sources(crate_dir) {
+                if source == own {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&source)
+                    .unwrap_or_else(|err| panic!("{}: {err}", source.display()));
+                read_names.extend(ember_variable_literals(&text));
+            }
+        }
+        assert!(
+            !read_names.is_empty(),
+            "no source reads an EMBER_ variable, so nothing was checked"
+        );
+
+        let mut secrets: BTreeSet<String> = BTreeSet::new();
+        for entry in std::fs::read_dir(workspace_root().join(".github").join("workflows"))
+            .expect(".github/workflows is readable")
+            .filter_map(Result::ok)
+        {
+            let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            for (at, _) in text.match_indices("secrets.") {
+                let rest = &text[at + "secrets.".len()..];
+                if rest.starts_with("EMBER_") {
+                    secrets.extend(ember_names(rest).into_iter().take(1));
+                }
+            }
+        }
+
+        let dev = read("docs/dev.md");
+        let documented: BTreeSet<String> = ember_names(&dev).into_iter().collect();
+        let undocumented: Vec<&String> = read_names.difference(&documented).collect();
+        assert!(
+            undocumented.is_empty(),
+            "the code reads {undocumented:?} and docs/dev.md never names them"
+        );
+
+        let mut stray: Vec<String> = Vec::new();
+        for (path, text) in prose_texts() {
+            if path.extension().is_none_or(|ext| ext != "md") {
+                continue;
+            }
+            for name in ember_names(&text) {
+                if !read_names.contains(&name) && !secrets.contains(&name) {
+                    stray.push(format!("{}: {name}", shown(&path)));
+                }
+            }
+        }
+        assert!(
+            stray.is_empty(),
+            "a document names a variable no code reads and no workflow holds: {stray:?}"
+        );
+    }
+
+    /// A variable read is a literal that is the whole name, and a mention in
+    /// prose is a name at a word boundary.
+    #[test]
+    fn the_variable_readers_take_the_shapes_they_name() {
+        let source = "const A: &str = \"EMBER_ONE\";\n\
+                      // const B: &str = \"EMBER_COMMENTED\";\n\
+                      #[ignore = \"needs EMBER_TWO\"]\n\
+                      let c = var(\"EMBER_THREE_3\");\n\
+                      let d = \"XEMBER_FOUR\";\n";
+        assert_eq!(
+            ember_variable_literals(source),
+            ["EMBER_ONE", "EMBER_THREE_3"]
+        );
+        assert_eq!(
+            ember_names("`EMBER_ONE` and EMBER_TWO, not XEMBER_THREE"),
+            ["EMBER_ONE", "EMBER_TWO"]
+        );
+        assert!(ember_names("").is_empty());
+    }
+
+    /// Every identifier the build records hold: branch build ids, manifest
+    /// gids and change numbers from `data/steam-builds.jsonl`, and manifest
+    /// gids, build ids and revisions from `data/build-digests.jsonl`.
+    fn recorded_build_ids() -> BTreeSet<String> {
+        let mut ids: BTreeSet<String> = BTreeSet::new();
+        let mut add = |value: &serde_json::Value| match value {
+            serde_json::Value::String(id) if !id.is_empty() => {
+                ids.insert(id.clone());
+            }
+            serde_json::Value::Number(id) => {
+                ids.insert(id.to_string());
+            }
+            _ => {}
+        };
+        for line in read("data/steam-builds.jsonl")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+        {
+            let row: serde_json::Value =
+                serde_json::from_str(line).expect("a steam-builds row parses");
+            add(&row["changeNumber"]);
+            for field in ["branches", "manifests"] {
+                for value in row[field]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|table| table.values())
+                {
+                    add(value);
+                }
+            }
+        }
+        for line in read("data/build-digests.jsonl")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+        {
+            let row: serde_json::Value =
+                serde_json::from_str(line).expect("a build-digests row parses");
+            for field in ["manifestId", "buildId", "revision"] {
+                add(&row[field]);
+            }
+        }
+        ids
+    }
+
+    /// Prose that names a recorded build is true of that build and reads as
+    /// true of whichever build is current. The records grow with every build
+    /// the watcher sees, and so does this check. A layout example names the
+    /// placeholder, as `.cache/server/<buildid>/` does.
+    ///
+    /// Every prose file is read the way the count check reads it. What passes:
+    /// an issue form's placeholder, which is an example by construction; a
+    /// test fixture, which is code rather than prose; and a Steam app or depot
+    /// id, which no build record holds.
+    #[test]
+    fn no_prose_restates_a_recorded_build() {
+        let ids = recorded_build_ids();
+        assert!(
+            !ids.is_empty(),
+            "the build records hold no id, so nothing was checked"
+        );
+
+        let mut restated: Vec<String> = Vec::new();
+        for (path, text) in prose_texts() {
+            let in_forms = path
+                .components()
+                .any(|part| part.as_os_str() == "ISSUE_TEMPLATE");
+            let text = if in_forms {
+                without_placeholders(&text)
+            } else {
+                text
+            };
+            for paragraph in prose_paragraphs(&path, &text) {
+                for run in digit_runs(&paragraph) {
+                    if ids.contains(run) {
+                        restated.push(format!("{}: {run}", shown(&path)));
+                    }
+                }
+            }
+        }
+        assert!(
+            restated.is_empty(),
+            "prose names a recorded build, which stops being the current one. Write the \
+             placeholder instead: {restated:#?}"
+        );
+    }
+
+    /// A path under a build directory names the placeholder, never a build.
+    /// This holds for a build no record carries yet, which the check above
+    /// cannot see.
+    ///
+    /// What passes: a placeholder such as `<buildid>`; a path in code rather
+    /// than prose, which is where the test fixtures build theirs; and an issue
+    /// form's placeholder value, which is an example by construction.
+    #[test]
+    fn no_prose_names_a_build_directory_by_its_id() {
+        let mut named: Vec<String> = Vec::new();
+        for (path, text) in prose_texts() {
+            let in_forms = path
+                .components()
+                .any(|part| part.as_os_str() == "ISSUE_TEMPLATE");
+            let text = if in_forms {
+                without_placeholders(&text)
+            } else {
+                text
+            };
+            for paragraph in prose_paragraphs(&path, &text) {
+                for directory in build_directory_ids(&paragraph) {
+                    named.push(format!("{}: {directory}", shown(&path)));
+                }
+            }
+        }
+        assert!(
+            named.is_empty(),
+            "prose names a build directory by a build's id. Write the placeholder instead: \
+             {named:#?}"
+        );
+    }
+
+    /// The readers behind the build checks take the shapes they name.
+    #[test]
+    fn the_build_readers_take_the_shapes_they_name() {
+        assert_eq!(
+            digit_runs("server/23178631/ and r1024233."),
+            ["23178631", "1024233"]
+        );
+        assert!(digit_runs("no digits").is_empty());
+
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "  server/23178631/     The fetched server",
+                &["server/23178631"],
+            ),
+            ("`.cache\\schema\\1024`", &["schema/1024"]),
+            ("server/<buildid>/", &[]),
+            (
+                "build/2174935030716737236/enshrouded_server.exe",
+                &["build/2174935030716737236"],
+            ),
+            ("tools/watch-builds.ts 2278520", &[]),
+            ("runs/12", &[]),
+            ("", &[]),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(build_directory_ids(text), *expected, "{text:?}");
+        }
+
+        let form = "      placeholder: \"23178631\"\n      label: kept 1\n      placeholder: |\n        \
+                    private-chests 0.1.0\n        team 0.1.0\n      render: text\n";
+        assert_eq!(
+            without_placeholders(form),
+            "      label: kept 1\n      render: text"
+        );
     }
 }

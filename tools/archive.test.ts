@@ -133,8 +133,9 @@ describe("kfcVersion", () => {
 describe("objectKey", () => {
   /**
    * Keyed by manifest gid, not build id. A build pulled from a historical
-   * manifest carries no recoverable build id, and most of the supported window
-   * arrived that way, so a key built from one would have a hole in it.
+   * manifest carries no recoverable build id, and the builds backfilled into
+   * the archive arrived that way, so a key built from one would have a hole in
+   * it.
    */
   test("a key is the manifest gid and the file name", () => {
     expect(objectKey("2174935030716737236", "enshrouded_server.exe")).toBe(
@@ -692,9 +693,10 @@ describe("the record command, driven end to end", () => {
   });
 
   /**
-   * The container names the content the build was cut from, and the supported
-   * build table matches on that revision. No Steam field carries it, so a row
-   * that does not read it carries null where a person looks.
+   * The container names the content the build was cut from, and a
+   * supported-build row carries that revision for a person reading it. No
+   * Steam field carries it, so a row that does not read it carries null where
+   * a person looks.
    */
   test("the row takes its revision and branch from the container", async () => {
     const dir = await fetched("2174935030716737236");
@@ -872,8 +874,8 @@ describe("archiveState", () => {
 
   /**
    * push refuses to write over an object the record does not describe, so the
-   * archive job cannot settle this, and running it every hour would only ask
-   * for an approval that ends red.
+   * archive job cannot settle this, and running it on every scheduled run
+   * would only ask for an approval that ends red.
    */
   test("an object at another size is a conflict, named with both sizes", () => {
     const decided = archiveState("2174935030716737236", row, sizes(3, 99));
@@ -1013,8 +1015,8 @@ describe("asking a loopback bucket", () => {
   /**
    * The answer for a build with no row is settled without asking, and asking
    * anyway is what exercises the credential. A token revoked or scoped wrong
-   * is then found in the hour it happens rather than at the next upload, which
-   * is the whole reason the check runs hourly.
+   * is then found on the next scheduled run rather than at the next upload,
+   * which is the whole reason the check runs on a schedule.
    */
   test("a build with no row is asked about under the archived file names", async () => {
     requests.length = 0;
@@ -1030,8 +1032,8 @@ describe("asking a loopback bucket", () => {
 
   /**
    * The archive job repairs the build at the head of the branch and no other.
-   * The rest cannot be refetched from Steam at all, so they are swept every
-   * hour, and the build already asked about is not asked about twice.
+   * The rest cannot be refetched from Steam at all, so they are swept on every
+   * run, and the build already asked about is not asked about twice.
    */
   test("the sweep covers every recorded build except the one named", async () => {
     requests.length = 0;

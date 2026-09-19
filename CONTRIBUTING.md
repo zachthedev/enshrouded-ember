@@ -2,9 +2,10 @@
 
 ## Toolchain
 
-`rust-toolchain.toml` pins Rust 1.98.1, and rustup installs it on the first
+`rust-toolchain.toml` pins the Rust release, and rustup installs it on the first
 cargo command. A C toolchain is needed for MinHook, the hook engine.
-[Bun](https://bun.sh) runs the repository's own tooling.
+[Bun](https://bun.sh) runs the repository's own tooling, at the release
+`.bun-version` pins. Continuous integration reads the same file.
 
 The gate calls tools that rustup does not install. `.github/cargo-tools` pins
 the crates.io packages among them, and `.github/go-tools` pins the Go programs,
@@ -133,7 +134,8 @@ Ask what the code describes:
 - Keen's engine, true of any game built on Holistic: `ember-holistic`
 - The Enshrouded server specifically: `ember-enshrouded`
 - The operating system: `ember-platform`
-- A mod's own idea: not this repository
+- A mod's own idea: not this repository, but the mod's own, such as
+  [enshrouded-mods](https://github.com/zachthedev/enshrouded-mods)
 
 ## Recovered addresses
 

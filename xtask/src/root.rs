@@ -175,7 +175,7 @@ impl DevRoot {
     /// Every fetched buildid, oldest first.
     ///
     /// Only a name that is a whole number counts, sorted by value so build
-    /// 23178631 follows build 9999999. A staging directory, a hand-placed
+    /// 10000000 follows build 9999999. A staging directory, a hand-placed
     /// directory or anything else beside the builds is never a candidate.
     pub fn fetched_builds(&self) -> Vec<String> {
         let Ok(entries) = std::fs::read_dir(self.server_dir()) else {

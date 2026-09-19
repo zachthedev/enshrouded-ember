@@ -293,8 +293,8 @@ describe("recordIfChanged", () => {
   });
 
   /**
-   * The change number advances for reasons unrelated to builds. It moved on
-   * 2026-09-17 while app 2278520 sat on the build it has carried since May.
+   * The change number advances for reasons unrelated to builds. On 2026-09-17
+   * it moved while the server's public build did not.
    */
   test("a change number moving on its own appends nothing", async () => {
     const path = join(await sandbox(), "steam-builds.jsonl");
@@ -370,7 +370,8 @@ describe("lastRecordFor", () => {
 describe("movedBranches", () => {
   /**
    * A client change must never open an issue claiming a new server build.
-   * Hotfix 42 was client-only, and the server build has not moved since May.
+   * Hotfix 42 was client-only, and the server's public build did not move
+   * with it.
    */
   test("a run where only a gid moved names no branch", () => {
     const record = {

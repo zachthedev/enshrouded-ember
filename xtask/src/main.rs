@@ -135,17 +135,17 @@ enum ServerCommand {
         /// Keep printing as the server writes.
         #[arg(long, short)]
         follow: bool,
-        /// Lines to print before following. Defaults to 40.
-        #[arg(long, short = 'n', value_name = "COUNT")]
-        lines: Option<usize>,
+        /// Lines to print before following.
+        #[arg(long, short = 'n', value_name = "COUNT", default_value_t = server::DEFAULT_TAIL)]
+        lines: usize,
     },
     /// Ask the server to shut down, and wait for the process to exit.
     Stop {
         #[arg(long, value_name = "BUILDID")]
         build: Option<String>,
-        /// Seconds to wait for a clean exit. Defaults to 60.
-        #[arg(long, value_name = "SECONDS")]
-        timeout: Option<u64>,
+        /// Seconds to wait for a clean exit.
+        #[arg(long, value_name = "SECONDS", default_value_t = server::DEFAULT_STOP_TIMEOUT)]
+        timeout: u64,
         /// Terminate the process when the clean stop times out.
         #[arg(long)]
         force: bool,
