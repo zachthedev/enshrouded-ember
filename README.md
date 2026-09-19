@@ -87,7 +87,7 @@ whose symbols are missing, naming each one in the log. The server keeps running
 vanilla for that feature rather than starting half hooked.
 
 A release supports the current server build plus the four before it. Every
-supported build is fetched from SteamCMD and cached by its Steam buildid, and
+supported build is fetched from SteamCMD and cached by its Steam build id, and
 every change to the table resolves against all of them. No row ships without
 being resolved against its real binary.
 
@@ -118,7 +118,8 @@ ember/
 ## Requirements
 
 - Rust 1.98.1, pinned in `rust-toolchain.toml`
-- A C toolchain, for the MinHook engine. On Windows, Visual Studio Build Tools.
+- A C toolchain, for MinHook, the hook engine. On Windows, Visual Studio Build
+  Tools.
 - [Bun](https://bun.sh), for the repository's own tooling
 
 ## License

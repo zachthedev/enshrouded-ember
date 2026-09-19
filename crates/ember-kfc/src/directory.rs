@@ -715,7 +715,7 @@ mod tests {
     }
 
     /// A gap or an overlap in the chunk run would silently shorten or duplicate
-    /// bytes inside a resource that spans the seam.
+    /// bytes inside a resource that spans the boundary.
     #[test]
     fn chunks_that_do_not_tile_are_refused() {
         let good = [

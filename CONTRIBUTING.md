@@ -3,7 +3,7 @@
 ## Toolchain
 
 `rust-toolchain.toml` pins Rust 1.98.1, and rustup installs it on the first
-cargo command. A C toolchain is needed for the MinHook engine.
+cargo command. A C toolchain is needed for MinHook, the hook engine.
 [Bun](https://bun.sh) runs the repository's own tooling.
 
 The gate calls five tools that rustup does not install. `.github/cargo-tools`

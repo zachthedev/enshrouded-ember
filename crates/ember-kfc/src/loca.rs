@@ -347,7 +347,7 @@ mod tests {
     fn text_that_does_not_begin_at_the_end_of_the_records_is_refused() {
         let mut blob = tag_blob(&rows(), TAG_STRIDE);
         // Push the first string four bytes further out and widen the blob to
-        // match, so the span still fits and only the seam moves.
+        // match, so the span still fits and only the boundary moves.
         let first = HEADER;
         let relative = u32::from_le_bytes([
             blob[first + 4],

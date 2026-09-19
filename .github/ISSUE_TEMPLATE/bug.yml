@@ -1,0 +1,102 @@
+name: Bug
+description: Ember does something other than what it documents.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A symbol Ember could not resolve goes in the signature miss form. How
+        one of zachthedev's mods behaves in game goes in the enshrouded-mods
+        repository.
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: What Ember did, and what it was supposed to do instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce it
+      description:
+        The steps that produce it, starting from a server that is not running.
+    validations:
+      required: true
+  - type: input
+    id: ember_version
+    attributes:
+      label: Ember version
+      description: >
+        The release you installed, or the commit sha for a build from source.
+      placeholder: "0.1.0, or 6f9be1d"
+    validations:
+      required: true
+  - type: input
+    id: build_id
+    attributes:
+      label: Steam build id
+      description: >
+        The `buildid` line in `steamapps/appmanifest_2278520.acf` beside your
+        server. A finding is worthless without the build behind it.
+      placeholder: "23178631"
+    validations:
+      required: true
+  - type: textarea
+    id: mods
+    attributes:
+      label: Mods loaded, in load order
+      description: >
+        One id and version per line. Hooks chain in load order and several mods
+        may hook one target, so the order is part of the reproduction. Write
+        none when Ember loaded alone.
+      placeholder: |
+        private-chests 0.1.0
+        team 0.1.0
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: The Ember log
+      description: >
+        Everything in `ember/logs` from the run that produced it. Resolution
+        fails closed and names every symbol it could not find, so the log often
+        says outright which one did not resolve.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: clean_server
+    attributes:
+      label: Does it happen on a clean server with no mods loaded?
+      description: >
+        This separates a defect in Ember from two mods interacting. Pick "Not
+        checked" rather than guessing.
+      options:
+        - "Yes"
+        - "No, it needs at least one mod"
+        - Not checked
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Host
+      options:
+        - Windows
+        - Wine
+        - Proton
+    validations:
+      required: true
+  - type: dropdown
+    id: loaded_as
+    attributes:
+      label: How Ember loaded
+      options:
+        - Proxy library beside the server
+        - Injected into a running server
+    validations:
+      required: true

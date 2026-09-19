@@ -1,63 +1,87 @@
 name: New Keen build
-description:
-  A dedicated server build the mods here have not been checked against.
-title: "build: r"
+description: A dedicated server build no signature row covers.
+title: "build: server buildid "
 labels: ["build"]
 body:
   - type: markdown
     attributes:
       value: |
-        Every field below is read from a server build you fetched yourself.
-        Nothing recovered from the binary belongs in this issue beyond the
-        identifiers and the diff summary.
+        The watcher opens an issue by itself for every build that moves on the
+        public branch. Search the tracker before filing.
+
+        This form is for a build the watcher did not catch: one on a beta
+        branch, one that arrived while the schedule was disabled, or one Ember
+        refused to run against.
+
+        Two commands fill most of this form:
+
+        ```sh
+        cargo xtask server fetch
+        cargo xtask schema extract
+        ```
   - type: input
     id: build_id
     attributes:
       label: Steam build id
       description: >
-        The buildid of the Windows depot for app 2278520. It names the directory
-        the build is fetched into.
+        The `buildid` line in `steamapps/appmanifest_2278520.acf` beside your
+        server. `cargo xtask server fetch` names its output directory the same
+        thing.
       placeholder: "23178631"
     validations:
       required: true
-  - type: input
-    id: revision
+  - type: dropdown
+    id: how
     attributes:
-      label: Revision
+      label: How this build turned up
       description: >
-        The number in the first 512 bytes of enshrouded_server.kfc, beside the
-        branch path and the build date.
-      placeholder: "1024233"
-    validations:
-      required: true
-  - type: input
-    id: fingerprint
-    attributes:
-      label: Fingerprint
-      description: The CodeView RSDS GUID and age, as the loader reads them.
-      placeholder: "ae33b44863803d4eb31f31d4d84ae242 age 293"
-    validations:
-      required: true
-  - type: textarea
-    id: schema_diff
-    attributes:
-      label: Schema diff summary
-      description: The summary printed by `cargo xtask schema diff`.
-      render: text
+        This says whether somebody is blocked, and which gap in the watcher let
+        the build through. The last option is the one the watcher fills in for
+        itself.
+      options:
+        - Ember refused to run against it
+        - It is on a beta branch, which the watcher does not report
+        - The watcher opened no issue for it
+        - I pulled it from an old manifest by hand
+        - Steam moved on the public branch, and the watcher opened this
     validations:
       required: true
   - type: dropdown
-    id: dedicated_server
+    id: joinable
     attributes:
-      label: Does Keen say dedicated servers need this build?
+      label: Can a client on this build still join a server on the one before?
+      description: >
+        A no means every operator is forced onto this build today. Pick "Not
+        checked" rather than guessing.
       options:
         - "Yes"
         - "No"
-        - "Not stated"
+        - Not checked
     validations:
       required: true
+  - type: textarea
+    id: build_json
+    attributes:
+      label: build.json
+      description: >
+        The file `cargo xtask schema extract` writes to
+        `.cache/schema/<buildid>/build.json`. It carries the revision, the
+        branch path and the fingerprint, so none of those is transcribed by
+        hand.
+      render: json
   - type: textarea
     id: notes
     attributes:
       label: Anything else
       description: What broke, what still works, and what you have not checked.
+  - type: checkboxes
+    id: maintainer
+    attributes:
+      label: Before a row ships
+      description: The maintainer's sequence. A reporter leaves these unticked.
+      options:
+        - label: The build is archived, or its manifest already rolled
+        - label: "`cargo xtask schema extract` ran against it"
+        - label: "`cargo xtask schema diff <old> <new>` is in a comment below"
+        - label: Every signature row resolves against the real binary
+        - label: The support window moved, so the fifth build back drops out
