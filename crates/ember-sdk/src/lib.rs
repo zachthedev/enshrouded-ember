@@ -17,3 +17,6 @@ pub mod lifecycle;
 pub mod log;
 pub mod manifest;
 pub mod symbols;
+
+pub use ember_enshrouded as game;
+pub use ember_holistic as engine;

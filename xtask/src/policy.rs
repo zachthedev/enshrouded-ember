@@ -26,6 +26,31 @@ fn rust_sources(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// Whether `text` references the crate `ident`.
+///
+/// A reference is the name opening a path, or following `use` or
+/// `extern crate`. The name has to end at a non-identifier character, because
+/// `cargo machete` reads `serde` and `serde_json` as two crates and a check
+/// that reads the first inside the second demands a prune that makes machete
+/// fail on the same name.
+fn references_crate(text: &str, ident: &str) -> bool {
+    text.match_indices(ident).any(|(at, _)| {
+        let rest: &str = &text[at + ident.len()..];
+        let head: &str = &text[..at];
+        let whole_word = head
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+            && rest
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+
+        whole_word
+            && (rest.starts_with("::") || head.ends_with("use ") || head.ends_with("extern crate "))
+    })
+}
+
 /// Every name a member manifest takes from the workspace table.
 ///
 /// A member opts in with `<name>.workspace = true`, in its own dependency
@@ -210,7 +235,7 @@ fn cargo_install_package(install: &str) -> Option<&str> {
 mod tests {
     use super::{
         cargo_install_package, code_span_lists, commitlint_scopes, names_taken_from_the_workspace,
-        rust_sources, section, table_first_column, workspace_root,
+        references_crate, rust_sources, section, table_first_column, workspace_root,
     };
     use crate::check::{PREFERRED_TEST_RUNNER, STEPS};
 
@@ -430,14 +455,9 @@ mod tests {
             let files = rust_sources(&crate_dir.join("src"));
             for name in ignored {
                 let ident = name.replace('-', "_");
-                let needles = [
-                    format!("use {ident}"),
-                    format!("{ident}::"),
-                    format!("extern crate {ident}"),
-                ];
                 for file in &files {
                     let text = std::fs::read_to_string(file).unwrap_or_default();
-                    if needles.iter().any(|needle| text.contains(needle.as_str())) {
+                    if references_crate(&text, &ident) {
                         stale.push(format!(
                             "{} ignores {name}, but {} uses it",
                             manifest.display(),
@@ -658,6 +678,44 @@ three
         assert_eq!(table_first_column(second), ["alpha", "beta"]);
 
         assert_eq!(section(markdown, "Fourth"), None);
+    }
+
+    /// A crate name ends at a non-identifier character, so one crate whose
+    /// name prefixes another does not read as a use of it.
+    ///
+    /// `serde` and `serde_json` are two crates, and `cargo machete` judges
+    /// them separately. A check that read the first inside the second would
+    /// demand a prune that makes the machete step fail on the same name, and
+    /// both steps are in the gate.
+    #[test]
+    fn references_crate_ends_the_name_at_a_word_boundary() {
+        let cases = [
+            ("use serde_json::Value;", "serde", false),
+            ("use serde_json::Value;", "serde_json", true),
+            ("use serde::Serialize;", "serde", true),
+            ("use serde;", "serde", true),
+            (
+                "pub use ember_enshrouded as game;",
+                "ember_enshrouded",
+                true,
+            ),
+            ("#[derive(thiserror::Error)]", "thiserror", true),
+            ("extern crate serde;", "serde", true),
+            ("/// derives serde::Serialize", "serde", true),
+            ("let my_serde = 1;", "serde", false),
+            ("use tracing_subscriber::fmt;", "tracing", false),
+            ("use tracing_subscriber::fmt;", "tracing_subscriber", true),
+            ("// serde is not used here", "serde", false),
+            ("", "serde", false),
+        ];
+
+        for (text, ident, expected) in cases {
+            assert_eq!(
+                references_crate(text, ident),
+                expected,
+                "{text:?} against {ident:?}"
+            );
+        }
     }
 
     /// The flag and the package name come in either order, and a step that

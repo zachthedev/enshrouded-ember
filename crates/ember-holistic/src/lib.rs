@@ -16,3 +16,5 @@ pub mod frame;
 pub mod program;
 pub mod reflect;
 pub mod xref;
+
+pub use error::{HolisticError, Result};

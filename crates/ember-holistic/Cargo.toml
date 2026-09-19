@@ -12,11 +12,15 @@ authors.workspace = true
 # Dependencies this crate declares and no module references yet. Listing them
 # keeps `cargo machete` quiet without dropping the declaration, and a name
 # leaves the list when code starts using it.
-ignored = ["ember-platform", "ember-sigs", "thiserror", "tracing"]
+ignored = [
+    "ember-platform",
+    "serde",
+    "tracing",
+]
 
 [dependencies]
 ember-platform.workspace = true
-ember-sigs.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
