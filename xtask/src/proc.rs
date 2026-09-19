@@ -30,9 +30,11 @@ use std::process::Child;
 use anyhow::Result;
 
 /// `WaitForSingleObject` saying the object signaled.
+#[cfg(test)]
 const WAIT_OBJECT_0: u32 = 0;
 
 /// `WaitForSingleObject` saying the wait ran out.
+#[cfg(any(windows, test))]
 const WAIT_TIMEOUT: u32 = 258;
 
 /// What a wait for exit concluded.
@@ -41,6 +43,10 @@ pub enum Exit {
     /// The process left on its own.
     Gone,
     /// The process is still running.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "only the Windows backend waits on a live process")
+    )]
     Running,
 }
 
@@ -50,12 +56,21 @@ pub enum Claim {
     Gone,
     /// A live process holds the id and it is not the server. The path is the
     /// executable it is running.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "only the Windows backend opens a live process")
+    )]
     Other(PathBuf),
     /// The server, held open.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "only the Windows backend opens a live process")
+    )]
     Ours(Server),
 }
 
 /// What a remote library load came to.
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadOutcome {
     /// The library is in the target's module list.
@@ -82,6 +97,7 @@ pub enum LoadOutcome {
 /// list is loaded, whatever the thread's code says, because that code is the low
 /// half of a 64-bit handle and can be zero. Only then does the thread code
 /// matter, and only as a hint.
+#[cfg(any(windows, test))]
 pub fn judge_load(
     thread_wait: u32,
     process_alive: bool,
@@ -109,6 +125,7 @@ pub fn judge_load(
 /// Both sides canonicalize when they exist, which folds case, separators and
 /// links. When either does not exist the comparison falls back to the text,
 /// case folded, which is what Windows does with a path it cannot open.
+#[cfg(any(windows, test))]
 pub fn same_executable(left: &Path, right: &Path) -> bool {
     if let (Ok(a), Ok(b)) = (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         return a == b;
@@ -125,9 +142,7 @@ mod platform {
 
     use anyhow::{Context, Result, bail};
 
-    use super::{
-        Claim, Exit, LoadOutcome, WAIT_OBJECT_0, WAIT_TIMEOUT, judge_load, same_executable,
-    };
+    use super::{Claim, Exit, LoadOutcome, WAIT_TIMEOUT, judge_load, same_executable};
 
     /// Put the child in its own process group so a control event can be aimed
     /// at it without reaching every process on the console. The group id of
@@ -545,14 +560,11 @@ mod platform {
             ),
         }
     }
-
-    /// Keep the constant in use on every build of this module.
-    const _: u32 = WAIT_OBJECT_0;
 }
 
 #[cfg(not(windows))]
 mod platform {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::process::Child;
 
     use anyhow::{Result, bail};
@@ -575,11 +587,19 @@ mod platform {
         }
 
         /// Report gone, because nothing was started.
+        #[expect(
+            clippy::unused_self,
+            reason = "the signature matches the Windows backend"
+        )]
         pub fn wait(&self, _seconds: u64) -> Exit {
             Exit::Gone
         }
 
         /// Refuse to terminate, because nothing was started.
+        #[expect(
+            clippy::unused_self,
+            reason = "the signature matches the Windows backend"
+        )]
         pub fn terminate(&self) -> Result<()> {
             bail!("{UNSUPPORTED}")
         }
@@ -604,10 +624,6 @@ mod platform {
     pub fn inject(_pid: u32, _library: &Path) -> Result<()> {
         bail!("{UNSUPPORTED}")
     }
-
-    /// Keep the type in use on every build of this module.
-    const _: fn(&Path, &Path) -> bool = super::same_executable;
-    const _: Option<PathBuf> = None;
 }
 
 pub use platform::Server;

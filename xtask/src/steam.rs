@@ -148,8 +148,12 @@ mod tests {
     /// exists on disk, so only the component rule can produce these answers and
     /// a machine with a real Steam library cannot make the case pass for the
     /// wrong reason.
+    ///
+    /// A forward slash separates components on every host and a backslash on
+    /// Windows alone, so the backslash spellings run only there.
     #[test]
     fn the_content_tree_rule_reads_components_and_ignores_case() {
+        let host_syntax = |case: &&&str| cfg!(windows) || !case.contains('\\');
         let refused: &[&str] = &[
             r"D:\SteamLibrary\steamapps\common\Enshrouded",
             r"D:/SteamLibrary/steamapps/common/Enshrouded",
@@ -159,8 +163,10 @@ mod tests {
             r"C:\Program Files (x86)\Steam\steamapps\common\Enshrouded",
             r"\\fileserver\games\steamapps\common\Enshrouded",
             r"//fileserver/games/steamapps/common/Enshrouded",
+            "/home/player/.local/share/Steam/SteamApps/Common/Enshrouded",
+            "/mnt/games/SteamLibrary/STEAMAPPS/common/Enshrouded/enshrouded_server.exe",
         ];
-        for case in refused {
+        for case in refused.iter().filter(host_syntax) {
             let marker = content_tree(Path::new(case))
                 .unwrap_or_else(|| panic!("{case} is inside a Steam content tree"));
             assert!(
@@ -180,8 +186,12 @@ mod tests {
             r"D:\SteamLibrary\steamappscommon\Enshrouded",
             r"D:\backups\steamapps-common\Enshrouded",
             r"D:\common\steamapps",
+            "/home/player/repos/ember/.cache/server/23178631/steamapps",
+            "/mnt/games/SteamLibrary/steamapps",
+            "/mnt/games/SteamLibrary/steamappscommon/Enshrouded",
+            "/mnt/common/steamapps",
         ];
-        for case in accepted {
+        for case in accepted.iter().filter(host_syntax) {
             assert!(
                 content_tree(Path::new(case)).is_none(),
                 "{case} is not inside a Steam content tree"

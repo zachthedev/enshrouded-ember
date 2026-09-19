@@ -62,14 +62,14 @@ names itself, because a check that did not run is not a check that passed.
 The pre-push hook and continuous integration call the same command, so the three
 cannot drift apart.
 
-Continuous integration also runs a Linux leg: `cargo check --workspace` plus the
-tests for `ember-sigs`, `ember-platform` and `ember-kfc`. The resolution path
-carries no `cfg(windows)` and every Linux backend is a stub that returns
-`Unsupported`, so both have to keep compiling on a host with no Windows API.
-`ember-kfc` reads container files and touches no operating system at all, so its
-whole offline suite runs there too.
+Continuous integration runs the same gate on Windows and on Linux, because the
+pre-push hook runs it on whichever host a contributor uses. Code behind
+`cfg(windows)` builds only on the first host, and code behind its inverse only
+on the second. The resolution path carries no `cfg(windows)`. Every Linux
+backend is a stub that returns `Unsupported`. Both have to hold on a host with
+no Windows API.
 
-That leg compiles `zstd-sys`, which is C. The ubuntu runner image ships a C
+The Linux leg compiles `zstd-sys`, which is C. The ubuntu runner image ships a C
 toolchain, so the leg installs nothing for it.
 
 ## Hooks
