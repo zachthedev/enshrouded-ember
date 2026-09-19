@@ -1,11 +1,11 @@
 //! Repository automation, run as `cargo xtask <command>`.
 //!
-//! Four groups live here. `check` is the single gate that continuous
-//! integration, the pre-push hook and `CONTRIBUTING.md` all call. `server`
-//! fetches a dedicated server build, seeds it, launches it with the loader
-//! injected, tails it and stops it. `schema` recovers the reflection schema
-//! from a build and diffs two recoveries. `loca` writes a client's localization
-//! tables out, so a mod can name a tag id it looked up.
+//! `check` is the single gate that continuous integration, the pre-push hook
+//! and `CONTRIBUTING.md` all call. `server` fetches a dedicated server build,
+//! seeds it, launches it with the loader injected, tails it and stops it.
+//! `schema` recovers the reflection schema from a build and diffs two
+//! recoveries. `loca` writes a client's localization tables out, so a mod can
+//! name a tag id it looked up.
 //!
 //! Nothing recovered from a Keen binary is committed. Every extraction lands
 //! under the gitignored `.cache` directory and is regenerated from a build the
@@ -30,24 +30,24 @@ mod ui;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
 
-/// Commit scopes: the workspace crate names past the `ember-` prefix, plus the
-/// three cross-cutting names no crate will ever own.
-const SCOPES: &[&str] = &[
-    "loader",
-    "sdk",
-    "holistic",
-    "kfc",
-    "enshrouded",
-    "sigs",
-    "platform",
-    "testkit",
-    "xtask",
-    "deps",
-    "ci",
-    "release",
-];
+/// The commit scope vocabulary: the workspace crate names past the `ember-`
+/// prefix, plus the cross-cutting names no crate will ever own.
+///
+/// `commitlint.config.js` reads the same file, so the scopes this command
+/// prints and the scopes the commit hook accepts are one list.
+const SCOPES_JSON: &str = include_str!("../../.github/commit-scopes.json");
+
+/// The commit scopes, in the order the scope file lists them.
+///
+/// # Errors
+///
+/// Returns an error when the scope file is not a JSON array of strings.
+fn scopes() -> anyhow::Result<Vec<String>> {
+    serde_json::from_str(SCOPES_JSON).context("reading .github/commit-scopes.json")
+}
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "Repository automation for Ember")]
@@ -161,7 +161,7 @@ enum ServerCommand {
 
 #[derive(Subcommand)]
 enum SchemaCommand {
-    /// Write the seven dumps to `<root>/.cache/schema/<buildid>`.
+    /// Write the dumps to `<root>/.cache/schema/<buildid>`.
     Extract {
         #[arg(long, value_name = "BUILDID")]
         build: Option<String>,
@@ -248,7 +248,7 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
     }
     match &cli.command {
         Command::Scopes => {
-            for scope in SCOPES {
+            for scope in scopes()? {
                 println!("{scope}");
             }
             Ok(true)
@@ -267,5 +267,31 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
             let root = root::DevRoot::resolve(cli.global.root.as_deref())?;
             loca::run(command, &root, ui)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scopes;
+
+    /// The scope file feeds the commit hook, so a duplicate or an empty entry
+    /// would accept a commit nobody meant to allow.
+    #[test]
+    fn scopes_are_distinct_and_named() {
+        let scopes = scopes().expect("the scope file is a JSON array of strings");
+        assert!(!scopes.is_empty(), "the scope file names no scope");
+
+        let mut seen = scopes.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            scopes.len(),
+            "a scope appears twice: {scopes:?}"
+        );
+        assert!(
+            scopes.iter().all(|scope| !scope.is_empty()),
+            "a scope is empty: {scopes:?}"
+        );
     }
 }

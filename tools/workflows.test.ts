@@ -68,8 +68,8 @@ const PUSH_KEY_SECRET = "EMBER_CI_SSH_KEY";
  * Triggers that carry repository secrets on an event a fork can influence.
  *
  * @remarks
- * `pull_request` and `pull_request_target` are the obvious pair. The other
- * three are the ones actually used to smuggle a secret out: a `workflow_run`
+ * `pull_request` and `pull_request_target` are the obvious pair. The rest are
+ * the ones actually used to smuggle a secret out: a `workflow_run`
  * chained to a workflow that does run on `pull_request` fires from the default
  * branch with full access to secrets, and anyone can comment on a public
  * repository's issue or discussion.
@@ -91,13 +91,7 @@ const FORK_INFLUENCED = [
  * `evilcorp/setup-bun` at some 40-hex commit of their own keeps the pin and
  * changes the code that runs.
  */
-const ACTION_OWNERS = [
-  "actions",
-  "oven-sh",
-  "Swatinem",
-  "taiki-e",
-  "EmbarkStudios",
-];
+const ACTION_OWNERS = ["actions", "oven-sh", "Swatinem", "taiki-e"];
 
 const loaded = await workflows();
 
@@ -105,16 +99,6 @@ describe("the workflows", () => {
   test("there is at least one, so an empty directory cannot pass every case", () => {
     expect(loaded.length).toBeGreaterThan(0);
   });
-
-  test.each(loaded.map((workflow) => [workflow.name] as const))(
-    "%s parses as YAML with jobs",
-    (name) => {
-      const workflow = loaded.find(
-        (one) => one.name === name,
-      ) as LoadedWorkflow;
-      expect(Object.keys(workflow.parsed.jobs ?? {}).length).toBeGreaterThan(0);
-    },
-  );
 
   /**
    * GitHub passes no secrets to a workflow triggered from a forked repository,
@@ -485,10 +469,10 @@ describe("the workflows", () => {
    * `archive.json` is the one place the destination is written down, and this
    * is what keeps it the one place.
    *
-   * This repository already carries a case asserting that three copies of the
+   * This repository already carries a case asserting that the copies of the
    * commit scope list agree, and it exists because that drift is what actually
-   * happens. Rather than add a fourth instance of the same problem and a
-   * fourth case to watch it, the destination has exactly one reader:
+   * happens. Rather than add another instance of the same problem and another
+   * case to watch it, the destination has exactly one reader:
    * `archive.ts` builds the endpoint and names the bucket, and no workflow
    * mentions either value. This refuses the restatement that would start the
    * drift.
@@ -684,21 +668,32 @@ describe("the workflows", () => {
   /**
    * A commit pin binds the bytes and not the name above them, so a step moved
    * to another owner at one of their own commits stays pinned and runs
-   * somebody else's code.
+   * somebody else's code. zizmor's `unpinned-uses` passes that step, because
+   * its reference is a commit.
+   *
+   * The list is checked in the other direction too. An owner left on it after
+   * its last action is gone is an allowance nothing uses, and it is the one a
+   * repointed step would pass through.
    */
-  test("every action comes from a known owner", () => {
+  test("every action comes from a known owner, and every known owner is used", () => {
+    const used = new Set<string>();
     for (const workflow of loaded) {
       for (const reference of actionReferences(workflow.parsed)) {
         if (reference.startsWith("./")) {
           continue;
         }
         const owner = reference.split("/")[0] as string;
+        used.add(owner);
         expect(
           ACTION_OWNERS,
           `${workflow.name} uses ${reference}, whose owner is not on the list`,
         ).toContain(owner);
       }
     }
+    expect(
+      ACTION_OWNERS.filter((owner) => !used.has(owner)),
+      "an owner on the list has no action left in any workflow",
+    ).toEqual([]);
   });
 
   /**
@@ -731,31 +726,6 @@ describe("the workflows", () => {
   });
 
   /**
-   * A tag can be retargeted by its owner with no pull request and no cooldown.
-   * A commit cannot.
-   *
-   * @remarks
-   * Read out of the parsed document rather than matched against the text. A
-   * line-anchored pattern walks straight past YAML flow style, so
-   * `- { uses: actions/checkout@v7 }` would be an unpinned tag that passes.
-   */
-  test("every action is pinned to a commit", () => {
-    let checked = 0;
-    for (const workflow of loaded) {
-      for (const reference of actionReferences(workflow.parsed)) {
-        checked += 1;
-        expect(reference, `${workflow.name} uses ${reference}`).toMatch(
-          /@[0-9a-f]{40}$/,
-        );
-      }
-    }
-    expect(
-      checked,
-      "no workflow uses an action, so this case checked nothing",
-    ).toBeGreaterThan(0);
-  });
-
-  /**
    * The reader has to see an action whatever style it is written in. A
    * line-anchored text match cannot, which is why the reader parses the
    * document.
@@ -780,6 +750,164 @@ describe("the workflows", () => {
       "actions/checkout@aaaa",
       "actions/setup-node@bbbb",
     ]);
+  });
+});
+
+/** A file under `.github`, read as text. */
+async function githubText(relative: string): Promise<string> {
+  return Bun.file(
+    fileURLToPath(new URL(`../.github/${relative}`, import.meta.url)),
+  ).text();
+}
+
+/** A YAML file under `.github`, parsed. */
+async function githubYaml(relative: string): Promise<unknown> {
+  return Bun.YAML.parse(await githubText(relative));
+}
+
+/**
+ * A value's own key, or `undefined` when the value is not an object that
+ * carries it.
+ */
+function field(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  return (value as Record<string, unknown>)[key];
+}
+
+/**
+ * The inline zizmor ignore comments this repository has decided on, as
+ * `file:audit`. Both answer `artipacked` on a checkout whose job pushes over
+ * SSH, which needs the key to stay in the checkout.
+ */
+const ALLOWED_ZIZMOR_IGNORES = [
+  "build-watch.yml:artipacked",
+  "build-watch.yml:artipacked",
+];
+
+describe("the GitHub configuration", () => {
+  /**
+   * actionlint is a Go program, and neither runner image puts a Go on `PATH`
+   * that builds it. The gate job installs one with `actions/setup-go` before
+   * the step that reads `.github/go-tools`, at an exact release, because a
+   * range resolves at run time and a resolved release is under no cooldown.
+   * That step has to stop on a failed install, or the gate reports the tool
+   * missing one step later and names the wrong cause.
+   */
+  test("the Go tools install under an exact Go release", () => {
+    const ci = loaded.find((one) => one.name === "ci.yml");
+    expect(ci, "there is no ci.yml").toBeDefined();
+    const steps = field(ci?.parsed.jobs?.["gate"], "steps");
+    expect(Array.isArray(steps), "the gate job lists no steps").toBe(true);
+    const list = steps as unknown[];
+
+    const setup = list.findIndex((step) =>
+      String(field(step, "uses") ?? "").startsWith("actions/setup-go@"),
+    );
+    const install = list.findIndex((step) =>
+      String(field(step, "run") ?? "").includes(".github/go-tools"),
+    );
+    expect(setup, "the gate job does not use actions/setup-go").not.toBe(-1);
+    expect(install, "no gate step installs from .github/go-tools").not.toBe(-1);
+    expect(
+      setup,
+      "setup-go runs after the step that needs its Go",
+    ).toBeLessThan(install);
+
+    const options = field(list[setup], "with");
+    expect(
+      field(options, "go-version"),
+      "setup-go takes something other than one exact release",
+    ).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(
+      field(options, "cache"),
+      "setup-go caches on a go.sum this repository does not have",
+    ).toBe(false);
+    expect(
+      String(field(list[install], "run")),
+      "the install step does not stop on a failed go install",
+    ).toContain("$LASTEXITCODE -ne 0");
+  });
+
+  /**
+   * Dependabot's cooldown is the wait between a version being published and a
+   * pull request proposing it, and an ecosystem with no cooldown block waits
+   * for nothing. zizmor's `dependabot-cooldown` refuses a cooldown shorter than
+   * `.github/zizmor.yml` sets, and passes a block removed entirely, so this
+   * reads every entry.
+   */
+  test("every dependabot ecosystem carries a cooldown zizmor can hold", async () => {
+    const zizmor = await githubYaml("zizmor.yml");
+    const threshold = field(
+      field(field(field(zizmor, "rules"), "dependabot-cooldown"), "config"),
+      "days",
+    );
+    expect(
+      typeof threshold,
+      ".github/zizmor.yml sets no dependabot-cooldown threshold in days",
+    ).toBe("number");
+
+    const updates = field(await githubYaml("dependabot.yml"), "updates");
+    expect(Array.isArray(updates), "dependabot.yml lists no updates").toBe(
+      true,
+    );
+    const short: string[] = [];
+    for (const update of updates as unknown[]) {
+      const ecosystem = String(field(update, "package-ecosystem"));
+      const days = field(field(update, "cooldown"), "default-days");
+      if (typeof days !== "number") {
+        short.push(`${ecosystem} carries no cooldown default-days`);
+      } else if (days < (threshold as number)) {
+        short.push(`${ecosystem} waits ${days} days`);
+      }
+    }
+    expect(short).toEqual([]);
+  });
+
+  /**
+   * An inline `zizmor: ignore[...]` comment answers a finding with no review
+   * beyond the diff that adds it, and a rule set to ignore or disable in
+   * `.github/zizmor.yml` answers every finding of that audit. Each inline
+   * answer has to be on the allowlist above, and the configuration may only
+   * set thresholds.
+   *
+   * zizmor matches this exact spelling, one space and all, and skips an empty
+   * entry between commas.
+   */
+  test("zizmor answers only the findings this repository allows", async () => {
+    const github = fileURLToPath(new URL("../.github/", import.meta.url));
+    const found: string[] = [];
+    for (const relative of await readdir(github, { recursive: true })) {
+      const path = join(github, relative);
+      const stat = await Bun.file(path).stat();
+      if (stat.isDirectory()) {
+        continue;
+      }
+      const text = await Bun.file(path).text();
+      const file = relative.split(/[\\/]/).pop() as string;
+      for (const match of text.matchAll(/zizmor: ignore\[([^\]]*)\]/g)) {
+        for (const audit of (match[1] as string).split(",")) {
+          if (audit.trim() !== "") {
+            found.push(`${file}:${audit.trim()}`);
+          }
+        }
+      }
+    }
+    expect(found.sort()).toEqual([...ALLOWED_ZIZMOR_IGNORES].sort());
+
+    const rules = field(await githubYaml("zizmor.yml"), "rules");
+    const answering = Object.entries(
+      (rules ?? {}) as Record<string, unknown>,
+    ).filter(
+      ([, rule]) =>
+        field(rule, "ignore") !== undefined ||
+        field(rule, "disable") !== undefined,
+    );
+    expect(
+      answering.map(([name]) => name),
+      ".github/zizmor.yml ignores or disables an audit outright",
+    ).toEqual([]);
   });
 });
 

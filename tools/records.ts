@@ -1,9 +1,9 @@
 /**
- * The append-only records under `data/`, and the reader both tools share.
+ * The append-only records under `data/`, and the reader the tools share.
  *
  * @remarks
- * Two files live there. `steam-builds.jsonl` is what Steam advertises, gaining
- * a row whenever a build id or a manifest gid moves. `build-digests.jsonl` is
+ * `steam-builds.jsonl` is what Steam advertises, gaining a row whenever a build
+ * id or a manifest gid moves. `build-digests.jsonl` is
  * what each recorded build's files hash to, and it is the only thing standing
  * between a swapped object in the archive and a developer who runs it.
  *
@@ -36,7 +36,7 @@ import { z } from "zod";
  * @remarks
  * Bounded at twenty digits, the ceiling for the 64-bit value each of these is.
  * One reaches a path component, an issue title and a command-line argument, so
- * an unbounded one reaches all three.
+ * an unbounded one reaches each of them.
  */
 const steamId = z
   .string()

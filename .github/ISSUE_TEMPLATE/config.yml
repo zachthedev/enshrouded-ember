@@ -1,4 +1,4 @@
-# Three forms cover the reports that have a shape, and every other kind of
+# The forms cover the reports that have a shape, and every other kind of
 # conversation has a discussion category. An issue here is therefore always a
 # defect, which is what keeps the tracker readable.
 blank_issues_enabled: false

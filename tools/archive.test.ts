@@ -132,9 +132,9 @@ describe("kfcVersion", () => {
 
 describe("objectKey", () => {
   /**
-   * Keyed by manifest gid, not build id. Four of the five builds in the
-   * supported window were pulled from a historical manifest and carry no
-   * recoverable build id, so a key built from one would have a hole in it.
+   * Keyed by manifest gid, not build id. A build pulled from a historical
+   * manifest carries no recoverable build id, and most of the supported window
+   * arrived that way, so a key built from one would have a hole in it.
    */
   test("a key is the manifest gid and the file name", () => {
     expect(objectKey("2174935030716737236", "enshrouded_server.exe")).toBe(

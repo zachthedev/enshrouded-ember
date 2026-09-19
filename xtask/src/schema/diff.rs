@@ -500,7 +500,7 @@ mod tests {
     use crate::testutil::TestDir;
     use std::collections::{BTreeMap, BTreeSet};
 
-    /// The four files `load` reads, which every extract run writes.
+    /// The files `load` reads, which every extract run writes.
     const REQUIRED: [&str; 4] = [
         "srv.schema.txt",
         "programs.tsv",
@@ -508,7 +508,7 @@ mod tests {
         "ui-events.txt",
     ];
 
-    /// A run that stops partway leaves some of the four behind. Reading the rest
+    /// A run that stops partway leaves some of them behind. Reading the rest
     /// as empty sections would report every type, program, message and surface
     /// in the missing file as removed, which is a wrong answer rather than a
     /// missing one.
@@ -539,17 +539,17 @@ mod tests {
         }
     }
 
-    /// An extraction holding all four reads, whatever else it does or does not
-    /// carry. `cli.schema.txt`, `descriptors.tsv` and `strings.tsv` are absent
-    /// here, and none of them is read by a diff.
+    /// An extraction holding every file the diff reads loads, whatever else it
+    /// does or does not carry. `cli.schema.txt`, `descriptors.tsv` and
+    /// `strings.tsv` are absent here, and none of them is read by a diff.
     #[test]
-    fn an_extraction_holding_the_four_reads_without_the_files_no_diff_opens() {
+    fn an_extraction_holding_the_files_a_diff_reads_loads_without_the_rest() {
         let dir = TestDir::new("diff-complete");
         for name in REQUIRED {
             dir.write(&format!("23178631/{name}"), b"");
         }
 
-        load(&dir.path().join("23178631")).expect("the four the diff reads are all there");
+        load(&dir.path().join("23178631")).expect("every file the diff reads is there");
     }
 
     /// Build a schema dump body from header and member lines.

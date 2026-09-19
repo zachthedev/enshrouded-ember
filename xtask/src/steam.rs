@@ -22,7 +22,7 @@ use anyhow::{Result, bail};
 /// The directory name every Steam library keeps its content under.
 const STEAMAPPS: &str = "steamapps";
 
-/// The two children that make a `steamapps` directory a library rather than a
+/// The children that make a `steamapps` directory a library rather than a
 /// `SteamCMD` install target.
 const LIBRARY_MARKERS: [&str; 2] = ["common", "libraryfolders.vdf"];
 

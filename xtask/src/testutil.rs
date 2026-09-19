@@ -5,7 +5,7 @@
 //! another's leftovers and no case writes into the repository.
 //!
 //! The directory itself is `tempfile`'s, which handles the name collision and
-//! the cleanup. What sits on top is the two helpers the suite needs that
+//! the cleanup. What sits on top is the helpers the suite needs that
 //! `tempfile` does not offer: writing a file with its parents, and pointing a
 //! directory link at a target.
 

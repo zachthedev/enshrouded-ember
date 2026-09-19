@@ -27,7 +27,7 @@ const CLIENT_VAR: &str = "EMBER_CLIENT_EXE";
 /// The variable naming the directory holding the dumps to match.
 const SCHEMA_VAR: &str = "EMBER_SCHEMA";
 
-/// The six dumps a server build alone produces.
+/// The dumps a server build alone produces.
 const SERVER_OUTPUTS: [&str; 6] = [
     "srv.schema.txt",
     "srv.proto.txt",

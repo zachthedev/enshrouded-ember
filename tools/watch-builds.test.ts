@@ -178,7 +178,7 @@ describe("parseAppInfo, against input Valve did not send", () => {
   /**
    * A gid becomes a step output, a DepotDownloader `-dir` argument and an R2
    * object key prefix. It is checked at the boundary rather than at any of
-   * those three, because a run where nothing moved appends no row and so
+   * those, because a run where nothing moved appends no row and so
    * reaches no later check at all.
    */
   test.each([

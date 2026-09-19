@@ -72,7 +72,7 @@ impl std::error::Error for RevisionError {}
 ///
 /// # Errors
 ///
-/// Returns [`RevisionError`] naming which of the three ways the read failed.
+/// Returns [`RevisionError`] naming the way the read failed.
 pub fn read_beside(server_exe: &Path) -> Result<Revision, RevisionError> {
     use std::io::Read as _;
 
