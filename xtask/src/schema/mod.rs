@@ -6,7 +6,7 @@
 //! every contributor and every continuous integration job from a server they
 //! fetched themselves. The extractor is the artifact; its output is not.
 //!
-//! Beside the seven dumps sits `build.json`, which names the build the dumps
+//! Beside the dumps sits `build.json`, which names the build the dumps
 //! came from. It exists so that `schema list`, `schema diff` and the build
 //! watcher can identify an extraction without reopening a 22 MB image.
 
@@ -27,7 +27,7 @@ use crate::root::DevRoot;
 use crate::ui::{Mark, Row, Ui};
 use crate::{SchemaCommand, kfc};
 
-/// The seven files an extraction writes.
+/// The files an extraction writes.
 pub const OUTPUTS: [&str; 7] = [
     "srv.schema.txt",
     "cli.schema.txt",
@@ -556,7 +556,7 @@ mod tests {
     /// the previous run left behind would read as part of this one.
     ///
     /// The whole surviving set is asserted rather than one planted name. A rule
-    /// widened from these eight names to an extension would take `mydata.tsv`
+    /// widened from these names to an extension would take `mydata.tsv`
     /// with them, and a check that only looked for `notes.md` would still pass.
     #[test]
     fn a_replaced_extraction_keeps_no_file_from_the_run_before_it() {
@@ -583,7 +583,7 @@ mod tests {
         );
     }
 
-    /// A directory standing at one of the eight names cannot be replaced with a
+    /// A directory standing at one of the names cannot be replaced with a
     /// file, so the run stops there.
     ///
     /// The build record is removed first, so what is left claims to be nothing.

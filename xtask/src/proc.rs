@@ -89,7 +89,7 @@ pub enum LoadOutcome {
     },
 }
 
-/// Judge a remote library load from the four facts the calls establish.
+/// Judge a remote library load from the facts the calls establish.
 ///
 /// The order is the order of evidence. A wait that ran out says nothing about
 /// the load. A target that exited took the answer with it, and its exit status

@@ -18,9 +18,9 @@ before changing anything.
   published exception is the signature table.
 - **Never commit an address without the pattern that recovers it.** A table row
   locks a scan result; it does not replace the scan.
-- **Commit scopes come from `cargo xtask scopes`.** That list and
-  `commitlint.config.js` are the same list. Omit the scope rather than invent
-  one.
+- **Commit scopes come from `cargo xtask scopes`.** It prints
+  `.github/commit-scopes.json`, the file the commit hook reads. Omit the scope
+  rather than invent one.
 
 ## Which repository a change belongs in
 

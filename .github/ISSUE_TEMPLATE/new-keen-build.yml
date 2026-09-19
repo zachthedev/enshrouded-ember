@@ -13,7 +13,7 @@ body:
         branch, one that arrived while the schedule was disabled, or one Ember
         refused to run against.
 
-        Two commands fill most of this form:
+        The commands below fill most of this form:
 
         ```sh
         cargo xtask server fetch

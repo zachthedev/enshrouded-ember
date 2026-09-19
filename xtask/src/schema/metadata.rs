@@ -1,4 +1,4 @@
-//! The record an extraction writes beside its seven dumps.
+//! The record an extraction writes beside its dumps.
 //!
 //! `build.json` exists so that nothing has to reopen a 22 MB image to learn
 //! which build a directory of dumps came from. `schema list` and `schema diff`
@@ -13,7 +13,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// The file name, beside the seven dumps.
+/// The file name, beside the dumps.
 pub const FILE: &str = "build.json";
 
 /// What one extraction was taken from, and when.

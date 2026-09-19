@@ -1,0 +1,14 @@
+[
+  "loader",
+  "sdk",
+  "holistic",
+  "kfc",
+  "enshrouded",
+  "sigs",
+  "platform",
+  "testkit",
+  "xtask",
+  "deps",
+  "ci",
+  "release"
+]

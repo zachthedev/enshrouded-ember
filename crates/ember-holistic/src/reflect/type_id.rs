@@ -94,7 +94,7 @@ macro_rules! component_id {
 mod tests {
     use super::TypeId;
 
-    /// The ids the descriptor table carries for five known component types.
+    /// The ids the descriptor table carries for known component types.
     ///
     /// Each expected value is read off the server's own table, so the test
     /// judges the hash rather than recording what this code returns.

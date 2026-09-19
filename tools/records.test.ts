@@ -356,7 +356,7 @@ function shortDigest(): unknown {
 describe("the committed digest record", () => {
   /**
    * Every row is read by `status`, `emit`, `push` and `pull`, and a row that
-   * does not parse stops all four. A hand edit is the way one gets in, and
+   * does not parse stops each of them. A hand edit is the way one gets in, and
    * nothing else in the gate reads the committed file.
    */
   test("every committed row parses, one row per manifest", async () => {

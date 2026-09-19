@@ -28,7 +28,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
+      # This job pushes nothing, so the job token does not stay in the checkout
+      # for the steps that follow it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -42,6 +46,30 @@ jobs:
       - uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           tool: ${{ steps.cargo-tools.outputs.list }}
+      # Neither runner image puts a Go on PATH that the pinned actionlint builds
+      # with, so the Go release is pinned here. It has to meet the minimum
+      # actionlint's go.mod names. No go.sum exists here for a cache to key on.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.8
+          cache: false
+      # GOBIN puts every binary in one directory, which then goes on PATH. A
+      # failed install stops this step, rather than the gate reporting the tool
+      # missing later.
+      - name: Install the pinned Go tools
+        shell: pwsh
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP 'go-tools'
+          $env:GOBIN = $bin
+          $tools = Get-Content .github/go-tools |
+              Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() }
+          foreach ($tool in $tools) {
+              go install $tool
+              if ($LASTEXITCODE -ne 0) {
+                  throw "go install $tool exited $LASTEXITCODE"
+              }
+          }
+          $bin >> $env:GITHUB_PATH
       - run: bun install --frozen-lockfile
       - run: cargo xtask check
 
@@ -53,6 +81,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.13

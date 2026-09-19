@@ -13,18 +13,21 @@ cd enshrouded-ember
 cargo command. A C toolchain is needed for MinHook, the hook engine; on Windows
 that is Visual Studio Build Tools.
 
-The gate calls five tools rustup does not ship. `.github/cargo-tools` pins their
-versions and is the only place those numbers live, so this installs what
-continuous integration installs:
+The gate calls tools that rustup does not install. `.github/cargo-tools` pins
+the crates.io packages among them, and `.github/go-tools` pins the Go programs,
+which need [Go](https://go.dev) to install. The versions live in those files and
+nowhere else, so this installs what continuous integration installs:
 
 ```powershell
 cargo install --locked @(Get-Content .github/cargo-tools | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })
+Get-Content .github/go-tools | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() } | ForEach-Object { go install $_ }
 ```
 
 On a shell without PowerShell:
 
 ```sh
 cargo install --locked $(grep -v '^#' .github/cargo-tools | grep .)
+grep -v '^#' .github/go-tools | grep . | xargs -n 1 go install
 ```
 
 [Bun](https://bun.sh) runs the repository's own tooling. Install the hooks and
@@ -114,35 +117,10 @@ derived data, stays under `.cache`, and is never committed.
 cargo xtask check
 ```
 
-Eleven steps, in order, stopping at the first failure:
-
-```text
-fmt        cargo fmt --check
-taplo      taplo fmt --check
-clippy     cargo clippy --workspace --all-targets -- -D warnings
-tests      cargo nextest run --workspace
-doctests   cargo test --workspace --doc
-deny       cargo deny check
-machete    cargo machete crates xtask
-audit      cargo audit
-prettier   bunx --no-install --bun prettier --check
-typecheck  bunx --no-install --bun tsc --noEmit
-tools      bun test tools
-```
-
-`taplo` reads `.taplo.toml` for the files it covers. `prettier` covers `.md`,
-`.yml`, `.yaml`, `.json`, `.js`, `.mjs`, `.cjs` and `.ts`.
-
-`typecheck` and `tools` cover `tools/`, which holds the build watcher and the
-archive client. Bun strips types rather than checking them, so without
-`typecheck` the gate would run TypeScript whose types nothing reads.
-
-`doctests` runs whether or not `cargo-nextest` is installed, because
-`cargo nextest` runs none of them.
-
-`tests` falls back to `cargo test --workspace` when `cargo-nextest` is absent,
-and the summary says which one ran. Any other missing tool stops the gate and
-names itself, rather than being skipped.
+It runs the steps in the gate table in
+[CONTRIBUTING.md](../CONTRIBUTING.md#the-gate), in order, stopping at the first
+failure. That section also says what each step covers and what the gate does
+when a tool is missing.
 
 `pre-push` runs the same command, and so does continuous integration.
 
@@ -166,9 +144,10 @@ how a mod repository keeps its fetched server under its own tree.
 
 ## The build watcher and the archive
 
-`tools/` holds two Bun scripts. `build-watch.yml` runs the watcher hourly, then
-has the archive client ask the bucket whether the build the public branch names
-is archived, and archives it when it is not.
+`tools/` holds the Bun scripts behind the build watcher and the archive.
+`build-watch.yml` runs the watcher hourly, then has the archive client ask the
+bucket whether the build the public branch names is archived, and archives it
+when it is not.
 
 `watch-builds.ts` reads the output of SteamCMD `app_info_print` and appends a
 row to `data/steam-builds.jsonl` when a branch build id or a depot manifest gid
@@ -212,11 +191,11 @@ The sweep runs after the answer is handed on, so a historical build that has
 gone missing never holds back the one build that can still be archived.
 
 The archive job fetches a build with SteamCMD, the same tool and the same pinned
-container the watcher already uses for app info, narrowed to the two Keen files
-with `sDepotDownloadFileFilter`. That costs about 10 MB over the wire rather
-than the depot's 3.7 GB. A Linux SteamCMD selects depots by client platform and
-this depot declares `oslist windows`, so the fetch forces the platform; without
-that it writes nothing and reports `Missing configuration`.
+container the watcher already uses for app info, narrowed to the Keen files the
+archive keeps with `sDepotDownloadFileFilter`. That costs about 10 MB over the
+wire rather than the depot's 3.7 GB. A Linux SteamCMD selects depots by client
+platform and this depot declares `oslist windows`, so the fetch forces the
+platform; without that it writes nothing and reports `Missing configuration`.
 
 `app_update` takes no manifest parameter and always fetches the head of the
 branch, so `archive emit` reads the manifest gid out of the app manifest the
@@ -239,7 +218,7 @@ table matches on that revision and no Steam field carries it. `--revision` and
 **A historical manifest needs DepotDownloader, run by hand under a real Steam
 account.** `app_update` cannot ask for one and an anonymous session is refused
 one, so a build missed while its manifest was current is recovered that way
-rather than by continuous integration. That is how the four backfilled builds
+rather than by continuous integration. That is how the backfilled builds
 arrived, and `archive record` reads DepotDownloader's provenance too. A build
 recovered by hand reaches the bucket by hand too: `archive record` for its row,
 then `archive push` with the write token in the environment.

@@ -1,16 +1,16 @@
 //! The single gate.
 //!
 //! `CONTRIBUTING.md`, continuous integration and the pre-push hook all call
-//! `cargo xtask check` and nothing else, which is what keeps the three from
-//! drifting apart. The steps run in order and the run stops at the first
-//! failure, naming the step.
+//! `cargo xtask check` and nothing else, which is what keeps them from drifting
+//! apart. The steps run in order and the run stops at the first failure, naming
+//! the step.
 //!
 //! A tool that is not installed is reported by name with the command that
 //! installs it, and the gate stops there. It is never skipped quietly, because
 //! a gate that reports a pass for a step it did not run is worse than no gate.
 //!
 //! Every child runs with this crate's own build metadata removed from its
-//! environment. Cargo sets `CARGO_PKG_NAME` and sixteen siblings for a binary it
+//! environment. Cargo sets `CARGO_PKG_NAME` and its siblings for a binary it
 //! launches, and `cargo xtask check` is launched that way. `cargo-machete` reads
 //! `CARGO_PKG_NAME` to decide whether its first argument is its own subcommand
 //! name, so a child that inherits it reads `machete` as a directory to scan,
@@ -27,7 +27,7 @@ use crate::ui::{Mark, Row, Ui};
 /// One step of the gate.
 pub(crate) struct Step {
     /// The name the result row carries.
-    name: &'static str,
+    pub(crate) name: &'static str,
     /// The executable that must be on `PATH` for the step to run.
     requires: &'static str,
     /// How to install it when it is missing.
@@ -42,7 +42,7 @@ pub(crate) struct Step {
 }
 
 /// Every step, in the order they run.
-pub(crate) const STEPS: [Step; 11] = [
+pub(crate) const STEPS: [Step; 13] = [
     Step {
         name: "fmt",
         requires: "cargo-fmt",
@@ -107,6 +107,22 @@ pub(crate) const STEPS: [Step; 11] = [
         name: "tools",
         requires: "bun",
         install: "install Bun from https://bun.sh",
+        package: None,
+    },
+    Step {
+        name: "actionlint",
+        requires: "actionlint",
+        // The version is here and in .github/go-tools, and a test asserts the
+        // two agree. actionlint is on neither crates.io nor
+        // taiki-e/install-action, so it cannot sit in .github/cargo-tools
+        // beside the rest.
+        install: "go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+        package: None,
+    },
+    Step {
+        name: "zizmor",
+        requires: "zizmor",
+        install: "cargo install --locked zizmor",
         package: None,
     },
 ];
@@ -310,9 +326,59 @@ fn invoke(name: &str, root: &Path) -> Result<(Outcome, Option<Output>)> {
         // run TypeScript that does not typecheck and never say so.
         "typecheck" => run_one(root, "bunx", &TYPECHECK_ARGS, "tools/".to_string(), None),
         "tools" => run_one(root, "bun", &TOOLS_TEST_ARGS, "bun test".to_string(), None),
+        "actionlint" => run_one(
+            root,
+            "actionlint",
+            &ACTIONLINT_ARGS,
+            ".github/workflows".to_string(),
+            None,
+        ),
+        "zizmor" => run_one(
+            root,
+            "zizmor",
+            &ZIZMOR_ARGS,
+            ".github/workflows, dependabot.yml".to_string(),
+            None,
+        ),
         other => unreachable!("no step named {other}"),
     }
 }
+
+/// The actionlint command.
+///
+/// No path argument: actionlint resolves the enclosing git repository and
+/// reads its `.github/workflows`. It takes files rather than directories, so
+/// naming the directory would be a read error rather than a narrowing.
+///
+/// The empty flags turn off the external analyzers. actionlint runs shellcheck
+/// and pyflakes when it finds them on `PATH` and says nothing at all when it
+/// does not, and `ubuntu-latest` carries shellcheck while `windows-latest` does
+/// not. Left on, the matrix legs check different things and the quiet leg
+/// reports a pass for an analysis it never ran.
+const ACTIONLINT_ARGS: [&str; 2] = ["-shellcheck=", "-pyflakes="];
+
+/// The zizmor command.
+///
+/// The paths are named so the audit covers what the row says it covers and
+/// nothing a walk of the tree happens to reach.
+///
+/// `--strict-collection` makes a file zizmor cannot parse a failure. Without it
+/// zizmor logs a warning, drops the file, and reports no findings for a
+/// workflow it never read, which a byte order mark at the top of the file is
+/// enough to cause.
+///
+/// `--offline` keeps it from needing a GitHub token, so a runner and a laptop
+/// report the same findings. `--config` names the committed configuration, so
+/// `ZIZMOR_CONFIG` in the environment cannot swap it for another.
+const ZIZMOR_ARGS: [&str; 7] = [
+    "--no-progress",
+    "--offline",
+    "--strict-collection",
+    "--config",
+    ".github/zizmor.yml",
+    ".github/workflows",
+    ".github/dependabot.yml",
+];
 
 /// The typecheck command.
 ///
@@ -403,40 +469,23 @@ fn report(ui: &Ui, rows: &[Row], failed: Option<&str>, output: Option<&Output>) 
 
 /// Whether an executable is reachable through `PATH`.
 ///
-/// Windows spells an executable with an extension from `PATHEXT`, so the lookup
-/// tries each one. A missing tool has to be told apart from a tool that ran and
-/// failed, and an operating-system error from spawning is not specific enough.
+/// A missing tool has to be told apart from a tool that ran and failed, and an
+/// operating-system error from spawning is not specific enough. `which` applies
+/// `PATHEXT` on Windows and the executable bit elsewhere.
 fn on_path(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    let extensions: Vec<String> = std::env::var("PATHEXT").map_or_else(
-        |_| vec![String::new()],
-        |value| {
-            std::iter::once(String::new())
-                .chain(value.split(';').map(str::to_lowercase))
-                .collect()
-        },
-    );
-    std::env::split_paths(&path).any(|dir| {
-        extensions.iter().any(|extension| {
-            let mut name = program.to_string();
-            name.push_str(extension);
-            dir.join(name).is_file()
-        })
-    })
+    which::which(program).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CRATE_ENV, DOCTEST_ARGS, MACHETE_DIRS, STEPS, TOOLS_TEST_ARGS, TYPECHECK_ARGS, launcher,
-        on_path, prettier_args,
+        ACTIONLINT_ARGS, CRATE_ENV, DOCTEST_ARGS, MACHETE_DIRS, STEPS, TOOLS_TEST_ARGS,
+        TYPECHECK_ARGS, ZIZMOR_ARGS, launcher, on_path, prettier_args,
     };
     use crate::testutil::TestDir;
 
     #[test]
-    fn the_gate_runs_the_eleven_steps_in_the_documented_order() {
+    fn the_gate_runs_its_steps_in_the_documented_order() {
         let names: Vec<&str> = STEPS.iter().map(|step| step.name).collect();
         assert_eq!(
             names,
@@ -451,8 +500,69 @@ mod tests {
                 "audit",
                 "prettier",
                 "typecheck",
-                "tools"
+                "tools",
+                "actionlint",
+                "zizmor"
             ]
+        );
+    }
+
+    /// actionlint runs shellcheck and pyflakes when it finds them on `PATH` and
+    /// skips them in silence when it does not. `ubuntu-latest` carries
+    /// shellcheck and `windows-latest` does not, so without the flags the matrix
+    /// legs check different things and the quiet leg reports a pass for an
+    /// analysis it never ran.
+    #[test]
+    fn actionlint_takes_no_analysis_that_depends_on_what_the_host_has() {
+        for flag in ["-shellcheck=", "-pyflakes="] {
+            assert!(
+                ACTIONLINT_ARGS.contains(&flag),
+                "{flag} is absent, so that pass is left to whatever the host has: \
+                 {ACTIONLINT_ARGS:?}"
+            );
+        }
+    }
+
+    /// A bare `.` audits whatever a walk of the tree reaches, and the mods
+    /// repository vendors this one, so the same habit there audits Ember's
+    /// workflows from the wrong gate. The paths are named here to match.
+    #[test]
+    fn zizmor_names_its_paths_rather_than_walking_the_tree() {
+        assert!(
+            ZIZMOR_ARGS.iter().any(|arg| arg.starts_with(".github/")),
+            "zizmor names no path under .github, so it walks the whole tree: {ZIZMOR_ARGS:?}"
+        );
+        assert!(
+            !ZIZMOR_ARGS.contains(&"."),
+            "zizmor walks the whole tree: {ZIZMOR_ARGS:?}"
+        );
+        assert!(
+            ZIZMOR_ARGS.contains(&"--offline"),
+            "zizmor reaches for GitHub, so a laptop and a runner can disagree: {ZIZMOR_ARGS:?}"
+        );
+    }
+
+    /// zizmor drops a workflow it cannot parse, logs a warning, and reports no
+    /// findings, so a byte order mark at the top of a workflow hides every
+    /// finding in it. `--strict-collection` turns that into a failure.
+    ///
+    /// zizmor also reads its configuration from `ZIZMOR_CONFIG`. Naming the
+    /// committed file keeps an environment variable from changing what the
+    /// gate reports.
+    #[test]
+    fn zizmor_fails_on_an_unread_file_and_reads_only_the_committed_config() {
+        assert!(
+            ZIZMOR_ARGS.contains(&"--strict-collection"),
+            "zizmor skips a file it cannot parse and still passes: {ZIZMOR_ARGS:?}"
+        );
+        let config = ZIZMOR_ARGS
+            .iter()
+            .position(|argument| *argument == "--config")
+            .and_then(|at| ZIZMOR_ARGS.get(at + 1));
+        assert_eq!(
+            config,
+            Some(&".github/zizmor.yml"),
+            "zizmor takes its configuration from wherever the environment says: {ZIZMOR_ARGS:?}"
         );
     }
 

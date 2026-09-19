@@ -90,7 +90,8 @@ jobs:
       # the same bypass, which makes adding one a decision about main rather
       # than a decision about reading.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
+        # This job pushes, so the key stays in the checkout for the push.
+        with: # zizmor: ignore[artipacked]
           ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
 
       - name: Install Bun, pinned and checked
@@ -380,7 +381,8 @@ jobs:
       # cannot commit it. Every field the row carries is committed to a public
       # repository moments later, so none of it is secret and a job output is
       # the right place for it: an app id, a depot id, a build id, a manifest
-      # gid, a revision, a branch path, two file sizes and two SHA-256 digests.
+      # gid, a revision, a branch path, and each archived file's size and
+      # SHA-256 digest.
       #
       # A build that already has a row gets that row back once the fetched
       # bytes match it, and a fetch that disagrees with its row stops the job
@@ -445,7 +447,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
+        # This job pushes, so the key stays in the checkout for the push.
+        with: # zizmor: ignore[artipacked]
           ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
 
       - name: Install Bun, pinned and checked

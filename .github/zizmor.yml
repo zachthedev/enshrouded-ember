@@ -1,0 +1,12 @@
+# The threshold this repository sets. Every other audit runs at zizmor's
+# defaults, and a policy test allowlists each inline zizmor ignore comment in
+# the workflows, so nothing else answers a finding without review.
+rules:
+  # zizmor asks for seven days by default. The project standard is three, which
+  # is the window that catches almost every package published and then pulled
+  # while still letting a legitimate release land in the same week. A shorter
+  # cooldown still fails. A cooldown block removed entirely passes this audit,
+  # so a policy test asserts every ecosystem carries one.
+  dependabot-cooldown:
+    config:
+      days: 3
