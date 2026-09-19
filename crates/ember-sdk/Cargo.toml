@@ -13,10 +13,9 @@ authors.workspace = true
 # keeps `cargo machete` quiet without dropping the declaration, and a name
 # leaves the list when code starts using it.
 ignored = [
-    "ember-enshrouded",
-    "ember-holistic",
     "ember-platform",
     "ember-sigs",
+    "semver",
     "serde",
     "serde_json",
     "thiserror",
@@ -28,6 +27,7 @@ ember-enshrouded.workspace = true
 ember-holistic.workspace = true
 ember-platform.workspace = true
 ember-sigs.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

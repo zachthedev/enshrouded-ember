@@ -23,3 +23,5 @@ pub mod save;
 pub mod session;
 pub mod targets;
 pub mod ui;
+
+pub use error::{GameError, Result};
