@@ -17,8 +17,15 @@ env:
 # no pull request and no cooldown; a commit cannot. Dependabot bumps the hash
 # and keeps the version comment current.
 jobs:
+  # The pre-push hook runs this gate on whichever host a contributor uses. Code
+  # behind cfg(windows) or its inverse builds on one host only, so both run it.
   gate:
-    runs-on: windows-latest
+    strategy:
+      # A failure on one host says nothing about the other, so both legs finish.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,30 +44,6 @@ jobs:
           tool: ${{ steps.cargo-tools.outputs.list }}
       - run: bun install --frozen-lockfile
       - run: cargo xtask check
-
-  # The resolution path carries no cfg(windows), and every Linux backend is a
-  # stub that returns Unsupported. Both have to keep compiling on a host that
-  # has no Windows API at all.
-  linux:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo check --workspace
-      # ember-kfc reads container files and touches no operating system, so its
-      # whole offline suite runs here. cargo check --workspace builds zstd-sys,
-      # which is C; the ubuntu runner image ships the toolchain for it.
-      - run:
-          cargo test --package ember-sigs --package ember-platform --package
-          ember-kfc
-
-  deny:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
 
   commits:
     runs-on: ubuntu-latest

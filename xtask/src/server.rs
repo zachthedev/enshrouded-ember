@@ -841,6 +841,10 @@ mod tests {
     /// server is stale: the file goes, the answer says what the pid really is,
     /// and nothing is signaled. The test process itself is the live process
     /// that is not the server.
+    ///
+    /// Only the Windows backend reads a live process's image. The backend on
+    /// any other host claims nothing, so the case runs on Windows alone.
+    #[cfg(windows)]
     #[test]
     fn a_live_pid_that_is_not_the_server_is_a_stale_file() {
         let dir = TestDir::new("stale-pid");
@@ -868,6 +872,10 @@ mod tests {
 
     /// A pid file naming this test process against this test binary is the
     /// server, held open, and the file stays.
+    ///
+    /// Only the Windows backend holds a live process open, so the case runs
+    /// on Windows alone.
+    #[cfg(windows)]
     #[test]
     fn a_live_pid_running_the_expected_image_is_ours() {
         let dir = TestDir::new("own-pid");
