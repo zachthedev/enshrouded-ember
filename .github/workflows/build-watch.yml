@@ -24,11 +24,15 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # Keyed by ref so a workflow_dispatch on a branch cannot cancel a pending
-  # scheduled run, which would consume an hour of the archiving window.
-  group: build-watch-${{ github.ref }}
-  cancel-in-progress: false
+# Concurrency is per job rather than per workflow. The archive job waits for a
+# maintainer's approval, and a run holding a workflow-level group holds it for
+# that whole wait, which stops the watcher from reading Steam at all. A build
+# could then move while the approval pended, and the fetch after the approval
+# would return the newer one, which the provenance check refuses. The build
+# that was waiting is then past its manifest and gone.
+#
+# Each group below covers one race, and every one is keyed by ref so a
+# workflow_dispatch on a branch cannot cancel a pending scheduled run.
 
 env:
   APP_SERVER: "2278520"
@@ -63,6 +67,10 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Two watchers pushing the same record is the race here.
+    concurrency:
+      group: build-watch-watch-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
       issues: write
@@ -70,7 +78,6 @@ jobs:
       server_changed: ${{ steps.server.outputs.changed }}
       server_build_id: ${{ steps.server.outputs.build_id }}
       server_manifest_id: ${{ steps.server.outputs.manifest_id }}
-      server_needs_archive: ${{ steps.server.outputs.needs_archive }}
     steps:
       # Checked out over SSH with the ember-ci deploy key, because main
       # requires a pull request and a deploy key is the only actor that
@@ -209,6 +216,67 @@ jobs:
           echo "reading app $APP_CLIENT failed. The server's row was recorded." >&2
           exit 1
 
+  # Asks the bucket whether the build the public branch names is archived. It
+  # holds the read token and nothing else: no deploy key, no environment. That
+  # is what lets it run every hour without waiting on the approval the write
+  # token sits behind, so the archive job asks for that approval only when
+  # there is work.
+  #
+  # The bucket is the only thing that knows what it holds. steam-builds.jsonl
+  # says what Steam advertised and build-digests.jsonl pins what a build's
+  # files hash to, and neither is a receipt for an upload. A build is archived
+  # when it has a digest row and every file the row names is in the bucket at
+  # the recorded size, so a failure anywhere in the archive path leaves this
+  # answering true and the next run tries again.
+  #
+  # !cancelled() rather than the implicit success(), so a red watch job does
+  # not stop the archive. The client application is read in that job and steers
+  # nothing, and its read failing is what would otherwise hold the server's
+  # build out of the bucket until somebody noticed a message naming only the
+  # client. The manifest id is the real gate: it is written only after the
+  # server's block parses, so an empty one means there is nothing to ask about.
+  archive-status:
+    needs: watch
+    if: ${{ !cancelled() && needs.watch.outputs.server_manifest_id != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      needs_archive: ${{ steps.status.outputs.needs_archive }}
+    steps:
+      # This job pushes nothing, so the job token is not left in the
+      # checkout for the steps that follow it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Bun, pinned and checked
+        run: |
+          curl --fail --silent --show-error --location --output bun.zip \
+            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
+          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
+          unzip -q bun.zip
+          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # A bucket it could not ask fails this step and hands on nothing, so the
+      # archive job is skipped for the hour rather than started on a guess.
+      #
+      # The step also sweeps every other recorded build and fails when one of
+      # them has left the bucket. That happens after the answer is written, so
+      # a build nobody can refetch never holds back the one that can be.
+      - id: status
+        name: Ask the archive whether the build is there
+        env:
+          MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+          R2_ARCHIVE_READ_ACCESS_KEY_ID:
+            ${{ secrets.R2_ARCHIVE_READ_ACCESS_KEY_ID }}
+          R2_ARCHIVE_READ_SECRET_ACCESS_KEY:
+            ${{ secrets.R2_ARCHIVE_READ_SECRET_ACCESS_KEY }}
+        run: bun run tools/archive.ts status --manifest "$MANIFEST_ID"
+
   # The only job that holds the write token. The environment restricts it to
   # main, so a pull request cannot reach the credential even by landing a
   # workflow change, and it requires a maintainer's approval. This job will sit
@@ -217,20 +285,26 @@ jobs:
   # continuous integration and developers later run, and R2 has no versioning
   # to undo that with.
   #
-  # Gated on the archive's own state rather than on whether this run saw a
-  # change. steam-builds.jsonl says what Steam advertised and
-  # build-digests.jsonl says what was actually stored, and only the second can
-  # answer whether the work still needs doing. A gate on the first would let a
-  # transient failure here go unretried, because the next run reads a record
-  # that already says the build was seen.
+  # Gated on what the bucket holds rather than on whether this run saw a
+  # change, so a build that was seen and not archived is tried again every
+  # hour until it is.
   archive:
-    needs: watch
+    needs: [watch, archive-status]
+    # The manifest id is restated rather than inherited from the job above.
+    # It names the directory the fetch fills and the keys the upload writes, so
+    # the job that uses it is the job that checks it.
     if: >-
-      needs.watch.outputs.server_needs_archive == 'true' &&
-      needs.watch.outputs.server_manifest_id != ''
+      ${{ !cancelled() && needs.archive-status.outputs.needs_archive == 'true'
+      && needs.watch.outputs.server_manifest_id != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: archive-write
+    # One writer at a time. The refusal that stops an overwrite is a check
+    # followed by a write, so two runs uploading the same key is the window it
+    # cannot close.
+    concurrency:
+      group: build-watch-archive-${{ github.ref }}
+      cancel-in-progress: false
     # Reads the checkout and nothing else. This job pushes nothing, so it needs
     # no write to the repository and carries no deploy key. What it does hold
     # is the credential that can overwrite an archived binary, and keeping
@@ -240,7 +314,12 @@ jobs:
     outputs:
       row: ${{ steps.row.outputs.row }}
     steps:
+      # This job pushes nothing, and it runs a container and third-party code
+      # with the write credential in reach, so the job token does not stay in
+      # the checkout beside them.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Bun, pinned and checked
         run: |
@@ -302,6 +381,10 @@ jobs:
       # repository moments later, so none of it is secret and a job output is
       # the right place for it: an app id, a depot id, a build id, a manifest
       # gid, a revision, a branch path, two file sizes and two SHA-256 digests.
+      #
+      # A build that already has a row gets that row back once the fetched
+      # bytes match it, and a fetch that disagrees with its row stops the job
+      # here, before anything reaches the bucket.
       - id: row
         name: Hash the files and build the digest row
         env:
@@ -314,11 +397,10 @@ jobs:
             --build "$BUILD_ID"
 
       # The upload comes before the row is committed, and the commit happens in
-      # a job that holds no archive credential. A row committed for a build
-      # that never reached the bucket would tell the next run the work was
-      # done. push is idempotent: it skips an object whose size already matches
-      # the row, so a run that uploaded and then failed before the row landed
-      # converges on the next pass rather than refusing or overwriting.
+      # a job that holds no archive credential. push is idempotent: it skips an
+      # object that already hashes to the row, so a run that uploaded and then
+      # failed before the row landed converges on the next pass rather than
+      # refusing or overwriting.
       - name: Upload to the archive
         env:
           MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
@@ -328,8 +410,8 @@ jobs:
           R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY:
             ${{ secrets.R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY }}
         run: |
-          # The row is not in the committed record yet, so push is pointed at
-          # the one this job just built.
+          # The committed record may not hold this row yet, so push is pointed
+          # at the one this job handed on.
           printf '%s\n' "$ROW" > row.jsonl
           bun run tools/archive.ts push \
             --dir ".cache/archive/$MANIFEST_ID" \
@@ -341,15 +423,24 @@ jobs:
   # deploy key, so neither sits beside the other. A case asserts both halves.
   #
   # If this job fails, the objects are in the bucket and the row is not
-  # committed. That is the state the pipeline converges out of rather than the
-  # one it used to loop in: `needs_archive` stays true, so the next scheduled
-  # run fetches again, rebuilds the same row, finds every object already
-  # present at the recorded size and uploads nothing, and retries this commit.
-  # The irreplaceable half is already safe while that repeats.
+  # committed. archive-status still answers true, because a build with no row
+  # is not archived, so the next scheduled run fetches again, rebuilds the
+  # row, finds every object already holding the recorded bytes and uploads
+  # nothing, and retries this commit. The irreplaceable half is already safe
+  # while that repeats.
+  #
+  # A build that already had a row appends nothing and commits nothing here,
+  # which is green.
   commit-digest:
     needs: [watch, archive]
+    if: ${{ !cancelled() && needs.archive.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The other pusher. A rebase handles a race with the watcher, and this
+    # keeps two of these from racing each other.
+    concurrency:
+      group: build-watch-commit-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:

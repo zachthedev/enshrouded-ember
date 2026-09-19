@@ -2,18 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  appendRecord,
-  BuildDigestRecord,
-  readRecords,
-  SteamBuildRecord,
-} from "./records.ts";
+import { readRecords, SteamBuildRecord } from "./records.ts";
 import {
   AppInfoError,
   identityKey,
   lastRecordFor,
   movedBranches,
-  needsArchive,
   parseAppInfo,
   recordIfChanged,
   sliceAppBlock,
@@ -440,10 +434,9 @@ describe("stepOutputs", () => {
   const outputs = (
     result: WatchResult,
     depot: string | undefined,
-    archiveMissing: boolean,
   ): Record<string, string> =>
     Object.fromEntries(
-      stepOutputs(result, depot, archiveMissing).map((line) => {
+      stepOutputs(result, depot).map((line) => {
         const at = line.indexOf("=");
         return [line.slice(0, at), line.slice(at + 1)];
       }),
@@ -457,7 +450,7 @@ describe("stepOutputs", () => {
    */
   test("a beta branch moving does not read as the public branch moving", () => {
     const previous = { ...record, branches: { ...record.branches, beta: "1" } };
-    const out = outputs({ record, previous, changed: true }, "2278521", false);
+    const out = outputs({ record, previous, changed: true }, "2278521");
     expect(out["branches_moved"]).toBe("beta");
     expect(out["public_moved"]).toBe("false");
     expect(out["build_id"]).toBe("23178631");
@@ -468,7 +461,7 @@ describe("stepOutputs", () => {
       ...record,
       branches: { ...record.branches, public: "23000000" },
     };
-    const out = outputs({ record, previous, changed: true }, "2278521", false);
+    const out = outputs({ record, previous, changed: true }, "2278521");
     expect(out["public_moved"]).toBe("true");
     expect(out["build_id"]).toBe("23178631");
     expect(out["manifest_id"]).toBe("2174935030716737236");
@@ -480,23 +473,24 @@ describe("stepOutputs", () => {
    */
   test("a depot with no public manifest is refused rather than emitted empty", () => {
     expect(() =>
-      stepOutputs({ record, previous: null, changed: true }, "9999999", false),
+      stepOutputs({ record, previous: null, changed: true }, "9999999"),
     ).toThrow(AppInfoError);
   });
 
   test("no depot named emits an empty manifest id", () => {
-    const out = outputs(
-      { record, previous: null, changed: true },
-      undefined,
-      false,
-    );
+    const out = outputs({ record, previous: null, changed: true }, undefined);
     expect(out["manifest_id"]).toBe("");
   });
 
-  test("needs_archive is carried through as its own output", () => {
-    const result = { record, previous: null, changed: true };
-    expect(outputs(result, "2278521", true)["needs_archive"]).toBe("true");
-    expect(outputs(result, "2278521", false)["needs_archive"]).toBe("false");
+  /**
+   * The watch job holds no archive credential, so it cannot know what the
+   * bucket holds, and an answer it gave would come from a record that pins
+   * digests rather than one that proves an upload. The archive job reads that
+   * answer from the job that asks the bucket, and from nowhere else.
+   */
+  test("the watcher hands on no answer about the archive", () => {
+    const out = outputs({ record, previous: null, changed: true }, "2278521");
+    expect(Object.keys(out).filter((name) => /archive/.test(name))).toEqual([]);
   });
 
   /**
@@ -507,63 +501,8 @@ describe("stepOutputs", () => {
     for (const line of stepOutputs(
       { record, previous: null, changed: true },
       "2278521",
-      false,
     )) {
       expect(line).not.toMatch(/[\r\n]/);
     }
-  });
-});
-
-describe("needsArchive", () => {
-  /** A digest row of the shape the record holds. */
-  const digestRow = {
-    manifestId: "2174935030716737236",
-    buildId: "23178631",
-    appId: 2278520,
-    depotId: 2278521,
-    revision: 1024233,
-    branch: "^/game38/branches/ea_update_08",
-    archivedAt: "2026-09-18",
-    files: {
-      "enshrouded_server.exe": { bytes: 3, sha256: "a".repeat(64) },
-      "enshrouded_server.kfc": { bytes: 3, sha256: "b".repeat(64) },
-    },
-  };
-
-  /**
-   * This is what the archive job gates on. Gating on whether the observation
-   * changed meant a run that observed a build and then failed to archive it
-   * was never retried, because the next run saw no change and skipped the job
-   * for good. The manifest goes stale in the meantime and cannot be fetched
-   * again without a Steam login.
-   */
-  test("a manifest with no digest row still needs archiving", async () => {
-    const path = join(await sandbox(), "build-digests.jsonl");
-    expect(await needsArchive("2174935030716737236", path)).toBe(true);
-  });
-
-  test("a manifest that already has a digest row does not", async () => {
-    const path = join(await sandbox(), "build-digests.jsonl");
-    await appendRecord(path, BuildDigestRecord, digestRow);
-    expect(await needsArchive("2174935030716737236", path)).toBe(false);
-  });
-
-  /**
-   * The retry is the whole point: the observation record saying the build was
-   * seen must not stop the archive from being attempted again.
-   */
-  test("a row for another manifest does not satisfy this one", async () => {
-    const path = join(await sandbox(), "build-digests.jsonl");
-    await appendRecord(path, BuildDigestRecord, {
-      ...digestRow,
-      manifestId: "954904204024183479",
-    });
-    expect(await needsArchive("2174935030716737236", path)).toBe(true);
-  });
-
-  test("no manifest named needs nothing archived", async () => {
-    const path = join(await sandbox(), "build-digests.jsonl");
-    expect(await needsArchive(undefined, path)).toBe(false);
-    expect(await needsArchive("", path)).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readdir } from "node:fs/promises";
-import { DESTINATION } from "./archive.ts";
+import { DESTINATION, NEEDS_ARCHIVE } from "./archive.ts";
 import { ARCHIVE_FILES } from "./records.ts";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import { join } from "node:path";
 interface Workflow {
   readonly on?: Record<string, unknown>;
   readonly env?: Record<string, unknown>;
+  readonly concurrency?: Record<string, unknown>;
   readonly jobs?: Record<string, Record<string, unknown>>;
 }
 
@@ -273,6 +274,210 @@ describe("the workflows", () => {
             "environment: archive-write",
         ).toBe(inFile);
       }
+    }
+  });
+
+  /**
+   * The archive job waits on a maintainer's approval every time it starts, so
+   * what starts it has to answer without waiting on one. One job hands on
+   * `needs_archive`, and it asks the bucket with the read token alone: no
+   * write secret, no deploy key and no environment, so the hourly run never
+   * sits in `waiting`. Every job holding a write secret starts on that answer,
+   * and a second job answering would mean something other than the bucket was
+   * deciding.
+   */
+  test("the archive job starts on the bucket's answer, which waits on no approval", () => {
+    let checked = 0;
+    for (const workflow of loaded) {
+      const jobs = workflow.parsed.jobs ?? {};
+      const deciders = Object.entries(jobs).filter(([, job]) =>
+        JSON.stringify(job["outputs"] ?? {}).includes(NEEDS_ARCHIVE),
+      );
+      for (const [jobName, job] of Object.entries(jobs)) {
+        const text = JSON.stringify(job);
+        if (!WRITE_SECRETS.some((secret) => text.includes(secret))) {
+          continue;
+        }
+        checked += 1;
+        expect(
+          deciders.map(([name]) => name),
+          `${workflow.name} job ${jobName} holds a write secret, and exactly ` +
+            "one job has to answer needs_archive",
+        ).toHaveLength(1);
+        const [deciderName, decider] = deciders[0] as [
+          string,
+          Record<string, unknown>,
+        ];
+        expect([job["needs"]].flat()).toContain(deciderName);
+        expect(
+          String(job["if"] ?? ""),
+          `${workflow.name} job ${jobName} does not start on ${deciderName}`,
+        ).toContain(`needs.${deciderName}.outputs.${NEEDS_ARCHIVE}`);
+
+        const deciderText = JSON.stringify(decider);
+        expect(
+          decider["environment"],
+          `${deciderName} declares an environment, so every hourly run waits ` +
+            "on an approval",
+        ).toBeUndefined();
+        for (const secret of READ_SECRETS) {
+          expect(deciderText, `${deciderName} cannot ask the bucket`).toContain(
+            secret,
+          );
+        }
+        for (const secret of [...WRITE_SECRETS, PUSH_KEY_SECRET]) {
+          expect(
+            deciderText,
+            `${deciderName} answers every hour and holds ${secret}`,
+          ).not.toContain(secret);
+        }
+      }
+    }
+    expect(
+      checked,
+      "no job holds a write secret, so this case checked nothing",
+    ).toBeGreaterThan(0);
+  });
+
+  /**
+   * `actions/checkout` writes the job token into the checkout unless it is
+   * told not to. A job that pushes needs it there. A job that does not is
+   * running a container, a package install and third-party code beside a
+   * credential it never uses, and in the archive job that credential sits
+   * next to one that can overwrite an archived binary.
+   *
+   * Scoped to a workflow that holds a credential of its own, which is where
+   * one compromise reaches two of them.
+   */
+  test("a checkout keeps the job token only where a push needs it", () => {
+    let checked = 0;
+    for (const workflow of loaded) {
+      const secrets = [...READ_SECRETS, ...WRITE_SECRETS, PUSH_KEY_SECRET];
+      if (!secrets.some((secret) => workflow.text.includes(secret))) {
+        continue;
+      }
+      for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
+        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        const pushes = steps.some((step) => {
+          const script = (step as Record<string, unknown>)["run"];
+          return typeof script === "string" && /\bgit push\b/.test(script);
+        });
+        for (const step of steps) {
+          const uses = (step as Record<string, unknown>)["uses"];
+          if (
+            typeof uses !== "string" ||
+            !uses.startsWith("actions/checkout")
+          ) {
+            continue;
+          }
+          checked += 1;
+          const options = ((step as Record<string, unknown>)["with"] ??
+            {}) as Record<string, unknown>;
+          expect(
+            options["persist-credentials"],
+            `${workflow.name} job ${jobName} checks out ` +
+              (pushes
+                ? "for a push, so the token has to stay"
+                : "and leaves the job token in the workspace"),
+          ).toBe(pushes ? undefined : false);
+        }
+      }
+    }
+    expect(
+      checked,
+      "no job checks the repository out, so this case checked nothing",
+    ).toBeGreaterThan(0);
+  });
+
+  /**
+   * A job that waits for a maintainer's approval holds whatever concurrency
+   * group its run belongs to for the whole wait. At the workflow level that
+   * group covers the watcher too, so nothing reads Steam until somebody
+   * clicks, and a build that moves in the meantime is past its manifest by the
+   * time the fetch runs.
+   *
+   * Every group therefore sits on the job that needs it. A job that pushes
+   * needs one, because two pushers racing the same record is the other way
+   * this file loses work.
+   */
+  test("a workflow with an approval gate keeps concurrency on the jobs", () => {
+    let checked = 0;
+    for (const workflow of loaded) {
+      const jobs = Object.entries(workflow.parsed.jobs ?? {});
+      if (!jobs.some(([, job]) => job["environment"] !== undefined)) {
+        continue;
+      }
+      checked += 1;
+      expect(
+        workflow.parsed.concurrency,
+        `${workflow.name} holds a workflow-level concurrency group while one ` +
+          "of its jobs waits for an approval",
+      ).toBeUndefined();
+      for (const [jobName, job] of jobs) {
+        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        const pushes = steps.some((step) => {
+          const script = (step as Record<string, unknown>)["run"];
+          return typeof script === "string" && /\bgit push\b/.test(script);
+        });
+        if (!pushes && job["environment"] === undefined) {
+          continue;
+        }
+        expect(
+          (job["concurrency"] as { group?: string } | undefined)?.group,
+          `${workflow.name} job ${jobName} pushes or waits for an approval ` +
+            "with no concurrency group of its own",
+        ).toEqual(expect.any(String));
+      }
+    }
+    expect(
+      checked,
+      "no workflow has an approval gate, so this case checked nothing",
+    ).toBeGreaterThan(0);
+  });
+
+  /**
+   * A job gated on another job's outputs is skipped when that job goes red,
+   * because GitHub applies `success()` where no status function is written.
+   * The watch job reads the client application, which steers nothing and is
+   * allowed to fail the run, so the archive path has to say `!cancelled()` or
+   * a client-side failure stops the archive while the message names only the
+   * client.
+   */
+  test("every job gated on another job's outputs says !cancelled()", () => {
+    let checked = 0;
+    for (const workflow of loaded) {
+      for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
+        const gate = String(job["if"] ?? "");
+        if (!/needs\.[A-Za-z0-9_-]+\.(outputs|result)/.test(gate)) {
+          continue;
+        }
+        checked += 1;
+        expect(
+          gate,
+          `${workflow.name} job ${jobName} is gated on another job and takes ` +
+            "the implicit success(), so an unrelated failure skips it",
+        ).toContain("!cancelled()");
+      }
+    }
+    expect(
+      checked,
+      "no job is gated on another job, so this case checked nothing",
+    ).toBeGreaterThan(0);
+  });
+
+  /**
+   * `--unattested` records a build whose directory carries no evidence of
+   * which manifest it came from. That is a hand path, taken by a person who
+   * knows what the bytes are. Continuous integration fetches, so it always has
+   * the evidence, and a row it writes is never on anyone's word.
+   */
+  test("no workflow records a build on the caller's word", () => {
+    for (const workflow of loaded) {
+      expect(
+        workflow.text,
+        `${workflow.name} passes --unattested, so a row it writes rests on ` +
+          "whoever typed the gid",
+      ).not.toContain("--unattested");
     }
   });
 
