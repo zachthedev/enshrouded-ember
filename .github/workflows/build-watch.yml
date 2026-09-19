@@ -161,6 +161,11 @@ jobs:
       # Every value the body carries arrives through the environment rather
       # than pasted into the script, and reaches printf as an argument rather
       # than as a format string.
+      #
+      # The headings are the field labels in
+      # .github/ISSUE_TEMPLATE/new-keen-build.yml, and the two answers are
+      # options those dropdowns offer, so a machine-opened issue and a
+      # hand-filled one read as one document.
       - name: Open the build issue
         if: steps.server.outputs.public_moved == 'true'
         env:
@@ -170,13 +175,24 @@ jobs:
           CHANGE_NUMBER: ${{ steps.server.outputs.change_number }}
         run: |
           {
+            printf '### Steam build id\n\n%s\n\n' "$BUILD_ID"
+            printf '### How this build turned up\n\n'
+            printf 'Steam moved on the public branch, and the watcher opened this\n\n'
+            printf '### Can a client on this build still join a server on the one before?\n\n'
+            printf 'Not checked\n\n'
+            printf '### build.json\n\n'
+            printf 'Nothing has extracted this build yet.\n\n'
+            printf '### Anything else\n\n'
             printf 'App %s moved on its public branch.\n\n' "$APP_SERVER"
-            printf -- '- build id `%s`\n' "$BUILD_ID"
             printf -- '- depot %s manifest `%s`\n' "$DEPOT_SERVER" "$MANIFEST_ID"
             printf -- '- change number `%s`\n\n' "$CHANGE_NUMBER"
-            printf 'The archive job stores the executable under `build/%s/`.\n' "$MANIFEST_ID"
-            printf 'Fill the revision and the fingerprint from the fetched build, '
-            printf 'and resolve every signature row against it before anything ships.\n'
+            printf 'The archive job stores the build under `build/%s/`.\n\n' "$MANIFEST_ID"
+            printf '### Before a row ships\n\n'
+            printf -- '- [ ] The build is archived, or its manifest already rolled\n'
+            printf -- '- [ ] `cargo xtask schema extract` ran against it\n'
+            printf -- '- [ ] `cargo xtask schema diff <old> <new>` is in a comment below\n'
+            printf -- '- [ ] Every signature row resolves against the real binary\n'
+            printf -- '- [ ] The support window moved, so the fifth build back drops out\n'
           } > issue-body.md
           gh issue create \
             --label build \
@@ -204,9 +220,9 @@ jobs:
   # Gated on the archive's own state rather than on whether this run saw a
   # change. steam-builds.jsonl says what Steam advertised and
   # build-digests.jsonl says what was actually stored, and only the second can
-  # answer whether the work still needs doing. Gating on the first meant any
-  # transient failure here was never retried, because the next run compared
-  # against a record that already said the build had been seen.
+  # answer whether the work still needs doing. A gate on the first would let a
+  # transient failure here go unretried, because the next run reads a record
+  # that already says the build was seen.
   archive:
     needs: watch
     if: >-

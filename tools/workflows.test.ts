@@ -551,8 +551,9 @@ describe("the workflows", () => {
   });
 
   /**
-   * The reader has to see an action whatever style it is written in, which is
-   * what the text-matching version it replaced could not do.
+   * The reader has to see an action whatever style it is written in. A
+   * line-anchored text match cannot, which is why the reader parses the
+   * document.
    */
   test("the reader finds an action written in flow style", () => {
     const parsed = Bun.YAML.parse(

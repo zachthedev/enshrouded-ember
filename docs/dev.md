@@ -10,8 +10,8 @@ cd enshrouded-ember
 ```
 
 `rust-toolchain.toml` pins Rust 1.98.1, and rustup installs it on the first
-cargo command. A C toolchain is needed for the MinHook engine; on Windows that
-is Visual Studio Build Tools.
+cargo command. A C toolchain is needed for MinHook, the hook engine; on Windows
+that is Visual Studio Build Tools.
 
 The gate calls five tools rustup does not ship. `.github/cargo-tools` pins their
 versions and is the only place those numbers live, so this installs what
@@ -48,7 +48,7 @@ cargo xtask server fetch
 This pulls a dedicated server from SteamCMD into `.cache`, which is gitignored.
 Anonymous login works for app 2278520, so no credentials are involved.
 
-A build lands in a directory named for its Steam buildid, which is the key
+A build lands in a directory named for its Steam build id, which is the key
 Steam, SteamCMD and the depot manifest all speak:
 
 ```text
@@ -77,9 +77,9 @@ This reads the fetched server's executable and writes the reflection schema, the
 protocol registry, the UI event list, the descriptor and string tables and the
 program records into `.cache/schema/<buildid>/`.
 
-The buildid names the directory. It is not what the loader matches at run time:
+The build id names the directory. It is not what the loader matches at run time:
 Ember identifies a build by the CodeView fingerprint in the image itself,
-because the buildid is not readable from the running process.
+because the build id is not readable from the running process.
 
 **This step is required.** Nothing recovered from a Keen binary is committed to
 this repository: no schema dump, no string table, no protocol registry, no game
@@ -101,7 +101,7 @@ names a `LocaTagId`, so a developer reads the text here to find the id and
 commits the id alone.
 
 Only a client ships a localization table. The dedicated server carries none, so
-this step needs an installed client rather than a fetched server. The buildid
+this step needs an installed client rather than a fetched server. The build id
 naming the directory is the client's, read from its own Steam app manifest, and
 it is a different series from the dedicated server's.
 

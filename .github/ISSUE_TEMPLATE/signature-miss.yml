@@ -18,10 +18,21 @@ body:
     validations:
       required: true
   - type: input
+    id: ember_version
+    attributes:
+      label: Ember version
+      description: >
+        The release you installed, or the commit sha for a build from source. A
+        miss is a function of the version and the build together, so one
+        identifies nothing alone.
+      placeholder: "0.1.0, or 6f9be1d"
+    validations:
+      required: true
+  - type: input
     id: build_id
     attributes:
       label: Steam build id
-      description: The buildid of the Windows depot for app 2278520.
+      description: The build id of the Windows depot for app 2278520.
       placeholder: "23178631"
     validations:
       required: true
@@ -31,7 +42,8 @@ body:
       label: Revision
       description: >
         The number in the first 512 bytes of enshrouded_server.kfc, beside the
-        branch path and the build date.
+        branch path and the build date. The server prints it at startup as `Game
+        Version (SVN)`.
       placeholder: "1024233"
     validations:
       required: true
@@ -39,10 +51,10 @@ body:
     id: fingerprint
     attributes:
       label: Fingerprint
-      description: The CodeView RSDS GUID and age the loader matched on.
+      description: >
+        The CodeView RSDS GUID and age the loader matched on, as the startup
+        report names them. Leave it blank when the report names none.
       placeholder: "ae33b44863803d4eb31f31d4d84ae242 age 293"
-    validations:
-      required: true
   - type: textarea
     id: resolver_report
     attributes:
@@ -65,11 +77,20 @@ body:
         - Not stated in the report
     validations:
       required: true
-  - type: input
-    id: mods_disabled
+  - type: textarea
+    id: mods
     attributes:
-      label: Mods the miss disabled
-      description: The mod ids the report names, or none.
+      label: Mods loaded, in load order
+      description: >
+        One id and version per line, and mark the ones the report disabled. Each
+        mod declares the symbols it needs, so the set decides what had to
+        resolve. Write none when Ember loaded alone.
+      placeholder: |
+        private-chests 0.1.0  disabled
+        team 0.1.0
+      render: text
+    validations:
+      required: true
   - type: dropdown
     id: host
     attributes:

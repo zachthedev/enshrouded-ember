@@ -1,5 +1,19 @@
-blank_issues_enabled: true
+# Three forms cover the reports that have a shape, and every other kind of
+# conversation has a discussion category. An issue here is therefore always a
+# defect, which is what keeps the tracker readable.
+blank_issues_enabled: false
 contact_links:
+  - name: A question about writing a mod
+    url: https://github.com/zachthedev/enshrouded-ember/discussions/categories/q-a
+    about: >
+      The SDK surface, the hook chain, config, loading under Proton, or anything
+      the links below do not cover.
+  - name: An idea for the SDK
+    url: https://github.com/zachthedev/enshrouded-ember/discussions/categories/ideas
+    about: Propose it here first. It becomes an issue once the shape is settled.
   - name: zachthedev's mods, which load through Ember
     url: https://github.com/zachthedev/enshrouded-mods/issues
     about: Anything about how one of those mods behaves in game.
+  - name: A security problem
+    url: https://github.com/zachthedev/enshrouded-ember/blob/main/SECURITY.md
+    about: Report it privately. An issue is public the moment it is opened.
