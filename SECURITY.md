@@ -20,10 +20,12 @@ acts on it.
 
 ## What is supported
 
-No release is published yet, so `main` is the only supported version. A release
-supports the dedicated server build current at the time plus the four before it.
-A build outside that window is unsupported, and Ember refuses to run against it
-by design.
+The newest release on the
+[Releases page](https://github.com/zachthedev/enshrouded-ember/releases) is
+supported, and `main` is until the first one ships. The server builds a release
+covers are in the README's
+[Surviving game updates](README.md#surviving-game-updates). A build outside them
+is unsupported, and Ember refuses to run against it by design.
 
 ## In scope
 

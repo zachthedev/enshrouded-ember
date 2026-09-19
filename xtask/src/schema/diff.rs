@@ -1,10 +1,10 @@
 //! The delta between two extractions.
 //!
-//! The point of this command is one hour, not one afternoon. Enshrouded 1.0
-//! ships on 2026-10-15, and a native container permission feature in that build
-//! changes what this project should build. Every name carrying one of the
-//! [`WATCHLIST`] words is reported before anything else, so the answer is the
-//! first thing on the screen.
+//! The point of this command is one hour, not one afternoon. A Keen build can
+//! ship a native feature that changes what this project should build, such as
+//! container permissions. Every name carrying one of the [`WATCHLIST`] words is
+//! reported before anything else, so the answer is the first thing on the
+//! screen.
 //!
 //! Addresses are deliberately not compared. A descriptor's base moves with
 //! every relink, so a diff on addresses is all noise. What is compared is

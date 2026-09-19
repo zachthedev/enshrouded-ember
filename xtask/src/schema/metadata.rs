@@ -1,6 +1,6 @@
 //! The record an extraction writes beside its dumps.
 //!
-//! `build.json` exists so that nothing has to reopen a 22 MB image to learn
+//! `build.json` exists so that nothing has to reopen the server image to learn
 //! which build a directory of dumps came from. `schema list` and `schema diff`
 //! read it, and the build watcher can read it without a Keen binary on hand.
 //!

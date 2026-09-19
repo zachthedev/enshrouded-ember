@@ -6,9 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        A symbol Ember could not resolve goes in the signature miss form. How
-        one of zachthedev's mods behaves in game goes in the enshrouded-mods
-        repository.
+        A symbol Ember could not resolve goes in the signature miss form. How a
+        mod from the enshrouded-mods repository behaves in game goes there.
   - type: textarea
     id: what_happened
     attributes:

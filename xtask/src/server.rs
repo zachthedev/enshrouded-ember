@@ -9,8 +9,9 @@
 //! One set of files still lands in the build directory. The Steamworks client
 //! library resolves `logs` and `config` against the executable rather than the
 //! working directory, so a run leaves `logs/connection_log.txt` and friends
-//! beside `enshrouded_server.exe`. `server fetch --validate` restores anything
-//! that matters, and the loop writes nothing there itself.
+//! beside `enshrouded_server.exe`. Deleting the build directory and running
+//! `server fetch` again restores anything that matters, and the loop writes
+//! nothing there itself.
 //!
 //! The pid file is a hint, never an identity. Every command that reads it asks
 //! the operating system what the pid is running and compares that to the
@@ -41,10 +42,10 @@ const PID_FILE: &str = "server.pid";
 const LOG_FILE: &str = "server.log";
 
 /// Seconds to wait for a clean stop when none is named.
-const DEFAULT_STOP_TIMEOUT: u64 = 60;
+pub const DEFAULT_STOP_TIMEOUT: u64 = 60;
 
 /// Lines of log to print when none is named.
-const DEFAULT_TAIL: usize = 40;
+pub const DEFAULT_TAIL: usize = 40;
 
 /// How often a follow re-reads the log.
 const FOLLOW_INTERVAL: Duration = Duration::from_millis(500);
@@ -81,25 +82,13 @@ pub fn run(command: &ServerCommand, root: &DevRoot, ui: &Ui) -> Result<bool> {
             build,
             follow,
             lines,
-        } => logs(
-            root,
-            ui,
-            build.as_deref(),
-            *follow,
-            lines.unwrap_or(DEFAULT_TAIL),
-        ),
+        } => logs(root, ui, build.as_deref(), *follow, *lines),
         ServerCommand::Stop {
             build,
             timeout,
             force,
             send_break: _,
-        } => stop(
-            root,
-            ui,
-            build.as_deref(),
-            timeout.unwrap_or(DEFAULT_STOP_TIMEOUT),
-            *force,
-        ),
+        } => stop(root, ui, build.as_deref(), *timeout, *force),
     }
 }
 

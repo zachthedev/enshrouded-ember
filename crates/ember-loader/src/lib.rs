@@ -4,18 +4,17 @@
 //! imports, placed beside the executable, forwarding its exports to the real
 //! system copy while starting Ember on the side.
 //!
-//! The server imports 13 libraries and 344 functions. Three of those libraries
-//! sit outside the `KnownDLLs` list and can therefore be proxied: `POWRPROF.dll`
-//! (139 exports, all named), `IPHLPAPI.DLL` (313 exports, all named) and
-//! `dbghelp.dll` (268 exports, 16 of them ordinal only). `POWRPROF.dll` is the
-//! default, because no other public Enshrouded loader claims it and its exports
-//! are all named.
+//! Of the libraries the server imports, `POWRPROF.dll`, `IPHLPAPI.DLL` and
+//! `dbghelp.dll` sit outside the `KnownDLLs` list and can therefore be proxied.
+//! `POWRPROF.dll` is the default, because no other public Enshrouded loader
+//! claims it and its exports are all named. `dbghelp.dll` exports some
+//! functions by ordinal only.
 //!
 //! Forwarding covers every export of the library being stood in for, not only
 //! the handful the server imports, because anything else in the process may
 //! import the rest.
 //!
-//! Wine and Proton ship builtin copies of all three and prefer them, so a host
+//! Wine and Proton ship builtin copies of each and prefer them, so a host
 //! on Linux sets `WINEDLLOVERRIDES="powrprof=n,b"`.
 //!
 //! Development and continuous integration load this same library into a running
@@ -26,7 +25,8 @@
 //! `saveDirectory` and `logDirectory` point at the run directory beside it, but
 //! the Steamworks client library resolves its `logs` and `config` directories
 //! against the executable rather than the working directory, so its own files
-//! land there. `cargo xtask server fetch --validate` restores everything else.
+//! land there. Deleting the build directory and running
+//! `cargo xtask server fetch` again restores everything else.
 
 pub mod discovery;
 pub mod entry;

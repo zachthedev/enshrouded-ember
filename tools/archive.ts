@@ -22,22 +22,22 @@
  * editing that one file. Only the key pairs come from the environment.
  *
  * Whether a build is archived is asked of the bucket and never read from the
- * digest record. `status` asks with the read token every hour, and its answer
- * is what decides whether the archive job runs at all. It sweeps every other
- * recorded build in the same run, because the archive job can refetch the head
- * of the branch and nothing else.
+ * digest record. `status` asks with the read token on every scheduled run,
+ * and its answer is what decides whether the archive job runs at all. It
+ * sweeps every other recorded build in the same run, because the archive job
+ * can refetch the head of the branch and nothing else.
  *
  * `push` skips a key that already holds the recorded bytes and refuses one
  * that holds anything else, and that refusal is advisory rather than atomic.
- * R2 honors `If-None-Match: *` on a put, and Bun 1.3.13's S3 client exposes no
- * way to send it, so the check and the write are two requests. Two writers
- * racing the same key is the uncovered case, and `concurrency: build-watch` is
- * what keeps the scheduled job from being one of them.
+ * R2 honors `If-None-Match: *` on a put, and Bun's S3 client exposes no way to
+ * send it (https://github.com/oven-sh/bun/issues/17339), so the check and the
+ * write are two requests. Two writers racing the same key is the uncovered
+ * case, and the archive job's concurrency group in `build-watch.yml` is what
+ * keeps the scheduled job from being one of them.
  *
  * @example
  * ```sh
- * bun run tools/archive.ts verify --dir .cache/archive/2174935030716737236 \
- *   --manifest 2174935030716737236
+ * bun run tools/archive.ts verify --dir .cache/archive/<gid> --manifest <gid>
  * ```
  */
 
@@ -250,7 +250,7 @@ export async function fetchedManifest(
 
 /** What a build's resource container says about the content it was cut from. */
 export interface KfcVersion {
-  /** The content revision, which the supported-build table matches on. */
+  /** The content revision, which a supported-build row names for a reader. */
   readonly revision: number;
   /** The Subversion branch path the content came from. */
   readonly branch: string;
@@ -276,9 +276,10 @@ const KFC_VERSION_CAP = 512;
  * only reader on this side of the pipeline.
  *
  * Reading it here is what fills `revision` and `branch` on a row continuous
- * integration writes. They name the content a build was cut from, which is
- * what the supported-build table matches on, and no Steam field carries
- * either.
+ * integration writes. They name the content a build was cut from, so a person
+ * reading a supported-build row knows which build it describes, and no Steam
+ * field carries either. The loader matches on the image fingerprint, as the
+ * `ember-sigs` crate documents.
  *
  * @param path - The container to read.
  * @returns The revision and the branch, or null when the file is not a
@@ -482,8 +483,8 @@ export async function objectSize(
  * A build with no row is asked about under {@link ARCHIVE_FILES}, so every run
  * sends a request whatever the record says. The answer for such a build is
  * already settled, and asking is what exercises the credential: a token that
- * was revoked or scoped wrong is found in the hour it happens rather than at
- * the next upload.
+ * was revoked or scoped wrong is found on the next scheduled run rather than
+ * at the next upload.
  *
  * @param bucket - The client to ask. A test points one at a loopback server.
  * @param manifestId - The build to ask about.
@@ -1114,7 +1115,7 @@ export interface ArchiveSweep {
  * The archive job can only ever fetch the head of the branch, so it repairs
  * the current build and no other. The rest cannot be refetched from Steam at
  * all, which makes them the builds whose loss is absolute and the ones worth
- * looking at every hour.
+ * looking at on every run.
  *
  * @param bucket - The client to ask.
  * @param records - Every row in the digest record.
@@ -1145,7 +1146,7 @@ export async function sweepArchive(
  * Ask the bucket whether one build is archived, and tell the workflow.
  *
  * @remarks
- * The hourly gate on the archive job. It holds the read token and nothing
+ * The scheduled gate on the archive job. It holds the read token and nothing
  * else, so it answers without waiting on the approval the write token sits
  * behind, and the archive job asks for that approval only when there is work.
  *

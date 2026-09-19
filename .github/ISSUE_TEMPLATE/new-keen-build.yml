@@ -84,4 +84,4 @@ body:
         - label: "`cargo xtask schema extract` ran against it"
         - label: "`cargo xtask schema diff <old> <new>` is in a comment below"
         - label: Every signature row resolves against the real binary
-        - label: The support window moved, so the fifth build back drops out
+        - label: The support window moved, so its oldest build left it

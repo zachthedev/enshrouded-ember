@@ -12,9 +12,9 @@ This repository is in development. No release is published yet.
 
 ## What a mod author gets
 
-A mod is a `cdylib` that links `ember-sdk` and exports two C symbols. The host
-reads the version first, then the manifest, and runs the mod only once every
-symbol it declared is resolved.
+A mod is a `cdylib` that links `ember-sdk` and exports the C symbols
+`ember_sdk::declare` describes. The host runs the mod only once every symbol it
+declared is resolved.
 
 - **A lifecycle.** `Mod::load` runs after resolution and dependency ordering.
   `Mod::ready` runs once every hook is armed. Hooks and events register in
@@ -56,11 +56,11 @@ On Windows, Ember ships as a proxy library placed beside
 `enshrouded_server.exe`, named for a library the server already imports. It
 forwards every export to the real system copy and starts Ember on the side.
 
-The server imports 13 libraries and 344 functions. Three of them are outside the
-`KnownDLLs` list, so all three can be proxied: `POWRPROF.dll` (139 exports, all
-named), `IPHLPAPI.DLL` (313 exports, all named) and `dbghelp.dll` (268 exports,
-16 of them ordinal only). `POWRPROF.dll` is the default, because no other public
-Enshrouded loader claims it and its exports are all named.
+Of the libraries the server imports, `POWRPROF.dll`, `IPHLPAPI.DLL` and
+`dbghelp.dll` sit outside the `KnownDLLs` list, so each can be proxied.
+`POWRPROF.dll` is the default, because no other public Enshrouded loader claims
+it and its exports are all named. `dbghelp.dll` exports some functions by
+ordinal only.
 
 A proxy forwards every export of the library it stands in for, not only the ones
 the server imports, because anything else loaded into the process may import the
@@ -117,10 +117,11 @@ ember/
 
 ## Requirements
 
-- Rust 1.98.1, pinned in `rust-toolchain.toml`
+- Rust, at the release `rust-toolchain.toml` pins
 - A C toolchain, for MinHook, the hook engine. On Windows, Visual Studio Build
   Tools.
-- [Bun](https://bun.sh), for the repository's own tooling
+- [Bun](https://bun.sh), for the repository's own tooling, at the release
+  `.bun-version` pins
 
 ## License
 

@@ -265,7 +265,7 @@ describe("the workflows", () => {
    * The archive job waits on a maintainer's approval every time it starts, so
    * what starts it has to answer without waiting on one. One job hands on
    * `needs_archive`, and it asks the bucket with the read token alone: no
-   * write secret, no deploy key and no environment, so the hourly run never
+   * write secret, no deploy key and no environment, so a scheduled run never
    * sits in `waiting`. Every job holding a write secret starts on that answer,
    * and a second job answering would mean something other than the bucket was
    * deciding.
@@ -301,7 +301,7 @@ describe("the workflows", () => {
         const deciderText = JSON.stringify(decider);
         expect(
           decider["environment"],
-          `${deciderName} declares an environment, so every hourly run waits ` +
+          `${deciderName} declares an environment, so every scheduled run waits ` +
             "on an approval",
         ).toBeUndefined();
         for (const secret of READ_SECRETS) {
@@ -312,7 +312,7 @@ describe("the workflows", () => {
         for (const secret of [...WRITE_SECRETS, PUSH_KEY_SECRET]) {
           expect(
             deciderText,
-            `${deciderName} answers every hour and holds ${secret}`,
+            `${deciderName} answers on every scheduled run and holds ${secret}`,
           ).not.toContain(secret);
         }
       }
@@ -909,7 +909,248 @@ describe("the GitHub configuration", () => {
       ".github/zizmor.yml ignores or disables an audit outright",
     ).toEqual([]);
   });
+
+  /**
+   * The Bun release lives in `.bun-version` and nowhere else. setup-bun reads
+   * it through `bun-version-file`, and a job that fetches Bun by hand builds
+   * its download URL out of a shell variable that the same script sets from
+   * that file. A workflow that writes a release down itself holds a second
+   * copy, which the next bump leaves behind.
+   *
+   * A step that names the pin file and fetches something else is the shape
+   * this reads for: the release in the URL has to be a variable, and that
+   * variable has to be set from `.bun-version` in the same script.
+   *
+   * setup-bun falls back to `package.json`, and then to the newest release,
+   * when the file names nothing it can read, so the file has to hold one exact
+   * release.
+   */
+  test("every Bun release a workflow uses is read from .bun-version", async () => {
+    const pin = (
+      await Bun.file(
+        fileURLToPath(new URL("../.bun-version", import.meta.url)),
+      ).text()
+    ).trim();
+    expect(pin, ".bun-version holds what is not one exact release").toMatch(
+      /^\d+\.\d+\.\d+$/,
+    );
+
+    let setups = 0;
+    let fetches = 0;
+    for (const workflow of loaded) {
+      for (const [path, value] of keyedValues(workflow.parsed)) {
+        const key = path[path.length - 1] as string;
+        if (!/bun/i.test(key) || !/version/i.test(key)) {
+          continue;
+        }
+        expect(
+          key === "bun-version-file" && value === ".bun-version",
+          `${workflow.name} sets ${path.join(".")} to ${String(value)} itself`,
+        ).toBe(true);
+      }
+      expect(
+        wholeVersionIn(workflow.text, pin),
+        `${workflow.name} writes the release .bun-version pins`,
+      ).toBe(false);
+
+      for (const job of Object.values(workflow.parsed.jobs ?? {})) {
+        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        for (const step of steps) {
+          const uses = String(field(step, "uses") ?? "");
+          const script = String(field(step, "run") ?? "");
+          if (uses.startsWith("oven-sh/setup-bun@")) {
+            setups += 1;
+            expect(
+              field(field(step, "with"), "bun-version-file"),
+              `${workflow.name} runs setup-bun without the pin file`,
+            ).toBe(".bun-version");
+          }
+          if (script.includes("releases/download/bun-v")) {
+            fetches += 1;
+            expect(
+              script,
+              `${workflow.name} fetches a release it writes down itself`,
+            ).not.toMatch(/bun-v\d/);
+            const release = /releases\/download\/bun-v([^/"']+)\//.exec(script);
+            const variable = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(
+              release?.[1] ?? "",
+            );
+            expect(
+              variable?.[1],
+              `${workflow.name} fetches bun-v${release?.[1]}, which is no ` +
+                "shell variable this case can follow",
+            ).toBeDefined();
+            const name = variable?.[1] ?? "";
+            expect(
+              new RegExp(`(^|\\n)\\s*${name}=[^\\n]*\\.bun-version`).test(
+                script,
+              ),
+              `${workflow.name} fetches bun-v$${name} and never sets it from ` +
+                "the pin file",
+            ).toBe(true);
+          }
+        }
+      }
+    }
+    expect(setups, "no workflow runs setup-bun").toBeGreaterThan(0);
+    expect(fetches, "no workflow fetches Bun by hand").toBeGreaterThan(0);
+  });
+
+  /**
+   * The watcher opens a build issue from a script, and a person opens the
+   * same issue from the form. Both have to read as one document, so the
+   * script prints the form's title, its label, every field label in order,
+   * an option of each dropdown it answers, and every checkbox in order. A
+   * field added, renamed or reworded in the form turns this red until the
+   * script says the same thing.
+   */
+  test("the build issue the watcher opens matches the form a person fills", async () => {
+    const form = await githubYaml("ISSUE_TEMPLATE/new-keen-build.yml");
+    const fields = (field(form, "body") as unknown[]).filter(
+      (one) => field(one, "type") !== "markdown",
+    );
+    expect(fields.length, "the form holds no field").toBeGreaterThan(0);
+
+    const watch = loaded.find((one) => one.name === "build-watch.yml");
+    expect(watch, "there is no build-watch.yml").toBeDefined();
+    const steps = Object.values(watch?.parsed.jobs ?? {}).flatMap((job) =>
+      Array.isArray(job["steps"]) ? (job["steps"] as unknown[]) : [],
+    );
+    const opener = steps.find(
+      (step) => field(step, "name") === "Open the build issue",
+    );
+    expect(opener, "no step opens the build issue").toBeDefined();
+    const script = String(field(opener, "run") ?? "");
+
+    const title = String(field(form, "title"));
+    expect(script, "the issue title is not the form's").toContain(
+      `--title "${title}`,
+    );
+    for (const label of field(form, "labels") as string[]) {
+      expect(script, `the issue does not carry the ${label} label`).toContain(
+        `--label ${label}`,
+      );
+    }
+
+    const sections = issueSections(printedText(script));
+    expect(
+      sections.map((section) => section.heading),
+      "the issue's headings are not the form's field labels, in order",
+    ).toEqual(
+      fields.map((one) => String(field(field(one, "attributes"), "label"))),
+    );
+    for (const [index, section] of sections.entries()) {
+      const attributes = field(fields[index], "attributes");
+      const type = field(fields[index], "type");
+      if (type === "dropdown") {
+        expect(
+          (field(attributes, "options") as unknown[]).map(String),
+          `the issue answers "${section.heading}" with an option the form lacks`,
+        ).toContain(section.content);
+      }
+      if (type === "checkboxes") {
+        const labels = (field(attributes, "options") as unknown[]).map(
+          (option) => String(field(option, "label")),
+        );
+        const printed = section.content
+          .split("\n")
+          .map((line) => line.replace(/^- \[ \] /, ""));
+        expect(
+          printed,
+          `the issue's "${section.heading}" list is not the form's, in order`,
+        ).toEqual(labels);
+      }
+    }
+  });
+
+  /** The script reader takes the shapes the opener prints in. */
+  test("the printed text of a script joins its printf formats", () => {
+    const script = [
+      "{",
+      "  printf '### A\\n\\n%s\\n\\n' \"$X\"",
+      "  printf -- '- [ ] `b` c\\n'",
+      "  echo 'ignored'",
+      "} > body.md",
+    ].join("\n");
+    expect(printedText(script)).toBe("### A\n\n%s\n\n- [ ] `b` c\n");
+    expect(
+      issueSections("### A\n\none\n\n### B\n\n- [ ] x\n- [ ] y\n"),
+    ).toEqual([
+      { heading: "A", content: "one" },
+      { heading: "B", content: "- [ ] x\n- [ ] y" },
+    ]);
+  });
 });
+
+/**
+ * Every value in a parsed document with the path of keys that leads to it.
+ *
+ * @param value - The document, or any part of it.
+ * @param path - The keys that led to `value`.
+ * @returns One entry per keyed value, at every depth.
+ */
+function keyedValues(
+  value: unknown,
+  path: readonly string[] = [],
+): [string[], unknown][] {
+  if (typeof value !== "object" || value === null) {
+    return [];
+  }
+  const found: [string[], unknown][] = [];
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = [...path, key];
+    if (!Array.isArray(value)) {
+      found.push([childPath, child]);
+    }
+    found.push(...keyedValues(child, childPath));
+  }
+  return found;
+}
+
+/**
+ * Whether `text` holds `version` whole, so that one release is not read
+ * inside a longer one.
+ *
+ * @param text - The text to search.
+ * @param version - The release, as dot-separated numbers.
+ * @returns True when no digit or dotted digit continues it on either side.
+ */
+function wholeVersionIn(text: string, version: string): boolean {
+  const escaped = version.replaceAll(".", "\\.");
+  return new RegExp(`(?<![\\d.])${escaped}(?![\\d]|\\.\\d)`).test(text);
+}
+
+/**
+ * The text a script's `printf` calls print, with their format strings joined
+ * in order and `\n` read as a line break. The values the formats take stay
+ * as `%s`.
+ *
+ * @param script - A step's `run` script.
+ * @returns What the formats print, arguments aside.
+ */
+function printedText(script: string): string {
+  const formats = [...script.matchAll(/printf(?:\s+--)?\s+'([^']*)'/g)].map(
+    (match) => (match[1] as string).replaceAll("\\n", "\n"),
+  );
+  return formats.join("");
+}
+
+/**
+ * The `### ` sections of an issue body, as each heading and the text under
+ * it with the surrounding blank lines dropped.
+ *
+ * @param body - The issue body.
+ * @returns One entry per heading, in order.
+ */
+function issueSections(body: string): { heading: string; content: string }[] {
+  return body
+    .split(/^### /m)
+    .slice(1)
+    .map((section) => {
+      const [heading, ...rest] = section.split("\n");
+      return { heading: heading as string, content: rest.join("\n").trim() };
+    });
+}
 
 /**
  * Every way a probe workflow fails to be disposable.

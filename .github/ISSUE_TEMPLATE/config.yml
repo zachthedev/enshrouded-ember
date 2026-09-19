@@ -11,9 +11,9 @@ contact_links:
   - name: An idea for the SDK
     url: https://github.com/zachthedev/enshrouded-ember/discussions/categories/ideas
     about: Propose it here first. It becomes an issue once the shape is settled.
-  - name: zachthedev's mods, which load through Ember
+  - name: The enshrouded-mods repository, whose mods load through Ember
     url: https://github.com/zachthedev/enshrouded-mods/issues
     about: Anything about how one of those mods behaves in game.
   - name: A security problem
-    url: https://github.com/zachthedev/enshrouded-ember/blob/main/SECURITY.md
+    url: https://github.com/zachthedev/enshrouded-ember/security/policy
     about: Report it privately. An issue is public the moment it is opened.

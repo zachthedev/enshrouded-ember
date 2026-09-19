@@ -8,7 +8,7 @@
 //!
 //! Beside the dumps sits `build.json`, which names the build the dumps
 //! came from. It exists so that `schema list`, `schema diff` and the build
-//! watcher can identify an extraction without reopening a 22 MB image.
+//! watcher can identify an extraction without reopening the server image.
 
 pub mod descriptor;
 pub mod diff;

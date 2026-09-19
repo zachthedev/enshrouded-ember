@@ -680,11 +680,33 @@ mod tests {
         assert_eq!(seen.len(), count, "the scrubbed set repeats a name");
     }
 
-    /// A bare `cargo machete` walks whatever sits beside the workspace.
+    /// A bare `cargo machete` walks whatever sits beside the workspace, so the
+    /// step names its directories, and they are the ones the workspace members
+    /// live under. A member added under a new directory is a crate machete
+    /// never reads until the list names it.
     #[test]
-    fn machete_names_the_directories_it_walks() {
-        assert!(MACHETE_DIRS.contains(&"crates"));
-        assert!(MACHETE_DIRS.contains(&"xtask"));
+    fn machete_walks_the_directories_the_members_live_under() {
+        let manifest: toml::Value = toml::from_str(
+            &std::fs::read_to_string(crate::workspace_root().join("Cargo.toml"))
+                .expect("the workspace manifest is readable"),
+        )
+        .expect("the workspace manifest parses");
+        let mut members: Vec<&str> = manifest["workspace"]["members"]
+            .as_array()
+            .expect("the workspace lists members")
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .filter_map(|member| member.split('/').next())
+            .collect();
+        members.sort_unstable();
+        members.dedup();
+
+        let mut walked: Vec<&str> = MACHETE_DIRS.to_vec();
+        walked.sort_unstable();
+        assert_eq!(
+            walked, members,
+            "cargo machete walks {walked:?} and the members live under {members:?}"
+        );
     }
 
     /// The gate never fetches from npm. An absent prettier is a failure that
@@ -710,26 +732,50 @@ mod tests {
         );
     }
 
-    /// A `PostToolUse` hook formats JavaScript on every edit. An extension
-    /// prettier owns and the gate does not check is a file whose formatting
-    /// nothing enforces.
+    /// The extensions in a `{a,b}` brace list, sorted.
+    fn brace_list(pattern: &str) -> Vec<String> {
+        let open = pattern
+            .find('{')
+            .unwrap_or_else(|| panic!("{pattern} holds no brace list"));
+        let close = pattern
+            .rfind('}')
+            .unwrap_or_else(|| panic!("{pattern} holds no brace list"));
+        let mut list: Vec<String> = pattern[open + 1..close]
+            .split(',')
+            .map(str::to_string)
+            .collect();
+        list.sort();
+        list
+    }
+
+    /// `.editorconfig` names the extensions prettier owns here, in the section
+    /// its comment introduces, and prettier reads that file. An extension it
+    /// owns that the gate's glob leaves out is a file whose formatting nothing
+    /// enforces, and one the glob adds is formatted to a width no editor
+    /// agrees with.
     #[test]
-    fn prettier_checks_every_extension_it_owns_here() {
+    fn prettier_checks_the_extensions_editorconfig_gives_it() {
+        let editorconfig = std::fs::read_to_string(crate::workspace_root().join(".editorconfig"))
+            .expect(".editorconfig is readable");
+        let section = editorconfig
+            .lines()
+            .skip_while(|line| !(line.starts_with('#') && line.contains("prettier owns")))
+            .find(|line| line.starts_with('['))
+            .expect(".editorconfig introduces the section prettier owns");
+        let owned = brace_list(section);
+
         let dir = TestDir::new("prettier-extensions");
         let args = prettier_args(dir.path());
         let glob = args.last().expect("the step names a glob");
-        let list = glob
-            .strip_prefix("**/*.{")
-            .and_then(|rest| rest.strip_suffix('}'))
-            .unwrap_or_else(|| panic!("{glob} is not a brace list of extensions"));
-        let covered: Vec<&str> = list.split(',').collect();
-
-        for extension in ["md", "yml", "yaml", "json", "js", "mjs", "cjs", "ts"] {
-            assert!(
-                covered.contains(&extension),
-                "the prettier glob skips .{extension}, got {glob}"
-            );
-        }
+        assert!(
+            glob.starts_with("**/*.{"),
+            "{glob} is not a brace list of extensions"
+        );
+        assert_eq!(
+            brace_list(glob),
+            owned,
+            "the prettier glob and the .editorconfig section it owns disagree"
+        );
     }
 
     #[test]

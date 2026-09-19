@@ -52,14 +52,15 @@ env:
   # configuration" and writes nothing, measured on ubuntu-latest.
   STEAMCMD_PLATFORM: windows
   # Narrows the download plan rather than the extraction, so the fetch costs
-  # 10,422,160 bytes rather than the depot's 3.7 GB. The names have to agree
-  # with ARCHIVE_FILES in tools/records.ts, which a case asserts.
+  # megabytes rather than the multi-gigabyte depot. The names have to agree with
+  # ARCHIVE_FILES in tools/records.ts, which a case asserts.
   STEAMCMD_FILE_FILTER: "enshrouded_server.exe;enshrouded_server.kfc"
   # Bun is fetched and checked rather than installed by an action. The archive
   # job runs it with both halves of the write token in its environment, and
-  # setup-bun's only hash call is a cache key over the URL.
-  BUN_VERSION: 1.3.13
-  BUN_SHA256: 79c0771fa8b92c33aae41e15a0e0d307ea99d0e2f00317c71c6c53237a78e25a
+  # setup-bun's only hash call is a cache key over the URL. The release is the
+  # one .bun-version names, and this is the digest of its bun-linux-x64.zip, so
+  # the two change together or the check fails closed.
+  BUN_SHA256: 36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913
 
 jobs:
   # Reads what Steam advertises and records it. No archive credential reaches
@@ -96,8 +97,9 @@ jobs:
 
       - name: Install Bun, pinned and checked
         run: |
+          version="$(tr -d '[:space:]' < .bun-version)"
           curl --fail --silent --show-error --location --output bun.zip \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
+            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
           echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
           unzip -q bun.zip
           echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
@@ -200,7 +202,7 @@ jobs:
             printf -- '- [ ] `cargo xtask schema extract` ran against it\n'
             printf -- '- [ ] `cargo xtask schema diff <old> <new>` is in a comment below\n'
             printf -- '- [ ] Every signature row resolves against the real binary\n'
-            printf -- '- [ ] The support window moved, so the fifth build back drops out\n'
+            printf -- '- [ ] The support window moved, so its oldest build left it\n'
           } > issue-body.md
           gh issue create \
             --label build \
@@ -219,9 +221,9 @@ jobs:
 
   # Asks the bucket whether the build the public branch names is archived. It
   # holds the read token and nothing else: no deploy key, no environment. That
-  # is what lets it run every hour without waiting on the approval the write
-  # token sits behind, so the archive job asks for that approval only when
-  # there is work.
+  # is what lets it answer on every scheduled run without waiting on the
+  # approval the write token sits behind, so the archive job asks for that
+  # approval only when there is work.
   #
   # The bucket is the only thing that knows what it holds. steam-builds.jsonl
   # says what Steam advertised and build-digests.jsonl pins what a build's
@@ -254,8 +256,9 @@ jobs:
 
       - name: Install Bun, pinned and checked
         run: |
+          version="$(tr -d '[:space:]' < .bun-version)"
           curl --fail --silent --show-error --location --output bun.zip \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
+            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
           echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
           unzip -q bun.zip
           echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
@@ -263,7 +266,7 @@ jobs:
       - run: bun install --frozen-lockfile --ignore-scripts
 
       # A bucket it could not ask fails this step and hands on nothing, so the
-      # archive job is skipped for the hour rather than started on a guess.
+      # archive job is skipped for this run rather than started on a guess.
       #
       # The step also sweeps every other recorded build and fails when one of
       # them has left the bucket. That happens after the answer is written, so
@@ -287,8 +290,8 @@ jobs:
   # to undo that with.
   #
   # Gated on what the bucket holds rather than on whether this run saw a
-  # change, so a build that was seen and not archived is tried again every
-  # hour until it is.
+  # change, so a build that was seen and not archived is tried again on every
+  # run until it is.
   archive:
     needs: [watch, archive-status]
     # The manifest id is restated rather than inherited from the job above.
@@ -324,8 +327,9 @@ jobs:
 
       - name: Install Bun, pinned and checked
         run: |
+          version="$(tr -d '[:space:]' < .bun-version)"
           curl --fail --silent --show-error --location --output bun.zip \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
+            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
           echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
           unzip -q bun.zip
           echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
@@ -367,8 +371,9 @@ jobs:
 
           # A file filter matching nothing exits 0 over an empty directory and
           # prints "fully installed", so the exit code proves nothing on its
-          # own.
-          for name in enshrouded_server.exe enshrouded_server.kfc; do
+          # own. Every name the filter carries has to have arrived.
+          IFS=';' read -r -a names <<< "$STEAMCMD_FILE_FILTER"
+          for name in "${names[@]}"; do
             if [ ! -s "$out/$name" ]; then
               echo "SteamCMD exited 0 without writing $name. A file filter that matches nothing does exactly this." >&2
               ls -lR "$out" >&2 || true
@@ -453,8 +458,9 @@ jobs:
 
       - name: Install Bun, pinned and checked
         run: |
+          version="$(tr -d '[:space:]' < .bun-version)"
           curl --fail --silent --show-error --location --output bun.zip \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
+            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
           echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
           unzip -q bun.zip
           echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
