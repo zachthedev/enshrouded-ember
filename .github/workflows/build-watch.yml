@@ -38,22 +38,24 @@ env:
   # wrapper rather than the client. No bot reads a `docker run` line, so it is
   # bumped by hand. Taken from the ubuntu-24 tag on 2026-09-18.
   #
-  # The container is given no environment, no volume and no token, so its only
-  # channel out is the stdout redirect. A compromised SteamCMD controls the
-  # appinfo text and nothing else, and the watcher validates that text.
+  # The one tool that talks to Steam here, for reading app info and for
+  # fetching a build. The watch job gives the container no environment, no
+  # volume and no token, so its only channel out is the stdout redirect. The
+  # archive job mounts one directory for the payload and gives it nothing else.
   STEAMCMD_IMAGE: steamcmd/steamcmd@sha256:bf25fdfcfd8245a7f7b3dccfa0fe42004621aa99eb80166fc26f9d75083e8356
+  # Depot 2278521 declares oslist windows, and a Linux SteamCMD selects depots
+  # by client platform. Without this the fetch dies with "Missing
+  # configuration" and writes nothing, measured on ubuntu-latest.
+  STEAMCMD_PLATFORM: windows
+  # Narrows the download plan rather than the extraction, so the fetch costs
+  # 10,422,160 bytes rather than the depot's 3.7 GB. The names have to agree
+  # with ARCHIVE_FILES in tools/records.ts, which a case asserts.
+  STEAMCMD_FILE_FILTER: "enshrouded_server.exe;enshrouded_server.kfc"
   # Bun is fetched and checked rather than installed by an action. The archive
   # job runs it with both halves of the write token in its environment, and
   # setup-bun's only hash call is a cache key over the URL.
   BUN_VERSION: 1.3.13
   BUN_SHA256: 79c0771fa8b92c33aae41e15a0e0d307ea99d0e2f00317c71c6c53237a78e25a
-  # The self-contained build, which carries its own .NET runtime. The framework
-  # build needs a runtime that setup-dotnet fetches and validates by comparing
-  # Content-Length, which any equal-length substitution passes. This zip is
-  # pinned by digest instead, and it carries the same version and commit string
-  # the audited framework build does.
-  DEPOTDOWNLOADER_TAG: DepotDownloader_3.4.0
-  DEPOTDOWNLOADER_SHA256: a999dec66b4850fc961bd50366696d23c2d0fad7b18790e6a5647b2f19097a53
 
 jobs:
   # Reads what Steam advertises and records it. No archive credential reaches
@@ -70,7 +72,19 @@ jobs:
       server_manifest_id: ${{ steps.server.outputs.manifest_id }}
       server_needs_archive: ${{ steps.server.outputs.needs_archive }}
     steps:
+      # Checked out over SSH with the ember-ci deploy key, because main
+      # requires a pull request and a deploy key is the only actor that
+      # bypasses that rule. This job's own GITHUB_TOKEN has no bypass, so a
+      # push over HTTPS is refused.
+      #
+      # The bypass cannot be narrowed to one key. GitHub discards the actor id
+      # and stores null, so it covers every deploy key on the repository. There
+      # is exactly one today, and a read-only key added later silently gains
+      # the same bypass, which makes adding one a decision about main rather
+      # than a decision about reading.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
 
       - name: Install Bun, pinned and checked
         run: |
@@ -181,7 +195,11 @@ jobs:
 
   # The only job that holds the write token. The environment restricts it to
   # main, so a pull request cannot reach the credential even by landing a
-  # workflow change.
+  # workflow change, and it requires a maintainer's approval. This job will sit
+  # in `waiting` until somebody approves it, which is deliberate and is not a
+  # hang: the credential it is about to use can overwrite a binary that
+  # continuous integration and developers later run, and R2 has no versioning
+  # to undo that with.
   #
   # Gated on the archive's own state rather than on whether this run saw a
   # change. steam-builds.jsonl says what Steam advertised and
@@ -197,8 +215,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: archive-write
+    # Reads the checkout and nothing else. This job pushes nothing, so it needs
+    # no write to the repository and carries no deploy key. What it does hold
+    # is the credential that can overwrite an archived binary, and keeping
+    # those two apart is the point of the split.
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      row: ${{ steps.row.outputs.row }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -219,50 +243,121 @@ jobs:
 
       # No Steam credential ever enters continuous integration. An anonymous
       # session gets the current manifest and is refused a historical one, so a
-      # missed build is backfilled by an authenticated pull by hand.
-      - name: Fetch the executable while its manifest is current
+      # missed build is backfilled by an authenticated pull by hand, with
+      # DepotDownloader, which is the only tool that can name a manifest.
+      #
+      # `app_update` takes no manifest parameter and always fetches the head of
+      # the branch, so this can return a build other than the one the watch job
+      # saw. The record step is what catches that: it reads the manifest gid
+      # out of the appmanifest this fetch writes and refuses a row that would
+      # key these bytes under a different gid.
+      #
+      # The container writes as root, at mode 0755, and the runner reads both
+      # files without a chown and without --user. Measured on ubuntu-latest.
+      - name: Fetch the build while its manifest is current
         env:
           MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
         run: |
-          curl --fail --silent --show-error --location \
-            --output depotdownloader.zip \
-            "https://github.com/SteamRE/DepotDownloader/releases/download/$DEPOTDOWNLOADER_TAG/DepotDownloader-linux-x64.zip"
-          echo "$DEPOTDOWNLOADER_SHA256  depotdownloader.zip" | sha256sum --check --strict
-          unzip -q depotdownloader.zip -d depotdownloader
-          chmod +x depotdownloader/DepotDownloader
-          printf '%s\n' enshrouded_server.exe enshrouded_server.kfc > filelist.txt
-          ./depotdownloader/DepotDownloader \
-            -app "$APP_SERVER" \
-            -depot "$DEPOT_SERVER" \
-            -manifest "$MANIFEST_ID" \
-            -filelist filelist.txt \
-            -dir ".cache/archive/$MANIFEST_ID"
+          out=".cache/archive/$MANIFEST_ID"
+          mkdir -p "$out"
+          docker run --rm -v "$PWD/$out:/out" "$STEAMCMD_IMAGE" \
+            +@sSteamCmdForcePlatformType "$STEAMCMD_PLATFORM" \
+            +force_install_dir /out \
+            +login anonymous \
+            +app_info_update 1 \
+            +sDepotDownloadFileFilter "$STEAMCMD_FILE_FILTER" \
+            +app_update "$APP_SERVER" \
+            +quit
 
-      - name: Record what the files hash to
+          # A file filter matching nothing exits 0 over an empty directory and
+          # prints "fully installed", so the exit code proves nothing on its
+          # own.
+          for name in enshrouded_server.exe enshrouded_server.kfc; do
+            if [ ! -s "$out/$name" ]; then
+              echo "SteamCMD exited 0 without writing $name. A file filter that matches nothing does exactly this." >&2
+              ls -lR "$out" >&2 || true
+              exit 1
+            fi
+          done
+          ls -l "$out"
+
+      # Emitted rather than appended, because this job must not push and so
+      # cannot commit it. Every field the row carries is committed to a public
+      # repository moments later, so none of it is secret and a job output is
+      # the right place for it: an app id, a depot id, a build id, a manifest
+      # gid, a revision, a branch path, two file sizes and two SHA-256 digests.
+      - id: row
+        name: Hash the files and build the digest row
         env:
           MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
           BUILD_ID: ${{ needs.watch.outputs.server_build_id }}
         run: |
-          bun run tools/archive.ts record \
+          bun run tools/archive.ts emit \
             --dir ".cache/archive/$MANIFEST_ID" \
             --manifest "$MANIFEST_ID" \
             --build "$BUILD_ID"
 
-      # The upload comes before the commit. A digest row committed for a build
+      # The upload comes before the row is committed, and the commit happens in
+      # a job that holds no archive credential. A row committed for a build
       # that never reached the bucket would tell the next run the work was
-      # done, which is the same trap this job's own gate used to carry. push is
-      # idempotent, so a run that died part way through resumes here.
+      # done. push is idempotent: it skips an object whose size already matches
+      # the row, so a run that uploaded and then failed before the row landed
+      # converges on the next pass rather than refusing or overwriting.
       - name: Upload to the archive
         env:
           MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+          ROW: ${{ steps.row.outputs.row }}
           R2_ARCHIVE_WRITE_ACCESS_KEY_ID:
             ${{ secrets.R2_ARCHIVE_WRITE_ACCESS_KEY_ID }}
           R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY:
             ${{ secrets.R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY }}
         run: |
+          # The row is not in the committed record yet, so push is pointed at
+          # the one this job just built.
+          printf '%s\n' "$ROW" > row.jsonl
           bun run tools/archive.ts push \
             --dir ".cache/archive/$MANIFEST_ID" \
-            --manifest "$MANIFEST_ID"
+            --manifest "$MANIFEST_ID" \
+            --record row.jsonl
+
+  # Commits the row the archive job built. It holds the deploy key and no
+  # archive credential, and the archive job holds the archive credential and no
+  # deploy key, so neither sits beside the other. A case asserts both halves.
+  #
+  # If this job fails, the objects are in the bucket and the row is not
+  # committed. That is the state the pipeline converges out of rather than the
+  # one it used to loop in: `needs_archive` stays true, so the next scheduled
+  # run fetches again, rebuilds the same row, finds every object already
+  # present at the recorded size and uploads nothing, and retries this commit.
+  # The irreplaceable half is already safe while that repeats.
+  commit-digest:
+    needs: [watch, archive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
+
+      - name: Install Bun, pinned and checked
+        run: |
+          curl --fail --silent --show-error --location --output bun.zip \
+            "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64.zip"
+          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
+          unzip -q bun.zip
+          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # The row crossed a job boundary as a string, so it is validated against
+      # the same shape a read enforces and checked for a duplicate again. The
+      # record may have gained that manifest in between.
+      - name: Append the digest row
+        env:
+          ROW: ${{ needs.archive.outputs.row }}
+        run: bun run tools/archive.ts append --row "$ROW"
 
       - name: Commit the digest row
         run: |

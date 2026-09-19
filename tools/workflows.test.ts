@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { DESTINATION } from "./archive.ts";
+import { ARCHIVE_FILES } from "./records.ts";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
@@ -51,6 +52,16 @@ const WRITE_SECRETS = [
   "R2_ARCHIVE_WRITE_ACCESS_KEY_ID",
   "R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY",
 ];
+
+/**
+ * The deploy key a job checks out with when it has to push to main.
+ *
+ * @remarks
+ * Main requires a pull request, and a deploy key is the only actor that
+ * bypasses that rule. A job's own `GITHUB_TOKEN` has no bypass, so a push over
+ * HTTPS is refused.
+ */
+const PUSH_KEY_SECRET = "EMBER_CI_SSH_KEY";
 
 /**
  * Triggers that carry repository secrets on an event a fork can influence.
@@ -120,7 +131,11 @@ describe("the workflows", () => {
       if (!triggers.some((trigger) => FORK_INFLUENCED.includes(trigger))) {
         return;
       }
-      for (const secret of [...READ_SECRETS, ...WRITE_SECRETS]) {
+      for (const secret of [
+        ...READ_SECRETS,
+        ...WRITE_SECRETS,
+        PUSH_KEY_SECRET,
+      ]) {
         expect(
           workflow.text,
           `${name} runs on a fork-influenced trigger and names ${secret}`,
@@ -128,6 +143,86 @@ describe("the workflows", () => {
       }
     },
   );
+
+  /**
+   * The deploy key and the push go together in both directions.
+   *
+   * A job that carries the key and does not push is holding an actor that
+   * bypasses the pull request rule on main for no reason. A job that pushes
+   * and does not carry it is refused at the push, and where that lands decides
+   * how bad it is: the archive job's commit comes after the upload, so a
+   * refused push there leaves objects in the bucket that no committed row
+   * describes, and every later run re-fetches and re-uploads without ever
+   * finishing.
+   */
+  test("the deploy key and a push go together, in both directions", () => {
+    let pushing = 0;
+    for (const workflow of loaded) {
+      for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
+        const text = JSON.stringify(job);
+        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        const pushes = steps.some((step) => {
+          const script = (step as Record<string, unknown>)["run"];
+          return typeof script === "string" && /\bgit push\b/.test(script);
+        });
+        const carriesKey = text.includes(PUSH_KEY_SECRET);
+        if (pushes) {
+          pushing += 1;
+        }
+        expect(
+          carriesKey,
+          pushes
+            ? `${workflow.name} job ${jobName} pushes without the deploy key, ` +
+                "so main will refuse it"
+            : `${workflow.name} job ${jobName} carries the deploy key and ` +
+                "pushes nothing",
+        ).toBe(pushes);
+      }
+    }
+    expect(pushing, "no job pushes, so this case checked nothing").toBe(2);
+  });
+
+  /**
+   * The two credentials never sit in the same job.
+   *
+   * The archive credential can overwrite an archived binary that continuous
+   * integration and developers later run, and R2 has no versioning to undo
+   * that. The deploy key bypasses the pull request rule on main. A job holding
+   * both lets one compromise reach both, and the archive job is the one that
+   * runs a container and third-party code.
+   */
+  test("no job holds both an archive credential and the deploy key", () => {
+    let holdingArchive = 0;
+    let holdingKey = 0;
+    for (const workflow of loaded) {
+      for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
+        const text = JSON.stringify(job);
+        const archive = [...READ_SECRETS, ...WRITE_SECRETS].some((secret) =>
+          text.includes(secret),
+        );
+        const key = text.includes(PUSH_KEY_SECRET);
+        if (archive) {
+          holdingArchive += 1;
+        }
+        if (key) {
+          holdingKey += 1;
+        }
+        expect(
+          archive && key,
+          `${workflow.name} job ${jobName} holds an archive credential and ` +
+            "the deploy key, so one compromise reaches the bucket and main",
+        ).toBe(false);
+      }
+    }
+    expect(
+      holdingArchive,
+      "no job holds an archive credential, so this case checked nothing",
+    ).toBeGreaterThan(0);
+    expect(
+      holdingKey,
+      "no job holds the deploy key, so this case checked nothing",
+    ).toBeGreaterThan(0);
+  });
 
   /**
    * R2 has no object versioning and no Object Lock, so an overwrite is final.
@@ -216,25 +311,106 @@ describe("the workflows", () => {
    * artifact to see the output, and what these fetch out of Steam is a Keen
    * binary that must never leave the runner.
    */
-  test.each(
-    loaded
-      .filter((one) => one.name.startsWith("probe-"))
-      .map((one) => [one.name] as const),
-  )("%s can only run on a probe branch, and uploads nothing", (name) => {
-    const workflow = loaded.find((one) => one.name === name) as LoadedWorkflow;
-    expect(Object.keys(workflow.parsed.on ?? {})).toEqual(["push"]);
-    const push = (workflow.parsed.on ?? {})["push"] as
-      { branches?: string[] } | undefined;
-    expect(push?.branches ?? []).not.toHaveLength(0);
-    for (const branch of push?.branches ?? []) {
-      expect(branch, `${name} can be pushed to ${branch}`).toMatch(/^probe\//);
+  /**
+   * No probe exists most of the time, so the rule is applied by a function and
+   * the function is exercised against a document written here. A `test.each`
+   * over an empty list reports zero cases and guards nothing, which is the
+   * shape this suite exists to avoid.
+   */
+  test.each(loaded.filter((one) => one.name.startsWith("probe-")))(
+    "$name can only run on a probe branch, and uploads nothing",
+    (workflow: LoadedWorkflow) => {
+      expect(disposableProbeProblems(workflow.parsed)).toEqual([]);
+    },
+  );
+
+  test("the disposable-probe rule catches what it is for", () => {
+    const onProbeBranch = {
+      on: { push: { branches: ["probe/**"] } },
+      jobs: { probe: { steps: [{ run: "echo hello" }] } },
+    };
+    expect(disposableProbeProblems(onProbeBranch)).toEqual([]);
+
+    expect(
+      disposableProbeProblems({
+        ...onProbeBranch,
+        on: {
+          push: { branches: ["probe/**"] },
+          schedule: [{ cron: "0 * * * *" }],
+        },
+      }),
+    ).toContain("it runs on more than a push: push, schedule");
+
+    expect(
+      disposableProbeProblems({
+        ...onProbeBranch,
+        on: { push: { branches: ["main"] } },
+      }),
+    ).toContain("it can be pushed to main");
+
+    expect(
+      disposableProbeProblems({ ...onProbeBranch, on: { push: {} } }),
+    ).toContain("it names no branch, so every branch reaches it");
+
+    expect(
+      disposableProbeProblems({
+        ...onProbeBranch,
+        jobs: {
+          probe: { steps: [{ uses: "actions/upload-artifact@aaaa" }] },
+        },
+      }),
+    ).toContain("it uploads an artifact: actions/upload-artifact@aaaa");
+  });
+
+  /**
+   * SteamCMD's file filter has to name the files the digest record expects. It
+   * is a semicolon-joined string on a command line, so it cannot come from
+   * `ARCHIVE_FILES` directly the way the destination comes from
+   * `archive.json`, and a second copy has to exist. This is what keeps the two
+   * copies saying the same thing.
+   *
+   * The drift is quiet in the worst direction: a filter that matches nothing
+   * leaves SteamCMD reporting success over an empty directory.
+   */
+  test("the SteamCMD file filter names exactly the archived files", () => {
+    let checked = 0;
+    for (const workflow of loaded) {
+      const filter = (workflow.parsed.env ?? {})["STEAMCMD_FILE_FILTER"];
+      if (filter === undefined) {
+        continue;
+      }
+      checked += 1;
+      expect(String(filter).split(";").sort()).toEqual(
+        [...ARCHIVE_FILES].sort(),
+      );
     }
-    for (const reference of actionReferences(workflow.parsed)) {
-      expect(
-        reference,
-        `${name} uploads an artifact, and what it fetches is a Keen binary`,
-      ).not.toContain("upload-artifact");
+    expect(checked, "no workflow sets a file filter").toBeGreaterThan(0);
+  });
+
+  /**
+   * Depot 2278521 declares `oslist windows`, and a Linux SteamCMD selects
+   * depots by client platform. Without the flag the fetch dies with "Missing
+   * configuration" and writes nothing, measured on ubuntu-latest.
+   */
+  test("every app_update forces the platform the depot declares", () => {
+    let checked = 0;
+    for (const workflow of loaded) {
+      for (const job of Object.values(workflow.parsed.jobs ?? {})) {
+        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        for (const step of steps) {
+          const script = (step as Record<string, unknown>)["run"];
+          if (typeof script !== "string" || !script.includes("+app_update")) {
+            continue;
+          }
+          checked += 1;
+          expect(
+            script,
+            `${workflow.name} runs app_update without forcing the platform`,
+          ).toContain("+@sSteamCmdForcePlatformType");
+        }
+      }
     }
+    expect(checked, "no workflow fetches a build").toBeGreaterThan(0);
   });
 
   /**
@@ -400,6 +576,47 @@ describe("the workflows", () => {
     ]);
   });
 });
+
+/**
+ * Every way a probe workflow fails to be disposable.
+ *
+ * @remarks
+ * A probe exists for the few minutes its branch does, and then the branch is
+ * deleted. What makes that structural rather than a matter of intent is the
+ * trigger: reachable only by pushing a `probe/` branch, so it cannot fire on
+ * the default branch and cannot fire on a timer.
+ *
+ * It uploads nothing either. A probe is exactly where somebody would add an
+ * artifact to see the output, and what these fetch out of Steam is a Keen
+ * binary that must never leave the runner.
+ *
+ * @param workflow - The parsed document.
+ * @returns One sentence per problem, empty when the probe is disposable.
+ */
+function disposableProbeProblems(workflow: Workflow): string[] {
+  const problems: string[] = [];
+  const triggers = Object.keys(workflow.on ?? {});
+  if (triggers.length !== 1 || triggers[0] !== "push") {
+    problems.push(`it runs on more than a push: ${triggers.join(", ")}`);
+  }
+  const push = (workflow.on ?? {})["push"] as
+    { branches?: string[] } | undefined;
+  const branches = push?.branches ?? [];
+  if (branches.length === 0) {
+    problems.push("it names no branch, so every branch reaches it");
+  }
+  for (const branch of branches) {
+    if (!branch.startsWith("probe/")) {
+      problems.push(`it can be pushed to ${branch}`);
+    }
+  }
+  for (const reference of actionReferences(workflow)) {
+    if (reference.includes("upload-artifact")) {
+      problems.push(`it uploads an artifact: ${reference}`);
+    }
+  }
+  return problems;
+}
 
 /**
  * Every action a workflow runs, from its jobs and from their steps.

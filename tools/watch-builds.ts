@@ -368,8 +368,8 @@ export function stepOutputs(
  * @param depotId - The depot to look up, if any.
  * @returns The gid, or an empty string when no depot was named.
  * @throws {@link AppInfoError} When a depot was named and carries no public
- * manifest. An empty gid reaches DepotDownloader as `-manifest ""`, and the
- * directory it is told to fill becomes the archive root rather than one build.
+ * manifest. An empty gid makes the archive job's output directory the archive
+ * root rather than one build's, and names a row after nothing.
  */
 function manifestFor(result: WatchResult, depotId: string | undefined): string {
   if (depotId === undefined) {
