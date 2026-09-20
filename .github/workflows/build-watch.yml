@@ -24,28 +24,35 @@ on:
 permissions:
   contents: read
 
-# Why three credentials sit at repository level rather than in an environment.
+# Where each credential comes from, and what its environment buys.
 #
-# A repository-level secret is readable by a workflow on any branch. The normal
-# home for a credential is the environment whose job uses it, so each of these
-# is an exception and carries its reason here.
+# Every secret this file names comes from a deployment environment. Each of
+# those environments names main as its only deployment branch, so a workflow on
+# any other branch is refused the secret. A pull request cannot reach one even
+# by landing a change to this file.
 #
-# EMBER_CI_SSH_KEY is the private half of the ember-ci deploy key. The ruleset
-# on main carries a DeployKey bypass, so it is the only actor that can push
-# there. The jobs holding it run on a schedule with nobody watching. An
-# environment with a required reviewer parks every run in `waiting`. A build
-# that is not archived inside its manifest window cannot be fetched again
-# without a Steam credential, so that wait costs the thing the push protects.
+# digest-push holds EMBER_CI_SSH_KEY, the private half of the ember-ci deploy
+# key. The ruleset on main carries a DeployKey bypass, so it is the only actor
+# that can push there. The watch and commit-digest jobs draw it, and both run
+# on a schedule with nobody watching. That environment carries no reviewer,
+# because a required reviewer parks every run in `waiting`. A build not
+# archived inside its manifest window needs a Steam credential to fetch again,
+# so that wait would cost the thing the push protects.
 #
-# R2_ARCHIVE_READ_ACCESS_KEY_ID and R2_ARCHIVE_READ_SECRET_ACCESS_KEY read the
-# archive bucket and write nothing. archive-status asks the bucket on every
-# scheduled run and declares no environment on purpose, which a case asserts.
-# An environment would put that answer behind the approval the write token sits
-# behind, and the split between the two jobs exists to avoid exactly that.
+# archive-read holds R2_ARCHIVE_READ_ACCESS_KEY_ID and
+# R2_ARCHIVE_READ_SECRET_ACCESS_KEY, which read the archive bucket and write
+# nothing. archive-status draws them and answers on every scheduled run, which
+# a case asserts. That environment carries no reviewer either, so the answer
+# does not land behind the approval the write token sits behind. The split
+# between the two jobs exists to keep it that way.
 #
-# What an environment would still buy is a deployment branch policy naming
-# main, which refuses all three to a workflow on any other branch and costs an
-# unattended run nothing. That is a repository setting rather than a line here.
+# archive-write holds the write pair and requires a maintainer's approval. That
+# credential can overwrite an archived binary, and R2 has no versioning to undo
+# it with.
+#
+# A reviewer list is a GitHub setting rather than a line here, so nothing in
+# this repository can read one. tools/workflows.test.ts names the environments
+# known to carry no reviewer and reads every other one as gating.
 
 # Concurrency is per job rather than per workflow. The archive job waits for a
 # maintainer's approval, and a run holding a workflow-level group holds it for
@@ -91,6 +98,7 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment: digest-push
     # Two watchers pushing the same record is the race here.
     concurrency:
       group: build-watch-watch-${{ github.ref }}
@@ -252,10 +260,10 @@ jobs:
           exit 1
 
   # Asks the bucket whether the build the public branch names is archived. It
-  # holds the read token and nothing else: no deploy key, no environment. That
-  # is what lets it answer on every scheduled run without waiting on the
-  # approval the write token sits behind, so the archive job asks for that
-  # approval only when there is work.
+  # holds the read token and nothing else: no deploy key and no write
+  # credential. Its environment carries no reviewer, so it answers on every
+  # scheduled run without waiting on the approval the write token sits behind.
+  # The archive job asks for that approval only when there is work.
   #
   # The bucket is the only thing that knows what it holds. steam-builds.jsonl
   # says what Steam advertised and build-digests.jsonl pins what a build's
@@ -275,6 +283,7 @@ jobs:
     if: ${{ !cancelled() && needs.watch.outputs.server_manifest_id != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: archive-read
     permissions:
       contents: read
     outputs:
@@ -475,6 +484,7 @@ jobs:
     if: ${{ !cancelled() && needs.archive.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: digest-push
     # The other pusher. A rebase handles a race with the watcher, and this
     # keeps two of these from racing each other.
     concurrency:

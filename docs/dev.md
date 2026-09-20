@@ -204,9 +204,9 @@ the bucket at the recorded size. A missing row or a missing object sends the
 archive job back to work, so a failure anywhere in the archive path is tried
 again on the next run rather than lost. An object at a size the row does not
 state fails the check instead, because `push` refuses to write over it and a
-person has to look. The job that asks holds no environment, so a scheduled run
-never waits on an approval, and the archive job asks for one only when there is
-work.
+person has to look. The job that asks draws its read token from an environment
+that carries no reviewer, so a scheduled run never waits on an approval, and the
+archive job asks for one only when there is work.
 
 `status` then sweeps every other recorded build and fails the run when one of
 them is not in the archive. The archive job fetches the head of the branch and
