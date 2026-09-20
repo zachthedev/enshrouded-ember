@@ -24,6 +24,29 @@ on:
 permissions:
   contents: read
 
+# Why three credentials sit at repository level rather than in an environment.
+#
+# A repository-level secret is readable by a workflow on any branch. The normal
+# home for a credential is the environment whose job uses it, so each of these
+# is an exception and carries its reason here.
+#
+# EMBER_CI_SSH_KEY is the private half of the ember-ci deploy key. The ruleset
+# on main carries a DeployKey bypass, so it is the only actor that can push
+# there. The jobs holding it run on a schedule with nobody watching. An
+# environment with a required reviewer parks every run in `waiting`. A build
+# that is not archived inside its manifest window cannot be fetched again
+# without a Steam credential, so that wait costs the thing the push protects.
+#
+# R2_ARCHIVE_READ_ACCESS_KEY_ID and R2_ARCHIVE_READ_SECRET_ACCESS_KEY read the
+# archive bucket and write nothing. archive-status asks the bucket on every
+# scheduled run and declares no environment on purpose, which a case asserts.
+# An environment would put that answer behind the approval the write token sits
+# behind, and the split between the two jobs exists to avoid exactly that.
+#
+# What an environment would still buy is a deployment branch policy naming
+# main, which refuses all three to a workflow on any other branch and costs an
+# unattended run nothing. That is a repository setting rather than a line here.
+
 # Concurrency is per job rather than per workflow. The archive job waits for a
 # maintainer's approval, and a run holding a workflow-level group holds it for
 # that whole wait, which stops the watcher from reading Steam at all. A build
