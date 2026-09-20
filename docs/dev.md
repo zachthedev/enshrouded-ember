@@ -30,6 +30,25 @@ cargo install --locked $(grep -v '^#' .github/cargo-tools | grep .)
 grep -v '^#' .github/go-tools | grep . | xargs -n 1 go install
 ```
 
+The gate needs ShellCheck too, which actionlint shells out to. Its release is in
+`.github/shellcheck-version`, and the gate refuses the `actionlint` step unless
+the binary on `PATH` reports that one:
+
+```powershell
+$release = @(Get-Content .github/shellcheck-version | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })[0]
+winget install --id koalaman.shellcheck --version $release
+```
+
+No single command installs ShellCheck on every host. winget names the package
+`koalaman.shellcheck`, while apt and brew name it `shellcheck`, and each serves
+a release of its own. Continuous integration sidesteps that with an installer
+that takes one coordinate everywhere, which a contributor has no equivalent of.
+
+On another host, take the pinned release from
+[the ShellCheck releases](https://github.com/koalaman/shellcheck/releases) and
+put it on `PATH`. A release the pin file does not name is refused by name, so a
+wrong install fails at the gate rather than reading a script under other rules.
+
 [Bun](https://bun.sh) runs the repository's own tooling, at the release
 `.bun-version` pins. Install the hooks and the markup formatter with one
 command:

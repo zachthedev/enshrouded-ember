@@ -184,6 +184,10 @@ jobs:
           MANIFEST_ID: ${{ steps.server.outputs.manifest_id }}
           CHANGE_NUMBER: ${{ steps.server.outputs.change_number }}
         run: |
+          # Every backtick below opens a markdown code span in the issue body,
+          # so these formats are single quoted on purpose and no expansion is
+          # wanted inside them. Each directive sits on the line it excuses,
+          # which is the one placement that cannot widen to the whole script.
           {
             printf '### Steam build id\n\n%s\n\n' "$BUILD_ID"
             printf '### How this build turned up\n\n'
@@ -194,12 +198,17 @@ jobs:
             printf 'Nothing has extracted this build yet.\n\n'
             printf '### Anything else\n\n'
             printf 'App %s moved on its public branch.\n\n' "$APP_SERVER"
+            # shellcheck disable=SC2016
             printf -- '- depot %s manifest `%s`\n' "$DEPOT_SERVER" "$MANIFEST_ID"
+            # shellcheck disable=SC2016
             printf -- '- change number `%s`\n\n' "$CHANGE_NUMBER"
+            # shellcheck disable=SC2016
             printf 'The archive job stores the build under `build/%s/`.\n\n' "$MANIFEST_ID"
             printf '### Before a row ships\n\n'
             printf -- '- [ ] The build is archived, or its manifest already rolled\n'
+            # shellcheck disable=SC2016
             printf -- '- [ ] `cargo xtask schema extract` ran against it\n'
+            # shellcheck disable=SC2016
             printf -- '- [ ] `cargo xtask schema diff <old> <new>` is in a comment below\n'
             printf -- '- [ ] Every signature row resolves against the real binary\n'
             printf -- '- [ ] The support window moved, so its oldest build left it\n'
