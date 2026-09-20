@@ -37,55 +37,15 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
-      # taiki-e/install-action takes a crates.io package and a release binary
-      # in one list, so both pin files feed the same install. Every release is
-      # read from the file that holds it, and none is written down here. The
-      # shellcheck pin holds a bare release, so the tool name is joined on
-      # here to build the coordinate.
-      - id: pinned-tools
-        shell: pwsh
-        run: |
-          $tools = @(Get-Content .github/cargo-tools |
-              Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })
-          $release = @(Get-Content .github/shellcheck-version |
-              Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })[0]
-          if (-not $release) {
-              throw '.github/shellcheck-version names no release'
-          }
-          $tools += "shellcheck@$($release.Trim())"
-          "list=$($tools -join ',')" >> $env:GITHUB_OUTPUT
-      # shellcheck is here rather than left to the image, because actionlint
-      # shells out to whatever it finds and ubuntu-latest carries a release of
-      # its own. The gate refuses its actionlint step unless the binary on PATH
-      # reports the pinned release, so a leg that resolved the image's copy
-      # fails loudly rather than reading a script under other rules.
-      - uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+      # mise reads mise.toml for every tool the gate runs and mise.lock for the
+      # checksum of each artifact, so no release is written here. The action
+      # verifies its own mise download against a minisign-signed SHASUMS256.txt,
+      # and a sha256 input returns before that check runs, so none is passed.
+      # The mise release is exact, because an unpinned one resolves at run time
+      # and a resolved release is under no cooldown.
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          tool: ${{ steps.pinned-tools.outputs.list }}
-      # Neither runner image puts a Go on PATH that the pinned actionlint builds
-      # with, so the Go release is pinned here. It has to meet the minimum
-      # actionlint's go.mod names. No go.sum exists here for a cache to key on.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: 1.26.8
-          cache: false
-      # GOBIN puts every binary in one directory, which then goes on PATH. A
-      # failed install stops this step, rather than the gate reporting the tool
-      # missing later.
-      - name: Install the pinned Go tools
-        shell: pwsh
-        run: |
-          $bin = Join-Path $env:RUNNER_TEMP 'go-tools'
-          $env:GOBIN = $bin
-          $tools = Get-Content .github/go-tools |
-              Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() }
-          foreach ($tool in $tools) {
-              go install $tool
-              if ($LASTEXITCODE -ne 0) {
-                  throw "go install $tool exited $LASTEXITCODE"
-              }
-          }
-          $bin >> $env:GITHUB_PATH
+          version: 2026.9.5
       # Both legs name a shell, because a bare `run:` is bash on ubuntu and
       # pwsh on windows, so one line would execute under two dialects while
       # actionlint reads it as one. Each line below is the same in either

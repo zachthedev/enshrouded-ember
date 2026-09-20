@@ -111,7 +111,7 @@ const FORK_INFLUENCED = [
  * `evilcorp/setup-bun` at some 40-hex commit of their own keeps the pin and
  * changes the code that runs.
  */
-const ACTION_OWNERS = ["actions", "oven-sh", "Swatinem", "taiki-e"];
+const ACTION_OWNERS = ["actions", "jdx", "oven-sh", "Swatinem"];
 
 const loaded = await workflows();
 
@@ -860,49 +860,6 @@ const ALLOWED_ZIZMOR_IGNORES = [
 
 describe("the GitHub configuration", () => {
   /**
-   * actionlint is a Go program, and neither runner image puts a Go on `PATH`
-   * that builds it. The gate job installs one with `actions/setup-go` before
-   * the step that reads `.github/go-tools`, at an exact release, because a
-   * range resolves at run time and a resolved release is under no cooldown.
-   * That step has to stop on a failed install, or the gate reports the tool
-   * missing one step later and names the wrong cause.
-   */
-  test("the Go tools install under an exact Go release", () => {
-    const ci = loaded.find((one) => one.name === "ci.yml");
-    expect(ci, "there is no ci.yml").toBeDefined();
-    const steps = field(ci?.parsed.jobs?.["gate"], "steps");
-    expect(Array.isArray(steps), "the gate job lists no steps").toBe(true);
-    const list = steps as unknown[];
-
-    const setup = list.findIndex((step) =>
-      String(field(step, "uses") ?? "").startsWith("actions/setup-go@"),
-    );
-    const install = list.findIndex((step) =>
-      String(field(step, "run") ?? "").includes(".github/go-tools"),
-    );
-    expect(setup, "the gate job does not use actions/setup-go").not.toBe(-1);
-    expect(install, "no gate step installs from .github/go-tools").not.toBe(-1);
-    expect(
-      setup,
-      "setup-go runs after the step that needs its Go",
-    ).toBeLessThan(install);
-
-    const options = field(list[setup], "with");
-    expect(
-      field(options, "go-version"),
-      "setup-go takes something other than one exact release",
-    ).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(
-      field(options, "cache"),
-      "setup-go caches on a go.sum this repository does not have",
-    ).toBe(false);
-    expect(
-      String(field(list[install], "run")),
-      "the install step does not stop on a failed go install",
-    ).toContain("$LASTEXITCODE -ne 0");
-  });
-
-  /**
    * Dependabot's cooldown is the wait between a version being published and a
    * pull request proposing it, and an ecosystem with no cooldown block waits
    * for nothing. zizmor's `dependabot-cooldown` refuses a cooldown shorter than
@@ -1308,59 +1265,6 @@ function actionReferences(workflow: Workflow): string[] {
   return found;
 }
 
-/** A file that pins releases, and the releases it holds. */
-interface PinFile {
-  /** The path a script reads, spelled the way a script spells it. */
-  readonly path: string;
-  /** Every release the file pins, with any package coordinate dropped. */
-  readonly releases: readonly string[];
-}
-
-/**
- * The lines of a pin file that carry a value, past the comments and blanks.
- *
- * @param path - The file, relative to the repository root.
- * @returns One entry per pinned line, trimmed.
- */
-async function pinnedLines(path: string): Promise<string[]> {
-  const text = await Bun.file(
-    fileURLToPath(new URL(`../${path}`, import.meta.url)),
-  ).text();
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("#"));
-}
-
-/**
- * Every pin file under `.github`, with the releases each one holds.
- *
- * @remarks
- * `.bun-version` is left out. It has a case of its own above that reads more
- * than the release, and one rule per file is what keeps a failure naming the
- * thing that broke.
- *
- * @returns One entry per file, in the order the gate needs them.
- */
-async function pinFiles(): Promise<PinFile[]> {
-  const files = [
-    ".github/cargo-tools",
-    ".github/go-tools",
-    ".github/shellcheck-version",
-  ];
-  const found: PinFile[] = [];
-  for (const path of files) {
-    const lines = await pinnedLines(path);
-    const releases = lines.map((line) => {
-      const at = line.lastIndexOf("@");
-      const release = at === -1 ? line : line.slice(at + 1);
-      return release.replace(/^v/, "");
-    });
-    found.push({ path, releases });
-  }
-  return found;
-}
-
 /**
  * Every step a workflow runs, with the job it belongs to.
  *
@@ -1380,293 +1284,154 @@ function jobSteps(
   return found;
 }
 
+/** The file pinning a version for every tool mise installs. */
+const PINS = "mise.toml";
+
+/** One tool the pin file names, and the version it holds. */
+interface PinnedTool {
+  /** The key the entry is spelled under, bare name or backend coordinate. */
+  readonly name: string;
+  /** The version the entry holds. */
+  readonly version: string;
+}
+
 /**
- * The step output a value reads, or `undefined` when the value is anything
- * else.
+ * Every tool `PINS` pins.
  *
  * @remarks
- * The whole value has to be the expression. A literal with an expression
- * beside it still carries a literal, which is what this refuses.
+ * An entry's value is the version itself, or a table carrying it under
+ * `version`, which is the shape an entry with backend options takes. The key
+ * is whatever `PINS` spells, so a backend coordinate stays whole.
  *
- * @param value - An input's value, as the document holds it.
- * @returns The step id and output name, or `undefined`.
+ * The lockfile beside it is read by the xtask suite, which holds every entry
+ * to a checksum per platform. One rule per file is what keeps a failure naming
+ * the thing that broke.
+ *
+ * @returns One entry per tool, in the order the file holds them.
  */
-function stepOutputRead(
-  value: unknown,
-): { id: string; name: string } | undefined {
-  const matched = /^\$\{\{\s*steps\.([\w-]+)\.outputs\.([\w-]+)\s*\}\}$/.exec(
-    String(value ?? ""),
+async function pinnedTools(): Promise<PinnedTool[]> {
+  const parsed = Bun.TOML.parse(await Bun.file(PINS).text()) as Record<
+    string,
+    unknown
+  >;
+  const tools = parsed["tools"];
+  if (typeof tools !== "object" || tools === null) {
+    throw new Error(`${PINS} holds no tools table`);
+  }
+  return Object.entries(tools as Record<string, unknown>).map(
+    ([name, entry]) => {
+      const version =
+        typeof entry === "string"
+          ? entry
+          : (entry as Record<string, unknown>)["version"];
+      if (typeof version !== "string") {
+        throw new Error(`${PINS} pins no version for ${name}`);
+      }
+      return { name, version };
+    },
   );
-  if (matched === null) {
-    return undefined;
-  }
-  return { id: matched[1] as string, name: matched[2] as string };
-}
-
-/** The pin files whose releases feed taiki-e/install-action. */
-/** The pin file a `go install` takes its module from. */
-/**
- * The variable a script reads `path` into, or `undefined` when no line does.
- *
- * @remarks
- * The path has to be the word straight after `Get-Content`, which is a
- * position a comment can never occupy. A line naming the pin file in a
- * trailing comment while reading another file is refused by the shape, with
- * no comment stripping, and stripping would cut a line whose quoted pattern
- * holds a hash.
- *
- * @param script - A step's `run` script.
- * @param path - The pin file, spelled the way the script spells it.
- * @returns The variable, with its sigil, or `undefined`.
- */
-function pinFileVariable(script: string, path: string): string | undefined {
-  for (const line of script.split("\n")) {
-    // A line that is wholly a comment reads nothing. Only an opening hash
-    // counts, so a hash inside a quoted pattern leaves the line whole, which
-    // every one of these readers needs.
-    if (line.trim().startsWith("#")) {
-      continue;
-    }
-    const words = line.split(/\s+/).filter((word) => word !== "");
-    const at = words.findIndex((word) => word.endsWith("Get-Content"));
-    // The word ends where a path character stops, so shell punctuation
-    // closing it is not part of it and a comment marker yields nothing.
-    const read = /^[\w./-]+/.exec(words[at + 1] ?? "")?.[0] ?? "";
-    if (at === -1 || read !== path) {
-      continue;
-    }
-    const assigned = /(\$[A-Za-z_]\w*)\s*=/.exec(line);
-    if (assigned !== null) {
-      return assigned[1] as string;
-    }
-  }
-  return undefined;
 }
 
 /**
- * Whether `variable` reaches one of `carriers`, in one assignment.
+ * Every way a workflow installs something other than what the pin file holds.
  *
  * @remarks
- * The carrier has to sit left of the `=` and the variable right of it, so an
- * assignment running the other way is not read as dataflow. A line merely
- * holding both names counts for nothing, which is what a reversed assignment,
- * a guard and a comparison each are.
- *
- * One hop is what the real script needs. This approximates dataflow rather
- * than performing it, and it errs toward reporting a problem.
- *
- * @param script - A step's `run` script.
- * @param variable - The variable holding what a pin file gave.
- * @param carriers - The variables the emitted value names.
- * @returns True when an assignment carries one into the other.
- */
-function reachesCarrier(
-  script: string,
-  variable: string,
-  carriers: readonly string[],
-): boolean {
-  if (carriers.includes(variable)) {
-    return true;
-  }
-  return script.split("\n").some((line) => {
-    const at = line.indexOf("=");
-    if (at === -1) {
-      return false;
-    }
-    const left = line.slice(0, at);
-    const right = line.slice(at + 1);
-    return (
-      carriers.some((carrier) => left.includes(carrier)) &&
-      right.includes(variable)
-    );
-  });
-}
-
-const GO_PIN = ".github/go-tools";
-
-/** The pin files whose releases feed taiki-e/install-action. */
-const INSTALL_ACTION_PINS = [
-  ".github/cargo-tools",
-  ".github/shellcheck-version",
-];
-
-/**
- * Every way a workflow fails to take its pinned releases from the files that
- * hold them.
- *
- * @remarks
- * Three shapes, each one a way a check by substring passes a workflow that
- * installs something else.
- *
- * A release written anywhere in the file is refused outright, comment
- * included. A check that a workflow merely mentions the pin file passes a
- * workflow whose comment names it while the line below installs a literal,
- * and refusing the literal is what closes that.
- *
- * The value handed to the installer has to be a step output and nothing else,
- * and the step it names has to read the pin file in its own script. That
- * closes a value read from another file and a value set nowhere.
- *
- * A `go install` takes its module from a variable, and the same script has to
- * set that variable from the Go pin file, for the same reason.
+ * Five shapes. A version written anywhere in the workflow is refused outright,
+ * comment included, because the next bump leaves that copy behind. A
+ * `mise_toml` or `tool_versions` input makes the action write its own pin file
+ * over the committed one, so the lockfile rule would check a file no install
+ * reads. A `sha256` input returns before the action compares its mise download
+ * against the minisign-signed `SHASUMS256.txt`, trading a signature for a hash
+ * somebody typed. An install turned off leaves the gate resolving tools that
+ * are not there. A mise release that is not exact resolves at run time, and a
+ * release resolved at run time is under no cooldown.
  *
  * @param workflow - The workflow, parsed and with the text it came from.
- * @param pins - Every pin file and the releases it holds.
+ * @param tools - Every tool the pin file names.
  * @returns One sentence per problem, empty when the workflow is bound to its
  * pins.
  */
 function pinProblems(
   workflow: LoadedWorkflow,
-  pins: readonly PinFile[],
+  tools: readonly PinnedTool[],
 ): string[] {
   const problems: string[] = [];
-  for (const pin of pins) {
-    for (const release of pin.releases) {
-      if (wholeVersionIn(workflow.text, release)) {
-        problems.push(`it writes ${release}, which ${pin.path} pins`);
-      }
+  for (const tool of tools) {
+    if (wholeVersionIn(workflow.text, tool.version)) {
+      problems.push(`it writes ${tool.version}, which ${PINS} pins`);
     }
   }
 
-  const steps = jobSteps(workflow.parsed);
-  const byId = new Map<string, Record<string, unknown>>();
-  for (const { step } of steps) {
-    const id = step["id"];
-    if (typeof id === "string") {
-      byId.set(id, step);
+  for (const { step } of jobSteps(workflow.parsed)) {
+    if (!String(step["uses"] ?? "").startsWith("jdx/mise-action@")) {
+      continue;
     }
-  }
-
-  // A step merely mentioning the pin file satisfies nothing. A line has to
-  // read the file into a variable, and that variable has to reach the value
-  // the step emits.
-  const setFrom = (
-    id: string,
-    name: string,
-    path: string,
-  ): string | undefined => {
-    const source = byId.get(id);
-    if (source === undefined) {
-      return `no step is called ${id}`;
-    }
-    const script = String(source["run"] ?? "");
-    const variable = pinFileVariable(script, path);
-    if (variable === undefined) {
-      return `${id} reads ${path} into no variable`;
-    }
-    const emitted = script
-      .split("\n")
-      .find((line) => line.includes(`${name}=`));
-    if (emitted === undefined) {
-      return `${id} writes no ${name} output`;
-    }
-    // The redirect target is a variable on every one of these lines, so only
-    // the value being written counts.
-    const written = emitted.split(">>")[0] as string;
-    const carriers = [...written.matchAll(/\$[A-Za-z_]\w*/g)].map(
-      (match) => match[0] as string,
-    );
-    if (carriers.length === 0) {
-      return `${id} writes ${name} from no variable`;
-    }
-    if (!reachesCarrier(script, variable, carriers)) {
-      return `${id} reads ${path} into ${variable}, which never reaches ${name}`;
-    }
-    return undefined;
-  };
-
-  for (const { step } of steps) {
-    if (String(step["uses"] ?? "").startsWith("taiki-e/install-action@")) {
-      const tool = (step["with"] as Record<string, unknown> | undefined)?.[
-        "tool"
-      ];
-      const read = stepOutputRead(tool);
-      if (read === undefined) {
+    const inputs = (step["with"] ?? {}) as Record<string, unknown>;
+    for (const written of ["mise_toml", "tool_versions"]) {
+      if (inputs[written] !== undefined) {
         problems.push(
-          `install-action takes ${String(tool)}, which is no step output`,
-        );
-      } else {
-        for (const path of INSTALL_ACTION_PINS) {
-          const problem = setFrom(read.id, read.name, path);
-          if (problem !== undefined) {
-            problems.push(`install-action reads ${read.id}, and ${problem}`);
-          }
-        }
-      }
-    }
-
-    const script = String(step["run"] ?? "");
-    for (const match of script.matchAll(/go install\s+(\S+)/g)) {
-      const module = match[1] as string;
-      if (!module.startsWith("$")) {
-        problems.push(`a go install takes ${module}, which is no variable`);
-        continue;
-      }
-      // The list the loop walks has to be the one a line read from the pin
-      // file, found by the same positional reader.
-      const list = pinFileVariable(script, GO_PIN);
-      if (list === undefined) {
-        problems.push(
-          `a go install takes ${module}, and no line reads ${GO_PIN} into a variable`,
-        );
-        continue;
-      }
-      if (!script.includes(`${module} in ${list}`)) {
-        problems.push(
-          `a go install takes ${module}, which walks something other than ${list}`,
+          `mise-action takes ${written}, which writes over ${PINS}`,
         );
       }
+    }
+    if (inputs["sha256"] !== undefined) {
+      problems.push(
+        "mise-action takes a sha256, which skips the signed checksum file",
+      );
+    }
+    if (inputs["install"] === false) {
+      problems.push("mise-action installs nothing, so no tool is there to run");
+    }
+    const release = String(inputs["version"] ?? "");
+    if (!/^\d+\.\d+\.\d+$/.test(release)) {
+      problems.push(
+        `mise-action takes ${release || "no version"}, which is not one exact release`,
+      );
     }
   }
   return problems;
 }
 
-const pins = await pinFiles();
+const tools = await pinnedTools();
 
-describe("the pinned releases", () => {
-  test("every pin file names a release, and each one is a release", () => {
-    for (const pin of pins) {
-      expect(pin.releases.length, `${pin.path} pins nothing`).toBeGreaterThan(
-        0,
+describe("the pinned tools", () => {
+  test("every tool names one exact release", () => {
+    expect(tools.length, `${PINS} pins nothing`).toBeGreaterThan(0);
+    for (const tool of tools) {
+      expect(tool.version, `${PINS} pins ${tool.name} at a range`).toMatch(
+        /^\d+\.\d+\.\d+$/,
       );
-      for (const release of pin.releases) {
-        expect(release, `${pin.path} holds a release with no digits`).toMatch(
-          /^\d+(\.\d+)+$/,
-        );
-      }
     }
   });
 
   /**
-   * The workflows take every release from the file that pins it. A release
+   * The workflows take every version from the file that pins it. A version
    * written into a workflow is a second copy, and the next bump leaves it
    * behind while continuous integration keeps installing the old one.
    */
   test.each(loaded.map((workflow) => [workflow.name] as const))(
-    "%s takes every release from the file that pins it",
+    "%s takes every version from the file that pins it",
     (name) => {
       const workflow = loaded.find(
         (one) => one.name === name,
       ) as LoadedWorkflow;
-      expect(pinProblems(workflow, pins)).toEqual([]);
+      expect(pinProblems(workflow, tools)).toEqual([]);
     },
   );
 
   /**
-   * Some workflow step has to read each pin file. A file nothing reads pins a
-   * release that reaches no runner, and every case above still passes.
+   * Some workflow step installs through mise. A pin file nothing installs from
+   * pins versions that reach no runner, and every case above still passes.
    */
-  test("some workflow step reads each pin file", () => {
-    for (const pin of pins) {
-      const readers = loaded
-        .filter((workflow) =>
-          jobSteps(workflow.parsed).some(({ step }) =>
-            String(step["run"] ?? "").includes(pin.path),
-          ),
-        )
-        .map((workflow) => workflow.name);
-      expect(readers, `no workflow step reads ${pin.path}`).not.toEqual([]);
-    }
+  test("a workflow step installs through mise", () => {
+    const installers = loaded
+      .filter((workflow) =>
+        jobSteps(workflow.parsed).some(({ step }) =>
+          String(step["uses"] ?? "").startsWith("jdx/mise-action@"),
+        ),
+      )
+      .map((workflow) => workflow.name);
+    expect(installers, "no workflow installs through mise").not.toEqual([]);
   });
 });
 
@@ -1674,28 +1439,27 @@ describe("the pinned releases", () => {
  * The gate job's shape, reduced to the lines the pin rule reads.
  *
  * @remarks
- * Each case below is this document with one thing changed, and every change
- * is one a reader passes over: a release moved into a comment, an expression
- * swapped for the literal it resolves to, a pin file swapped for another, a
- * step id renamed, a read deleted. A rule nothing can break is a rule that
- * proves nothing, so the document has to go red under each.
+ * Each case below is this document with one thing changed, and every change is
+ * one a weaker rule passes over: a version written into a comment, a pin file
+ * handed to the action, a signed checksum traded for a typed hash, an install
+ * turned off, a release left to resolve at run time. A rule nothing can break
+ * is a rule that proves nothing, so each case names the sentence it expects.
  */
 const SOUND_GATE = [
+  "name: ci",
+  "on: [push]",
   "jobs:",
   "  gate:",
+  "    strategy:",
+  "      matrix:",
+  "        os: [windows-latest, ubuntu-latest]",
+  "    runs-on: ${{ matrix.os }}",
   "    steps:",
-  "      - id: pinned-tools",
-  "        run: |",
-  "          $tools = @(Get-Content .github/cargo-tools)",
-  "          $release = @(Get-Content .github/shellcheck-version)[0]",
-  '          $tools += "shellcheck@$release"',
-  '          "list=$tools" >> $env:GITHUB_OUTPUT',
-  "      - uses: taiki-e/install-action@aaaa",
+  "      - uses: jdx/mise-action@aaaa",
   "        with:",
-  "          tool: ${{ steps.pinned-tools.outputs.list }}",
-  "      - run: |",
-  "          $modules = Get-Content .github/go-tools",
-  "          foreach ($tool in $modules) { go install $tool }",
+  "          version: 2026.9.5",
+  "      - run: bun install --frozen-lockfile",
+  "        shell: bash",
 ].join("\n");
 
 /**
@@ -1709,180 +1473,62 @@ function doctored(text: string): LoadedWorkflow {
 }
 
 describe("the pin rule against a doctored document", () => {
-  const onePin: PinFile[] = [
-    { path: ".github/cargo-tools", releases: ["0.20.2"] },
-  ];
+  const onePin: PinnedTool[] = [{ name: "cargo-deny", version: "0.20.2" }];
 
-  /**
-   * The reader behind the second rule, against the shapes an input takes.
-   *
-   * The doc comment on it says a literal beside an expression still carries a
-   * literal. That is a claim about behavior, so it is asserted here rather
-   * than left to be read. The sample id carries a hyphen, which is what the
-   * real one carries and what the reader has to survive.
-   */
-  test("a step output reads only when the whole value is the expression", () => {
-    const cases: [string, { id: string; name: string } | undefined][] = [
-      [
-        "${{ steps.pinned-tools.outputs.list }}",
-        { id: "pinned-tools", name: "list" },
-      ],
-      [
-        "${{   steps.pinned-tools.outputs.list   }}",
-        { id: "pinned-tools", name: "list" },
-      ],
-      [
-        "${{ steps.pinned_tools.outputs.list }}",
-        { id: "pinned_tools", name: "list" },
-      ],
-      ["cargo-deny@0.20.2,${{ steps.pinned-tools.outputs.list }}", undefined],
-      ["${{ steps.pinned-tools.outputs.list }},cargo-deny@0.20.2", undefined],
-      [
-        "${{ steps.pinned-tools.outputs.list }} ${{ steps.other.outputs.list }}",
-        undefined,
-      ],
-      ["${{ env.TOOLS }}", undefined],
-      ["${{ needs.pinned-tools.outputs.list }}", undefined],
-      ["cargo-deny@0.20.2", undefined],
-      ["", undefined],
-    ];
-    for (const [value, expected] of cases) {
-      expect(stepOutputRead(value), value).toEqual(expected);
-    }
-    expect(stepOutputRead(undefined)).toBeUndefined();
-  });
-
-  /**
-   * The reader behind the first rule, which takes the path by position.
-   *
-   * A trailing comment naming the pin file cannot occupy the word after
-   * `Get-Content`, so it is refused by the shape rather than by stripping
-   * comments off, and stripping would cut a line whose quoted pattern holds a
-   * hash, which every one of these readers carries.
-   */
-  test("a pin file is read by the word after Get-Content and no other way", () => {
-    const cases: [string, string | undefined][] = [
-      ["$tools = @(Get-Content .github/cargo-tools |", "$tools"],
-      ["$tools = Get-Content .github/cargo-tools", "$tools"],
-      ["$t = @(Get-Content .github/cargo-tools)[0]", "$t"],
-      ["  $tools  =  @(Get-Content .github/cargo-tools)", "$tools"],
-      [
-        "$tools = @(Get-Content .github/other-tools # .github/cargo-tools",
-        undefined,
-      ],
-      ["$tools = @(Get-Content .github/cargo-tools-extra)", undefined],
-      ["Get-Content .github/cargo-tools", undefined],
-      ["# $tools = Get-Content .github/cargo-tools", undefined],
-      ["", undefined],
-    ];
-    for (const [script, expected] of cases) {
-      expect(pinFileVariable(script, ".github/cargo-tools"), script).toBe(
-        expected,
-      );
-    }
-  });
-
-  /**
-   * The one-hop walk, which reads the sides of the assignment.
-   *
-   * A line merely holding both names proves nothing. A reversed assignment, a
-   * guard and a comparison each hold both and carry nothing, and each one
-   * leaves the pinned release read and then dropped.
-   */
-  test("a hop counts only when the carrier is assigned from the variable", () => {
-    const carriers = ["$tools"];
-    const reaching: string[] = [
-      '$tools += "shellcheck@$($release.Trim())"',
-      "$tools = $tools + $release",
-      '$tools += "shellcheck@$release"',
-    ];
-    for (const line of reaching) {
-      expect(reachesCarrier(line, "$release", carriers), line).toBe(true);
-    }
-    const dropping: string[] = [
-      '$release = "$tools"',
-      "if (-not $release) { $tools = @() }",
-      "$same = ($release -eq $tools)",
-      "if (-not $release) { throw 'no release' }",
-      "",
-    ];
-    for (const line of dropping) {
-      expect(reachesCarrier(line, "$release", carriers), line).toBe(false);
-    }
-    expect(reachesCarrier("", "$tools", carriers)).toBe(true);
-  });
-
-  test("the sound document has no problem, so the cases below mean something", () => {
+  test("the sound document is accepted", () => {
     expect(pinProblems(doctored(SOUND_GATE), onePin)).toEqual([]);
   });
 
   test.each([
     [
-      "the release moved into a comment, with the line below untouched",
-      SOUND_GATE.replace("jobs:", "# cargo-deny 0.20.2\njobs:"),
-      "it writes 0.20.2, which .github/cargo-tools pins",
+      "a pinned version written into a comment",
+      `${SOUND_GATE}\n      # cargo-deny 0.20.2 is what this installs`,
+      "it writes 0.20.2, which mise.toml pins",
     ],
     [
-      "the pin file still read and named, and a literal installed instead",
+      "a pin file handed to the action",
       SOUND_GATE.replace(
-        "tool: ${{ steps.pinned-tools.outputs.list }}",
-        "tool: cargo-deny@0.20.2",
+        "          version: 2026.9.5",
+        '          version: 2026.9.5\n          mise_toml: "[tools]"',
       ),
-      "install-action takes cargo-deny@0.20.2, which is no step output",
+      "mise-action takes mise_toml, which writes over mise.toml",
     ],
     [
-      "the expression kept and the step behind it reading another file",
-      SOUND_GATE.replace(".github/cargo-tools", ".github/other-tools"),
-      "install-action reads pinned-tools, and pinned-tools reads .github/cargo-tools into no variable",
-    ],
-    [
-      "the expression naming a step that is not there",
-      SOUND_GATE.replace("id: pinned-tools", "id: other"),
-      "install-action reads pinned-tools, and no step is called pinned-tools",
-    ],
-    [
-      "the shellcheck pin dropped from the script that feeds the installer",
+      "a tool-versions file handed to the action",
       SOUND_GATE.replace(
-        "          $release = @(Get-Content .github/shellcheck-version)[0]\n",
-        "",
+        "          version: 2026.9.5",
+        "          version: 2026.9.5\n          tool_versions: cargo-deny 0.20.1",
       ),
-      "install-action reads pinned-tools, and pinned-tools reads .github/shellcheck-version into no variable",
+      "mise-action takes tool_versions, which writes over mise.toml",
     ],
     [
-      "the pin file read into a variable that never reaches the output",
-      SOUND_GATE.replace('          $tools += "shellcheck@$release"\n', ""),
-      "install-action reads pinned-tools, and pinned-tools reads .github/shellcheck-version into $release, which never reaches list",
-    ],
-    [
-      "the output written out rather than built from the list",
-      SOUND_GATE.replace('"list=$tools"', '"list=cargo-deny"'),
-      "install-action reads pinned-tools, and pinned-tools writes list from no variable",
-    ],
-    [
-      "the step writing no output, so nothing carries the list",
-      SOUND_GATE.replace('"list=$tools"', '"other=$tools"'),
-      "install-action reads pinned-tools, and pinned-tools writes no list output",
-    ],
-    [
-      "the go install given its module outright",
+      "a typed hash in place of the signed checksum file",
       SOUND_GATE.replace(
-        "go install $tool",
-        "go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+        "          version: 2026.9.5",
+        "          version: 2026.9.5\n          sha256: abc123",
       ),
-      "a go install takes github.com/rhysd/actionlint/cmd/actionlint@v1.7.12, which is no variable",
+      "mise-action takes a sha256, which skips the signed checksum file",
     ],
     [
-      "the pin file still read, and the loop walking another list",
-      SOUND_GATE.replace("$tool in $modules", "$tool in $others"),
-      "a go install takes $tool, which walks something other than $modules",
-    ],
-    [
-      "the go install walking a list nothing read from the pin file",
+      "the install turned off",
       SOUND_GATE.replace(
-        "$modules = Get-Content .github/go-tools",
-        "$modules = 'github.com/rhysd/actionlint/cmd/actionlint@v1.7.12'",
+        "          version: 2026.9.5",
+        "          version: 2026.9.5\n          install: false",
       ),
-      "a go install takes $tool, and no line reads .github/go-tools into a variable",
+      "mise-action installs nothing, so no tool is there to run",
+    ],
+    [
+      "a mise release left to resolve at run time",
+      SOUND_GATE.replace(
+        "          version: 2026.9.5",
+        "          version: 2026",
+      ),
+      "mise-action takes 2026, which is not one exact release",
+    ],
+    [
+      "no mise release at all",
+      SOUND_GATE.replace("        with:\n          version: 2026.9.5\n", ""),
+      "mise-action takes no version, which is not one exact release",
     ],
   ])("%s", (_what, text, expected) => {
     expect(pinProblems(doctored(text), onePin)).toContain(expected);

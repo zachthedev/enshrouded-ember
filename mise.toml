@@ -1,0 +1,39 @@
+# Every tool the gate runs that rustup, cargo and bun do not provide, pinned.
+# One version per tool, here and nowhere else: `cargo xtask check` resolves each
+# binary through `mise which`, and the ci workflow installs from this file.
+#
+# A bare name comes from mise's registry, which routes it to a prebuilt release
+# artifact. A `github:` coordinate names a tool the registry does not carry, and
+# `version_prefix` builds the release tag where that tag is not the bare
+# version. The cargo backend is deliberately unused: it runs `cargo install`,
+# which builds from source, and `mise lock` records no checksum for a build.
+#
+# mise.lock holds a checksum per platform for every entry below, so a version
+# appears here and a hash appears there. `mise lock --platform
+# linux-x64,windows-x64` rewrites it after any edit to this file.
+#
+# Some entries also carry a provenance line. That is a lock-time check: mise
+# verifies the signer when it writes the entry, and the checksum is what an
+# install compares. `cargo xtask pins` reads this pair, and the gate runs it
+# before it runs any tool.
+#
+# Nothing bumps these automatically. Dependabot has no ecosystem for a mise
+# tool, so a human edits this file.
+
+[tools]
+actionlint = "1.7.12"
+cargo-deny = "0.20.2"
+"github:bnjbvr/cargo-machete" = "0.9.2"
+"github:nextest-rs/nextest" = { version = "0.9.145", version_prefix = "cargo-nextest-" }
+"github:rustsec/rustsec" = { version = "0.22.2", version_prefix = "cargo-audit/v" }
+shellcheck = "0.11.0"
+taplo = "0.10.0"
+zizmor = "1.30.1"
+
+[settings]
+# mise refuses to install a version mise.lock does not record, so an edit to
+# [tools] with no relock is refused rather than fetched. It requires an entry
+# rather than a checksum, which is why the gate reads the lockfile itself. With
+# this line gone, `mise which` also answers out of a developer's global config
+# for a tool this repository pins nowhere.
+locked = true

@@ -13,41 +13,30 @@ cd enshrouded-ember
 cargo command. A C toolchain is needed for MinHook, the hook engine; on Windows
 that is Visual Studio Build Tools.
 
-The gate calls tools that rustup does not install. `.github/cargo-tools` pins
-the crates.io packages among them, and `.github/go-tools` pins the Go programs,
-which need [Go](https://go.dev) to install. The versions live in those files and
-nowhere else, so this installs what continuous integration installs:
-
-```powershell
-cargo install --locked @(Get-Content .github/cargo-tools | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })
-Get-Content .github/go-tools | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() } | ForEach-Object { go install $_ }
-```
-
-On a shell without PowerShell:
+The gate calls tools that rustup, cargo and bun do not provide.
+[mise](https://mise.jdx.dev) installs every one of them. `mise.toml` pins a
+version per tool and `mise.lock` records a checksum per platform, so an install
+takes the recorded artifact or fails. Install mise, then:
 
 ```sh
-cargo install --locked $(grep -v '^#' .github/cargo-tools | grep .)
-grep -v '^#' .github/go-tools | grep . | xargs -n 1 go install
+mise install
 ```
 
-The gate needs ShellCheck too, which actionlint shells out to. Its release is in
-`.github/shellcheck-version`, and the gate refuses the `actionlint` step unless
-the binary on `PATH` reports that one:
+Nothing from that lands on `PATH`. The gate asks `mise which` for each binary
+and runs the path it gives back, so the binary it checked is the binary it ran.
+Turning on `mise activate` in a shell puts the same binaries on `PATH` under
+their own names, which is what makes `cargo nextest run` and its siblings work
+at a prompt. The split is deliberate: a check runs the binary it resolved, and a
+person gets the convenience.
 
-```powershell
-$release = @(Get-Content .github/shellcheck-version | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })[0]
-winget install --id koalaman.shellcheck --version $release
-```
-
-No single command installs ShellCheck on every host. winget names the package
-`koalaman.shellcheck`, while apt and brew name it `shellcheck`, and each serves
-a release of its own. Continuous integration sidesteps that with an installer
-that takes one coordinate everywhere, which a contributor has no equivalent of.
-
-On another host, take the pinned release from
-[the ShellCheck releases](https://github.com/koalaman/shellcheck/releases) and
-put it on `PATH`. A release the pin file does not name is refused by name, so a
-wrong install fails at the gate rather than reading a script under other rules.
+`taplo` is the one tool whose checksum does not come from its publisher. GitHub
+began recording a digest for release assets after the taplo release `mise.toml`
+pins was published, so its hashes were computed here and committed. They say the
+bytes came from that release URL and that every install since has to match them,
+which is narrower than a digest the publisher recorded and is not provenance.
+Bumping taplo writes a lockfile entry with no checksum at all, which the gate's
+own tests refuse, so whoever bumps it computes and commits the new hashes. A
+relock at the same version keeps them, so only a bump drops them.
 
 [Bun](https://bun.sh) runs the repository's own tooling, at the release
 `.bun-version` pins. Install the hooks and the markup formatter with one

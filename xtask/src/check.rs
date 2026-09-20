@@ -28,8 +28,15 @@ use crate::ui::{Mark, Row, Ui};
 pub(crate) struct Step {
     /// The name the result row carries.
     pub(crate) name: &'static str,
-    /// The executable that must be on `PATH` for the step to run.
-    requires: &'static str,
+    /// The executable the step runs.
+    pub(crate) requires: &'static str,
+    /// Whether mise installs `requires`, under the name `requires` spells.
+    ///
+    /// The gate resolves such a program through `mise which` and runs the path
+    /// it gives back, so the binary it checked is the binary it ran. A program
+    /// the toolchain or the package manager provides is not one of these and
+    /// runs by name off `PATH`.
+    pub(crate) mise: bool,
     /// How to install it when it is missing.
     pub(crate) install: &'static str,
     /// The `node_modules/.bin` entry `bun install` has to have written.
@@ -47,17 +54,15 @@ pub(crate) struct Step {
     pub(crate) analyzer: Option<Analyzer>,
 }
 
-/// A program a gate tool shells out to, and the file pinning its release.
+/// A program a gate tool shells out to.
 ///
 /// actionlint runs shellcheck when it finds one on `PATH` and says nothing at
 /// all when it does not, so a host without it reports a pass for an analysis
-/// nobody ran. The release is read from the pin file on every run rather than
-/// written here, so one file holds it.
+/// nobody ran. The version comes from [`PINS`] on every run, under this
+/// program's own name, so one file holds it.
 pub(crate) struct Analyzer {
-    /// The executable, searched for on `PATH`.
+    /// The executable, resolved through mise and read from [`PINS`].
     pub(crate) program: &'static str,
-    /// The file holding the release it has to report, from the workspace root.
-    pub(crate) pin: &'static str,
 }
 
 /// Every step, in the order they run.
@@ -65,6 +70,7 @@ pub(crate) const STEPS: [Step; 13] = [
     Step {
         name: "fmt",
         requires: "cargo-fmt",
+        mise: false,
         install: "rustup component add rustfmt",
         package: None,
         analyzer: None,
@@ -72,13 +78,15 @@ pub(crate) const STEPS: [Step; 13] = [
     Step {
         name: "taplo",
         requires: "taplo",
-        install: "cargo install --locked taplo-cli",
+        mise: true,
+        install: MISE_INSTALL,
         package: None,
         analyzer: None,
     },
     Step {
         name: "clippy",
         requires: "cargo-clippy",
+        mise: false,
         install: "rustup component add clippy",
         package: None,
         analyzer: None,
@@ -86,6 +94,7 @@ pub(crate) const STEPS: [Step; 13] = [
     Step {
         name: "tests",
         requires: "cargo",
+        mise: false,
         install: "rustup toolchain install",
         package: None,
         analyzer: None,
@@ -93,6 +102,7 @@ pub(crate) const STEPS: [Step; 13] = [
     Step {
         name: "doctests",
         requires: "cargo",
+        mise: false,
         install: "rustup toolchain install",
         package: None,
         analyzer: None,
@@ -100,27 +110,31 @@ pub(crate) const STEPS: [Step; 13] = [
     Step {
         name: "deny",
         requires: "cargo-deny",
-        install: "cargo install --locked cargo-deny",
+        mise: true,
+        install: MISE_INSTALL,
         package: None,
         analyzer: None,
     },
     Step {
         name: "machete",
         requires: "cargo-machete",
-        install: "cargo install --locked cargo-machete",
+        mise: true,
+        install: MISE_INSTALL,
         package: None,
         analyzer: None,
     },
     Step {
         name: "audit",
         requires: "cargo-audit",
-        install: "cargo install --locked cargo-audit",
+        mise: true,
+        install: MISE_INSTALL,
         package: None,
         analyzer: None,
     },
     Step {
         name: "prettier",
         requires: "bunx",
+        mise: false,
         install: "install Bun from https://bun.sh",
         package: Some("prettier"),
         analyzer: None,
@@ -128,6 +142,7 @@ pub(crate) const STEPS: [Step; 13] = [
     Step {
         name: "typecheck",
         requires: "bunx",
+        mise: false,
         install: "install Bun from https://bun.sh",
         package: Some("tsc"),
         analyzer: None,
@@ -135,6 +150,7 @@ pub(crate) const STEPS: [Step; 13] = [
     Step {
         name: "tools",
         requires: "bun",
+        mise: false,
         install: "install Bun from https://bun.sh",
         package: None,
         analyzer: None,
@@ -142,32 +158,75 @@ pub(crate) const STEPS: [Step; 13] = [
     Step {
         name: "actionlint",
         requires: "actionlint",
-        // The version is here and in .github/go-tools, and a test asserts the
-        // two agree. actionlint is on neither crates.io nor
-        // taiki-e/install-action, so it cannot sit in .github/cargo-tools
-        // beside the rest.
-        install: "go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+        mise: true,
+        install: MISE_INSTALL,
         package: None,
         analyzer: Some(Analyzer {
             program: "shellcheck",
-            pin: SHELLCHECK_PIN,
         }),
     },
     Step {
         name: "zizmor",
         requires: "zizmor",
-        install: "cargo install --locked zizmor",
+        mise: true,
+        install: MISE_INSTALL,
         package: None,
         analyzer: None,
     },
 ];
 
-/// The file holding the shellcheck release, read on every run.
+/// The file pinning a version for every tool mise installs, read on every run.
 ///
-/// The release is in this file and nowhere else. The ci workflow reads it to
-/// install the analyzer and the gate reads it to refuse an installed binary
-/// that reports anything else, so neither carries a copy that can drift.
-pub(crate) const SHELLCHECK_PIN: &str = ".github/shellcheck-version";
+/// A version is in this file and nowhere else. mise installs from it and the
+/// gate reads it back to refuse a binary reporting anything else, so neither
+/// carries a copy that can drift.
+pub(crate) use crate::pins::PINS;
+
+/// The name the row for the pin rules carries.
+pub(crate) const PINS_STEP: &str = "pins";
+
+/// Every way the pin files fall short, with an unreadable file reported as a
+/// problem of its own.
+pub(crate) fn pin_problems(root: &Path) -> Vec<String> {
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).map_err(|err| format!("reading {path}: {err}"))
+    };
+    match (
+        read(crate::pins::PINS),
+        read(crate::pins::LOCK),
+        read(crate::pins::WORKFLOW),
+    ) {
+        (Ok(pins), Ok(lock), Ok(workflow)) => crate::pins::problems(&pins, &lock, &workflow),
+        (first, second, third) => [first, second, third]
+            .into_iter()
+            .filter_map(Result::err)
+            .collect(),
+    }
+}
+
+/// What to run when a tool mise owns is absent. One command covers every one of
+/// them, because [`PINS`] names them all and mise reads it.
+pub(crate) const MISE_INSTALL: &str = "mise install";
+
+/// The path mise installs for `tool`, or `None` when mise resolves none.
+///
+/// Every pinned tool runs by this path rather than by name, so the binary the
+/// gate checked and the binary it ran are the same file by construction rather
+/// than by two lookups agreeing. `mise which` exits non-zero for a tool it does
+/// not install, and prints one path on the first line when it does.
+fn mise_which(root: &Path, tool: &str) -> Option<PathBuf> {
+    let output = Command::new("mise")
+        .args(["which", tool])
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let printed = String::from_utf8_lossy(&output.stdout).into_owned();
+    let line = printed.lines().next()?.trim();
+    (!line.is_empty()).then(|| PathBuf::from(line))
+}
 
 /// Where `bun install` writes a package's launcher, per host.
 fn launcher(root: &Path, package: &str) -> PathBuf {
@@ -189,17 +248,49 @@ pub fn run(ui: &Ui) -> Result<bool> {
     let root = crate::workspace_root();
     ui.section("check");
     let mut rows: Vec<Row> = Vec::new();
+
+    // The pin rules run before any tool. A lockfile entry carrying a url and no
+    // checksum installs whatever that url serves, so a rule that ran later would
+    // report a finding about a binary that had already executed.
+    let problems = pin_problems(&root);
+    if problems.is_empty() {
+        rows.push(Row::new(Mark::Ok, PINS_STEP, "ok"));
+    } else {
+        for problem in &problems {
+            ui.line(problem);
+        }
+        rows.push(
+            Row::new(Mark::Fail, PINS_STEP, "did not pass").note(format!(
+                "rewrite the lockfile with: {}",
+                crate::pins::RELOCK
+            )),
+        );
+        return Ok(report(ui, &rows, Some(PINS_STEP), None));
+    }
+
     for step in &STEPS {
         if !ui.quiet() {
             ui.line(&format!("running {}", step.name));
         }
-        if !on_path(step.requires) {
-            rows.push(Row::new(Mark::Fail, step.name, "did not run").note(format!(
-                "{} is not installed: {}",
-                step.requires, step.install
-            )));
-            return Ok(report(ui, &rows, Some(step.name), None));
-        }
+        let program = if step.mise {
+            let Some(path) = mise_which(&root, step.requires) else {
+                rows.push(Row::new(Mark::Fail, step.name, "did not run").note(format!(
+                    "mise resolves no {}: {}",
+                    step.requires, step.install
+                )));
+                return Ok(report(ui, &rows, Some(step.name), None));
+            };
+            path.display().to_string()
+        } else {
+            if !on_path(step.requires) {
+                rows.push(Row::new(Mark::Fail, step.name, "did not run").note(format!(
+                    "{} is not installed: {}",
+                    step.requires, step.install
+                )));
+                return Ok(report(ui, &rows, Some(step.name), None));
+            }
+            step.requires.to_string()
+        };
         if let Some(package) = step.package
             && !launcher(&root, package).is_file()
         {
@@ -219,7 +310,7 @@ pub fn run(ui: &Ui) -> Result<bool> {
                 }
             }
         }
-        let (outcome, output) = invoke(step.name, &root, resolved.as_deref())?;
+        let (outcome, output) = invoke(step.name, &program, &root, resolved.as_deref())?;
         rows.push(outcome.row(step.name));
         if outcome.failed() {
             return Ok(report(ui, &rows, Some(step.name), output.as_ref()));
@@ -307,12 +398,17 @@ const TEST_TARGET_DIR: &str = "target/check";
 ///
 /// `analyzer` is the resolved path to the step's analyzer, for a step that
 /// names one.
-fn invoke(name: &str, root: &Path, analyzer: Option<&Path>) -> Result<(Outcome, Option<Output>)> {
+fn invoke(
+    name: &str,
+    program: &str,
+    root: &Path,
+    analyzer: Option<&Path>,
+) -> Result<(Outcome, Option<Output>)> {
     match name {
         "fmt" => run_one(root, "cargo", &["fmt", "--check"], String::new(), None),
         // The files and the exclusions are in .taplo.toml, so the same set is
         // formatted whether the gate or an editor runs the tool.
-        "taplo" => run_one(root, "taplo", &["fmt", "--check"], String::new(), None),
+        "taplo" => run_one(root, program, &["fmt", "--check"], String::new(), None),
         "clippy" => run_one(
             root,
             "cargo",
@@ -329,18 +425,21 @@ fn invoke(name: &str, root: &Path, analyzer: Option<&Path>) -> Result<(Outcome, 
         ),
         "tests" => {
             let target = Some(root.join(TEST_TARGET_DIR));
-            if on_path(PREFERRED_TEST_RUNNER) {
+            // The runner is a pinned tool and the step's own program is not, so
+            // this resolves it separately. The binary takes its own subcommand
+            // name first, which cargo's dispatch would otherwise supply.
+            if let Some(runner) = mise_which(root, PREFERRED_TEST_RUNNER) {
                 run_one(
                     root,
-                    "cargo",
+                    &runner.display().to_string(),
                     &["nextest", "run", "--workspace"],
-                    "cargo nextest".to_string(),
+                    PREFERRED_TEST_RUNNER.to_string(),
                     target,
                 )
             } else {
                 run_one(
                     root,
-                    "cargo",
+                    program,
                     &["test", "--workspace"],
                     "cargo test, because cargo-nextest is absent".to_string(),
                     target,
@@ -359,13 +458,9 @@ fn invoke(name: &str, root: &Path, analyzer: Option<&Path>) -> Result<(Outcome, 
             String::new(),
             Some(root.join(TEST_TARGET_DIR)),
         ),
-        "deny" => run_one(root, "cargo", &["deny", "check"], String::new(), None),
-        "machete" => {
-            let mut args = vec!["machete"];
-            args.extend_from_slice(&MACHETE_DIRS);
-            run_one(root, "cargo", &args, MACHETE_DIRS.join(", "), None)
-        }
-        "audit" => run_one(root, "cargo", &["audit"], String::new(), None),
+        "deny" => run_one(root, program, &["check"], String::new(), None),
+        "machete" => run_one(root, program, &MACHETE_DIRS, MACHETE_DIRS.join(", "), None),
+        "audit" => run_one(root, program, &["audit"], String::new(), None),
         "prettier" => {
             let args = prettier_args(root);
             let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -389,7 +484,7 @@ fn invoke(name: &str, root: &Path, analyzer: Option<&Path>) -> Result<(Outcome, 
             let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
             run_one(
                 root,
-                "actionlint",
+                program,
                 &borrowed,
                 ".github/workflows".to_string(),
                 None,
@@ -397,7 +492,7 @@ fn invoke(name: &str, root: &Path, analyzer: Option<&Path>) -> Result<(Outcome, 
         }
         "zizmor" => run_one(
             root,
-            "zizmor",
+            program,
             &ZIZMOR_ARGS,
             ".github/workflows, dependabot.yml".to_string(),
             None,
@@ -556,15 +651,14 @@ fn report(ui: &Ui, rows: &[Row], failed: Option<&str>, output: Option<&Output>) 
 ///
 /// Returns the sentence the result row carries.
 fn resolve_analyzer(root: &Path, analyzer: &Analyzer) -> Result<PathBuf, String> {
-    let text = std::fs::read_to_string(root.join(analyzer.pin))
-        .map_err(|err| format!("reading {}: {err}", analyzer.pin))?;
-    let pinned =
-        pinned_release(&text).ok_or_else(|| format!("{} names no release", analyzer.pin))?;
-    let path = which::which(analyzer.program).map_err(|_| {
+    let text =
+        std::fs::read_to_string(root.join(PINS)).map_err(|err| format!("reading {PINS}: {err}"))?;
+    let pinned = pinned_version(&text, analyzer.program)
+        .ok_or_else(|| format!("{PINS} pins no version for {}", analyzer.program))?;
+    let path = mise_which(root, analyzer.program).ok_or_else(|| {
         format!(
-            "{} is not installed, and actionlint skips the analysis in silence: \
-             install {} {pinned}, which {} pins",
-            analyzer.program, analyzer.program, analyzer.pin
+            "mise resolves no {}, and actionlint skips the analysis in silence: {MISE_INSTALL}",
+            analyzer.program
         )
     })?;
     let output = Command::new(&path)
@@ -573,18 +667,26 @@ fn resolve_analyzer(root: &Path, analyzer: &Analyzer) -> Result<PathBuf, String>
         .map_err(|err| format!("running {} --version: {err}", path.display()))?;
     let mut said = String::from_utf8_lossy(&output.stdout).into_owned();
     said.push_str(&String::from_utf8_lossy(&output.stderr));
-    match release_problem(analyzer.program, pinned, reported_release(&said)) {
+    match release_problem(analyzer.program, &pinned, reported_release(&said)) {
         Some(problem) => Err(problem),
         None => Ok(path),
     }
 }
 
-/// The release a pin file holds: its first line that is neither blank nor a
-/// comment.
-fn pinned_release(text: &str) -> Option<&str> {
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with('#'))
+/// The version [`PINS`] holds for the tool spelled `name`, or `None` when its
+/// `[tools]` table has no such entry.
+///
+/// The value is the version itself, or a table carrying it under `version`,
+/// which is the shape an entry with backend options takes. The key is matched
+/// whole, so a backend coordinate is never read as the tool at the end of it.
+/// Text that is not TOML reads as no version, which the gate reports the same
+/// way as a missing entry.
+pub(crate) fn pinned_version(text: &str, name: &str) -> Option<String> {
+    let document: toml::Value = toml::from_str(text).ok()?;
+    match document.get("tools")?.get(name)? {
+        toml::Value::String(version) => Some(version.clone()),
+        entry => entry.get("version")?.as_str().map(str::to_string),
+    }
 }
 
 /// The first exact release in `text`: three runs of digits separated by dots.
@@ -634,9 +736,9 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        Analyzer, CRATE_ENV, DOCTEST_ARGS, MACHETE_DIRS, PYFLAKES_OFF, SHELLCHECK_PIN, STEPS,
+        Analyzer, CRATE_ENV, DOCTEST_ARGS, MACHETE_DIRS, MISE_INSTALL, PINS, PYFLAKES_OFF, STEPS,
         TOOLS_TEST_ARGS, TYPECHECK_ARGS, ZIZMOR_ARGS, actionlint_args, launcher, on_path,
-        pinned_release, prettier_args, release_problem, reported_release, resolve_analyzer,
+        pinned_version, prettier_args, release_problem, reported_release, resolve_analyzer,
     };
     use crate::testutil::TestDir;
 
@@ -713,19 +815,18 @@ mod tests {
             .as_ref()
             .expect("the actionlint step names no analyzer, so a host without one passes");
         assert_eq!(analyzer.program, "shellcheck");
-        assert_eq!(analyzer.pin, SHELLCHECK_PIN);
 
-        let text = std::fs::read_to_string(crate::workspace_root().join(analyzer.pin))
-            .unwrap_or_else(|err| panic!("{}: {err}", analyzer.pin));
-        let pinned =
-            pinned_release(&text).unwrap_or_else(|| panic!("{} names no release", analyzer.pin));
+        let text = std::fs::read_to_string(crate::workspace_root().join(PINS))
+            .unwrap_or_else(|err| panic!("{PINS}: {err}"));
+        let pinned = pinned_version(&text, analyzer.program)
+            .unwrap_or_else(|| panic!("{PINS} pins no version for {}", analyzer.program));
         assert!(
             pinned.split('.').count() >= 2
                 && pinned
                     .split('.')
                     .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())),
-            "{} pins {pinned:?}, which is not a dotted release",
-            analyzer.pin
+            "{PINS} pins {pinned:?} for {}, which is not a dotted release",
+            analyzer.program
         );
     }
 
@@ -741,21 +842,45 @@ mod tests {
         assert_eq!(naming, ["actionlint"]);
     }
 
-    /// A pin file yields its release past the comment block, and a file with
-    /// nothing but comments yields none.
+    /// The pin file gives a version per tool, under the key that tool's binary
+    /// is named, whether the entry is the bare version or a table carrying
+    /// backend options. A tool no entry names has no version, which is a
+    /// refusal rather than a default.
     #[test]
-    fn pinned_release_reads_past_the_comments() {
+    fn pinned_version_reads_each_entry_shape() {
+        let document = concat!(
+            "[tools]\n",
+            "shellcheck = \"0.11.0\"\n",
+            "\"github:nextest-rs/nextest\" = { version = \"0.9.145\", version_prefix = \"x-\" }\n",
+            "\n[settings]\nlocked = true\n",
+        );
         let cases: &[(&str, Option<&str>)] = &[
-            ("# why\n# more\n0.11.0\n", Some("0.11.0")),
-            ("\n\n  0.11.0  \n", Some("0.11.0")),
-            ("0.11.0\n1.0.0\n", Some("0.11.0")),
-            ("# only a comment\n", None),
-            ("\n", None),
+            ("shellcheck", Some("0.11.0")),
+            ("github:nextest-rs/nextest", Some("0.9.145")),
+            // A coordinate is one key, so the name at the end of it is not an
+            // entry of its own.
+            ("nextest", None),
+            // A table in another section is not a tool.
+            ("locked", None),
             ("", None),
         ];
-        for (text, expected) in cases {
-            assert_eq!(pinned_release(text), *expected, "{text:?}");
+        for (name, expected) in cases {
+            assert_eq!(
+                pinned_version(document, name).as_deref(),
+                *expected,
+                "{name:?}"
+            );
         }
+        assert_eq!(
+            pinned_version("this is not toml = = =", "shellcheck"),
+            None,
+            "an unparseable pin file reads as no version rather than panicking"
+        );
+        assert_eq!(
+            pinned_version("[settings]\nlocked = true\n", "shellcheck"),
+            None,
+            "a pin file with no tools table names no version"
+        );
     }
 
     /// A tool prints its name, its license and a website around the release it
@@ -808,37 +933,28 @@ mod tests {
         let dir = TestDir::new("analyzer-pin");
         let analyzer = Analyzer {
             program: "shellcheck",
-            pin: ".github/shellcheck-version",
         };
         let missing =
             resolve_analyzer(dir.path(), &analyzer).expect_err("no pin file is a problem");
-        assert!(missing.contains(".github/shellcheck-version"), "{missing}");
+        assert!(missing.contains(PINS), "{missing}");
 
-        dir.write(
-            ".github/shellcheck-version",
-            b"# a comment and no release\n",
-        );
-        let empty = resolve_analyzer(dir.path(), &analyzer).expect_err("a pin with no release");
-        assert!(empty.contains("names no release"), "{empty}");
+        dir.write(PINS, b"[tools]\ntaplo = \"0.10.0\"\n");
+        let empty = resolve_analyzer(dir.path(), &analyzer).expect_err("a pin naming no version");
+        assert!(empty.contains("pins no version for shellcheck"), "{empty}");
     }
 
-    /// An analyzer that is not installed refuses the step and says what to
-    /// install, because actionlint would otherwise exit zero over shell
-    /// nobody read.
+    /// An analyzer mise resolves nowhere refuses the step and says what to
+    /// run, because actionlint would otherwise exit zero over shell nobody
+    /// read.
     #[test]
-    fn an_absent_analyzer_refuses_the_step_and_names_the_release() {
+    fn an_absent_analyzer_refuses_the_step_and_says_what_to_run() {
+        const ABSENT: &str = "ember-analyzer-that-does-not-exist";
         let dir = TestDir::new("analyzer-absent");
-        dir.write(".github/shellcheck-version", b"0.11.0\n");
-        let analyzer = Analyzer {
-            program: "ember-analyzer-that-does-not-exist",
-            pin: ".github/shellcheck-version",
-        };
+        dir.write(PINS, format!("[tools]\n{ABSENT} = \"0.11.0\"\n").as_bytes());
+        let analyzer = Analyzer { program: ABSENT };
         let problem = resolve_analyzer(dir.path(), &analyzer).expect_err("an absent analyzer");
-        assert!(
-            problem.contains("ember-analyzer-that-does-not-exist"),
-            "{problem}"
-        );
-        assert!(problem.contains("0.11.0"), "{problem}");
+        assert!(problem.contains(ABSENT), "{problem}");
+        assert!(problem.contains(MISE_INSTALL), "{problem}");
     }
 
     /// A bare `.` audits whatever a walk of the tree reaches, and the mods
