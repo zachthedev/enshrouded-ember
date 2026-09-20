@@ -1,0 +1,18 @@
+# The ShellCheck release the gate holds its actionlint step to, pinned here and
+# nowhere else: the ci workflow reads this file to install the analyzer, and
+# the gate reads it again to refuse actionlint unless the installed binary
+# reports this release.
+#
+# actionlint shells out to ShellCheck when it finds one on PATH and says
+# nothing at all when it does not, so a host without it reports a pass for an
+# analysis nobody ran. Holding every host to the same release is what makes
+# the matrix legs read a script the same way.
+#
+# ShellCheck is neither a crates.io package nor a Go program, so it joins
+# neither .github/cargo-tools nor .github/go-tools. This file holds a bare
+# release the way .bun-version does, and the ci workflow joins the tool name
+# on to build the coordinate its installer takes.
+#
+# Nothing bumps this automatically. Dependabot has no ecosystem for a release
+# binary, so a human edits this file.
+0.11.0

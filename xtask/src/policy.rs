@@ -1759,6 +1759,15 @@ mod tests {
             ));
         }
         pins.push((".bun-version", read(".bun-version").trim().to_string()));
+        pins.push((
+            crate::check::SHELLCHECK_PIN,
+            read(crate::check::SHELLCHECK_PIN)
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty() && !line.starts_with('#'))
+                .expect("the shellcheck pin names a release")
+                .to_string(),
+        ));
         for line in read(".github/workflows/ci.yml").lines() {
             if let Some(value) = line.trim().strip_prefix("go-version:") {
                 pins.push((
@@ -1773,8 +1782,9 @@ mod tests {
     /// A version restated outside the file that pins it is a copy the next
     /// bump leaves behind. Every pin is read from its file: the toolchain
     /// channel and its minor release, each `.github/cargo-tools` and
-    /// `.github/go-tools` entry, `.bun-version`, and the Go release the gate
-    /// job's setup-go step takes. None of them may appear in prose, which is
+    /// `.github/go-tools` entry, `.github/shellcheck-version`, `.bun-version`,
+    /// and the Go release the gate job's setup-go step takes. None of them may
+    /// appear in prose, which is
     /// what the count check reads: every Markdown file and issue form whole,
     /// and the comments of code, configuration and workflows.
     ///
@@ -1790,6 +1800,7 @@ mod tests {
             "rust-toolchain.toml",
             ".github/cargo-tools",
             ".github/go-tools",
+            ".github/shellcheck-version",
             ".bun-version",
             ".github/workflows/ci.yml",
         ] {

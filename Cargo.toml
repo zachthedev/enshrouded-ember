@@ -18,7 +18,7 @@ edition = "2024"
 rust-version = "1.98"
 license = "MIT"
 repository = "https://github.com/zachthedev/enshrouded-ember"
-authors = ["Zach <me@zachthe.dev>"]
+authors = ["ZachTheDev <me@zachthe.dev>"]
 
 [workspace.dependencies]
 ember-enshrouded = { version = "0.0.0", path = "crates/ember-enshrouded" }
