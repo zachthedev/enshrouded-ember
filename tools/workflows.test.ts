@@ -1,9 +1,9 @@
-import { describe, expect, test } from "bun:test";
-import { readdir } from "node:fs/promises";
-import { DESTINATION, NEEDS_ARCHIVE } from "./archive.ts";
-import { ARCHIVE_FILES } from "./records.ts";
-import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { describe, expect, test } from 'bun:test';
+import { readdir } from 'node:fs/promises';
+import { DESTINATION, NEEDS_ARCHIVE } from './archive.ts';
+import { ARCHIVE_FILES } from './records.ts';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 /**
  * What a workflow file holds, as far as these cases read it.
@@ -27,15 +27,11 @@ interface LoadedWorkflow {
 }
 
 /** The directory the workflows live in, resolved from this module. */
-const workflowDir = fileURLToPath(
-  new URL("../.github/workflows/", import.meta.url),
-);
+const workflowDir = fileURLToPath(new URL('../.github/workflows/', import.meta.url));
 
 /** Every workflow in the repository. */
 async function workflows(): Promise<LoadedWorkflow[]> {
-  const names = (await readdir(workflowDir)).filter((name) =>
-    /\.ya?ml$/.test(name),
-  );
+  const names = (await readdir(workflowDir)).filter((name) => /\.ya?ml$/.test(name));
   const loaded: LoadedWorkflow[] = [];
   for (const name of names) {
     const text = await Bun.file(join(workflowDir, name)).text();
@@ -45,14 +41,8 @@ async function workflows(): Promise<LoadedWorkflow[]> {
 }
 
 /** The secrets that reach the archive, split by what they can do to it. */
-const READ_SECRETS = [
-  "R2_ARCHIVE_READ_ACCESS_KEY_ID",
-  "R2_ARCHIVE_READ_SECRET_ACCESS_KEY",
-];
-const WRITE_SECRETS = [
-  "R2_ARCHIVE_WRITE_ACCESS_KEY_ID",
-  "R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY",
-];
+const READ_SECRETS = ['R2_ARCHIVE_READ_ACCESS_KEY_ID', 'R2_ARCHIVE_READ_SECRET_ACCESS_KEY'];
+const WRITE_SECRETS = ['R2_ARCHIVE_WRITE_ACCESS_KEY_ID', 'R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY'];
 
 /**
  * The deploy key a job checks out with when it has to push to main.
@@ -62,7 +52,7 @@ const WRITE_SECRETS = [
  * bypasses that rule. A job's own `GITHUB_TOKEN` has no bypass, so a push over
  * HTTPS is refused.
  */
-const PUSH_KEY_SECRET = "EMBER_CI_SSH_KEY";
+const PUSH_KEY_SECRET = 'EMBER_CI_SSH_KEY';
 
 /**
  * The deployment environments known to carry no required reviewer.
@@ -82,7 +72,7 @@ const PUSH_KEY_SECRET = "EMBER_CI_SSH_KEY";
  * `main`. A workflow on any other branch is refused the secrets the
  * environment holds, which a repository-level secret cannot do.
  */
-const UNGATED_ENVIRONMENTS = ["archive-read", "digest-push"];
+const UNGATED_ENVIRONMENTS = ['archive-read', 'digest-push'];
 
 /**
  * Triggers that carry repository secrets on an event a fork can influence.
@@ -94,13 +84,7 @@ const UNGATED_ENVIRONMENTS = ["archive-read", "digest-push"];
  * branch with full access to secrets, and anyone can comment on a public
  * repository's issue or discussion.
  */
-const FORK_INFLUENCED = [
-  "pull_request",
-  "pull_request_target",
-  "workflow_run",
-  "issue_comment",
-  "discussion_comment",
-];
+const FORK_INFLUENCED = ['pull_request', 'pull_request_target', 'workflow_run', 'issue_comment', 'discussion_comment'];
 
 /**
  * The owners every action in this repository may come from.
@@ -111,12 +95,12 @@ const FORK_INFLUENCED = [
  * `evilcorp/setup-bun` at some 40-hex commit of their own keeps the pin and
  * changes the code that runs.
  */
-const ACTION_OWNERS = ["actions", "jdx", "oven-sh", "Swatinem"];
+const ACTION_OWNERS = ['actions', 'jdx', 'oven-sh', 'Swatinem'];
 
 const loaded = await workflows();
 
-describe("the workflows", () => {
-  test("there is at least one, so an empty directory cannot pass every case", () => {
+describe('the workflows', () => {
+  test('there is at least one, so an empty directory cannot pass every case', () => {
     expect(loaded.length).toBeGreaterThan(0);
   });
 
@@ -127,24 +111,15 @@ describe("the workflows", () => {
    * exception.
    */
   test.each(loaded.map((workflow) => [workflow.name] as const))(
-    "%s reaches no archive credential if a pull request can trigger it",
+    '%s reaches no archive credential if a pull request can trigger it',
     (name) => {
-      const workflow = loaded.find(
-        (one) => one.name === name,
-      ) as LoadedWorkflow;
+      const workflow = loaded.find((one) => one.name === name) as LoadedWorkflow;
       const triggers = Object.keys(workflow.parsed.on ?? {});
       if (!triggers.some((trigger) => FORK_INFLUENCED.includes(trigger))) {
         return;
       }
-      for (const secret of [
-        ...READ_SECRETS,
-        ...WRITE_SECRETS,
-        PUSH_KEY_SECRET,
-      ]) {
-        expect(
-          workflow.text,
-          `${name} runs on a fork-influenced trigger and names ${secret}`,
-        ).not.toContain(secret);
+      for (const secret of [...READ_SECRETS, ...WRITE_SECRETS, PUSH_KEY_SECRET]) {
+        expect(workflow.text, `${name} runs on a fork-influenced trigger and names ${secret}`).not.toContain(secret);
       }
     },
   );
@@ -160,15 +135,15 @@ describe("the workflows", () => {
    * describes, and every later run re-fetches and re-uploads without ever
    * finishing.
    */
-  test("the deploy key and a push go together, in both directions", () => {
+  test('the deploy key and a push go together, in both directions', () => {
     let pushing = 0;
     for (const workflow of loaded) {
       for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
         const text = JSON.stringify(job);
-        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        const steps = Array.isArray(job['steps']) ? job['steps'] : [];
         const pushes = steps.some((step) => {
-          const script = (step as Record<string, unknown>)["run"];
-          return typeof script === "string" && /\bgit push\b/.test(script);
+          const script = (step as Record<string, unknown>)['run'];
+          return typeof script === 'string' && /\bgit push\b/.test(script);
         });
         const carriesKey = text.includes(PUSH_KEY_SECRET);
         if (pushes) {
@@ -177,14 +152,12 @@ describe("the workflows", () => {
         expect(
           carriesKey,
           pushes
-            ? `${workflow.name} job ${jobName} pushes without the deploy key, ` +
-                "so main will refuse it"
-            : `${workflow.name} job ${jobName} carries the deploy key and ` +
-                "pushes nothing",
+            ? `${workflow.name} job ${jobName} pushes without the deploy key, ` + 'so main will refuse it'
+            : `${workflow.name} job ${jobName} carries the deploy key and ` + 'pushes nothing',
         ).toBe(pushes);
       }
     }
-    expect(pushing, "no job pushes, so this case checked nothing").toBe(2);
+    expect(pushing, 'no job pushes, so this case checked nothing').toBe(2);
   });
 
   /**
@@ -196,15 +169,13 @@ describe("the workflows", () => {
    * both lets one compromise reach both, and the archive job is the one that
    * runs a container and third-party code.
    */
-  test("no job holds both an archive credential and the deploy key", () => {
+  test('no job holds both an archive credential and the deploy key', () => {
     let holdingArchive = 0;
     let holdingKey = 0;
     for (const workflow of loaded) {
       for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
         const text = JSON.stringify(job);
-        const archive = [...READ_SECRETS, ...WRITE_SECRETS].some((secret) =>
-          text.includes(secret),
-        );
+        const archive = [...READ_SECRETS, ...WRITE_SECRETS].some((secret) => text.includes(secret));
         const key = text.includes(PUSH_KEY_SECRET);
         if (archive) {
           holdingArchive += 1;
@@ -215,18 +186,12 @@ describe("the workflows", () => {
         expect(
           archive && key,
           `${workflow.name} job ${jobName} holds an archive credential and ` +
-            "the deploy key, so one compromise reaches the bucket and main",
+            'the deploy key, so one compromise reaches the bucket and main',
         ).toBe(false);
       }
     }
-    expect(
-      holdingArchive,
-      "no job holds an archive credential, so this case checked nothing",
-    ).toBeGreaterThan(0);
-    expect(
-      holdingKey,
-      "no job holds the deploy key, so this case checked nothing",
-    ).toBeGreaterThan(0);
+    expect(holdingArchive, 'no job holds an archive credential, so this case checked nothing').toBeGreaterThan(0);
+    expect(holdingKey, 'no job holds the deploy key, so this case checked nothing').toBeGreaterThan(0);
   });
 
   /**
@@ -234,20 +199,15 @@ describe("the workflows", () => {
    * The environment is the only control GitHub offers that a pull request
    * cannot reach, even by landing a workflow change.
    */
-  test("every job holding a write secret declares the archive-write environment", () => {
+  test('every job holding a write secret declares the archive-write environment', () => {
     for (const workflow of loaded) {
       for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
         const text = JSON.stringify(job);
-        const holdsWrite = WRITE_SECRETS.some((secret) =>
-          text.includes(secret),
-        );
+        const holdsWrite = WRITE_SECRETS.some((secret) => text.includes(secret));
         if (!holdsWrite) {
           continue;
         }
-        expect(
-          job["environment"],
-          `${workflow.name} job ${jobName} holds a write secret`,
-        ).toBe("archive-write");
+        expect(job['environment'], `${workflow.name} job ${jobName} holds a write secret`).toBe('archive-write');
       }
     }
   });
@@ -262,12 +222,12 @@ describe("the workflows", () => {
    * what catches that: the hoist makes the first number two and the second
    * zero.
    */
-  test("a write secret appears nowhere but inside a gated job", () => {
+  test('a write secret appears nowhere but inside a gated job', () => {
     for (const workflow of loaded) {
       const gated = Object.values(workflow.parsed.jobs ?? {})
-        .filter((job) => job["environment"] === "archive-write")
+        .filter((job) => job['environment'] === 'archive-write')
         .map((job) => JSON.stringify(job))
-        .join("\n");
+        .join('\n');
       for (const secret of WRITE_SECRETS) {
         const inFile = workflow.text.split(secret).length - 1;
         const inGatedJobs = gated.split(secret).length - 1;
@@ -275,7 +235,7 @@ describe("the workflows", () => {
           inGatedJobs,
           `${workflow.name} names ${secret} ${inFile} times and only ` +
             `${inGatedJobs} of those are inside a job declaring ` +
-            "environment: archive-write",
+            'environment: archive-write',
         ).toBe(inFile);
       }
     }
@@ -300,7 +260,7 @@ describe("the workflows", () => {
     for (const workflow of loaded) {
       const jobs = workflow.parsed.jobs ?? {};
       const deciders = Object.entries(jobs).filter(([, job]) =>
-        JSON.stringify(job["outputs"] ?? {}).includes(NEEDS_ARCHIVE),
+        JSON.stringify(job['outputs'] ?? {}).includes(NEEDS_ARCHIVE),
       );
       for (const [jobName, job] of Object.entries(jobs)) {
         const text = JSON.stringify(job);
@@ -310,43 +270,32 @@ describe("the workflows", () => {
         checked += 1;
         expect(
           deciders.map(([name]) => name),
-          `${workflow.name} job ${jobName} holds a write secret, and exactly ` +
-            "one job has to answer needs_archive",
+          `${workflow.name} job ${jobName} holds a write secret, and exactly ` + 'one job has to answer needs_archive',
         ).toHaveLength(1);
-        const [deciderName, decider] = deciders[0] as [
-          string,
-          Record<string, unknown>,
-        ];
-        expect([job["needs"]].flat()).toContain(deciderName);
-        expect(
-          String(job["if"] ?? ""),
-          `${workflow.name} job ${jobName} does not start on ${deciderName}`,
-        ).toContain(`needs.${deciderName}.outputs.${NEEDS_ARCHIVE}`);
+        const [deciderName, decider] = deciders[0] as [string, Record<string, unknown>];
+        expect([job['needs']].flat()).toContain(deciderName);
+        expect(String(job['if'] ?? ''), `${workflow.name} job ${jobName} does not start on ${deciderName}`).toContain(
+          `needs.${deciderName}.outputs.${NEEDS_ARCHIVE}`,
+        );
 
         const deciderText = JSON.stringify(decider);
         expect(
           waitsForApproval(decider),
           `${deciderName} declares environment ` +
-            `${String(decider["environment"])}, which is not on the ` +
-            "reviewer-free list, so every scheduled run waits on an approval",
+            `${String(decider['environment'])}, which is not on the ` +
+            'reviewer-free list, so every scheduled run waits on an approval',
         ).toBe(false);
         for (const secret of READ_SECRETS) {
-          expect(deciderText, `${deciderName} cannot ask the bucket`).toContain(
+          expect(deciderText, `${deciderName} cannot ask the bucket`).toContain(secret);
+        }
+        for (const secret of [...WRITE_SECRETS, PUSH_KEY_SECRET]) {
+          expect(deciderText, `${deciderName} answers on every scheduled run and holds ${secret}`).not.toContain(
             secret,
           );
         }
-        for (const secret of [...WRITE_SECRETS, PUSH_KEY_SECRET]) {
-          expect(
-            deciderText,
-            `${deciderName} answers on every scheduled run and holds ${secret}`,
-          ).not.toContain(secret);
-        }
       }
     }
-    expect(
-      checked,
-      "no job holds a write secret, so this case checked nothing",
-    ).toBeGreaterThan(0);
+    expect(checked, 'no job holds a write secret, so this case checked nothing').toBeGreaterThan(0);
   });
 
   /**
@@ -359,13 +308,13 @@ describe("the workflows", () => {
    * wired later passes through unread. `ACTION_OWNERS` carries the same guard,
    * for the same reason.
    */
-  test("the reviewer-free list is used in full and gates no write secret", () => {
+  test('the reviewer-free list is used in full and gates no write secret', () => {
     const declared = new Set<string>();
     let checked = 0;
     for (const workflow of loaded) {
       for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
-        const environment = job["environment"];
-        if (typeof environment === "string") {
+        const environment = job['environment'];
+        if (typeof environment === 'string') {
           declared.add(environment);
         }
         const text = JSON.stringify(job);
@@ -382,12 +331,9 @@ describe("the workflows", () => {
     }
     expect(
       UNGATED_ENVIRONMENTS.filter((name) => !declared.has(name)),
-      "an environment on the reviewer-free list is declared by no job",
+      'an environment on the reviewer-free list is declared by no job',
     ).toEqual([]);
-    expect(
-      checked,
-      "no job holds a write secret, so this case checked nothing",
-    ).toBeGreaterThan(0);
+    expect(checked, 'no job holds a write secret, so this case checked nothing').toBeGreaterThan(0);
   });
 
   /**
@@ -400,7 +346,7 @@ describe("the workflows", () => {
    * Scoped to a workflow that holds a credential of its own, which is where
    * one compromise reaches two of them.
    */
-  test("a checkout keeps the job token only where a push needs it", () => {
+  test('a checkout keeps the job token only where a push needs it', () => {
     let checked = 0;
     for (const workflow of loaded) {
       const secrets = [...READ_SECRETS, ...WRITE_SECRETS, PUSH_KEY_SECRET];
@@ -408,36 +354,27 @@ describe("the workflows", () => {
         continue;
       }
       for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
-        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        const steps = Array.isArray(job['steps']) ? job['steps'] : [];
         const pushes = steps.some((step) => {
-          const script = (step as Record<string, unknown>)["run"];
-          return typeof script === "string" && /\bgit push\b/.test(script);
+          const script = (step as Record<string, unknown>)['run'];
+          return typeof script === 'string' && /\bgit push\b/.test(script);
         });
         for (const step of steps) {
-          const uses = (step as Record<string, unknown>)["uses"];
-          if (
-            typeof uses !== "string" ||
-            !uses.startsWith("actions/checkout")
-          ) {
+          const uses = (step as Record<string, unknown>)['uses'];
+          if (typeof uses !== 'string' || !uses.startsWith('actions/checkout')) {
             continue;
           }
           checked += 1;
-          const options = ((step as Record<string, unknown>)["with"] ??
-            {}) as Record<string, unknown>;
+          const options = ((step as Record<string, unknown>)['with'] ?? {}) as Record<string, unknown>;
           expect(
-            options["persist-credentials"],
+            options['persist-credentials'],
             `${workflow.name} job ${jobName} checks out ` +
-              (pushes
-                ? "for a push, so the token has to stay"
-                : "and leaves the job token in the workspace"),
+              (pushes ? 'for a push, so the token has to stay' : 'and leaves the job token in the workspace'),
           ).toBe(pushes ? undefined : false);
         }
       }
     }
-    expect(
-      checked,
-      "no job checks the repository out, so this case checked nothing",
-    ).toBeGreaterThan(0);
+    expect(checked, 'no job checks the repository out, so this case checked nothing').toBeGreaterThan(0);
   });
 
   /**
@@ -456,7 +393,7 @@ describe("the workflows", () => {
    * the bare presence of an environment instead would demand a group of the
    * hourly bucket check, which serializes a job that races nothing.
    */
-  test("a workflow with an approval gate keeps concurrency on the jobs", () => {
+  test('a workflow with an approval gate keeps concurrency on the jobs', () => {
     let checked = 0;
     for (const workflow of loaded) {
       const jobs = Object.entries(workflow.parsed.jobs ?? {});
@@ -466,29 +403,24 @@ describe("the workflows", () => {
       checked += 1;
       expect(
         workflow.parsed.concurrency,
-        `${workflow.name} holds a workflow-level concurrency group while one ` +
-          "of its jobs waits for an approval",
+        `${workflow.name} holds a workflow-level concurrency group while one ` + 'of its jobs waits for an approval',
       ).toBeUndefined();
       for (const [jobName, job] of jobs) {
-        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        const steps = Array.isArray(job['steps']) ? job['steps'] : [];
         const pushes = steps.some((step) => {
-          const script = (step as Record<string, unknown>)["run"];
-          return typeof script === "string" && /\bgit push\b/.test(script);
+          const script = (step as Record<string, unknown>)['run'];
+          return typeof script === 'string' && /\bgit push\b/.test(script);
         });
         if (!pushes && !waitsForApproval(job)) {
           continue;
         }
         expect(
-          (job["concurrency"] as { group?: string } | undefined)?.group,
-          `${workflow.name} job ${jobName} pushes or waits for an approval ` +
-            "with no concurrency group of its own",
+          (job['concurrency'] as { group?: string } | undefined)?.group,
+          `${workflow.name} job ${jobName} pushes or waits for an approval ` + 'with no concurrency group of its own',
         ).toEqual(expect.any(String));
       }
     }
-    expect(
-      checked,
-      "no workflow has an approval gate, so this case checked nothing",
-    ).toBeGreaterThan(0);
+    expect(checked, 'no workflow has an approval gate, so this case checked nothing').toBeGreaterThan(0);
   });
 
   /**
@@ -503,7 +435,7 @@ describe("the workflows", () => {
     let checked = 0;
     for (const workflow of loaded) {
       for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
-        const gate = String(job["if"] ?? "");
+        const gate = String(job['if'] ?? '');
         if (!/needs\.[A-Za-z0-9_-]+\.(outputs|result)/.test(gate)) {
           continue;
         }
@@ -511,14 +443,11 @@ describe("the workflows", () => {
         expect(
           gate,
           `${workflow.name} job ${jobName} is gated on another job and takes ` +
-            "the implicit success(), so an unrelated failure skips it",
-        ).toContain("!cancelled()");
+            'the implicit success(), so an unrelated failure skips it',
+        ).toContain('!cancelled()');
       }
     }
-    expect(
-      checked,
-      "no job is gated on another job, so this case checked nothing",
-    ).toBeGreaterThan(0);
+    expect(checked, 'no job is gated on another job, so this case checked nothing').toBeGreaterThan(0);
   });
 
   /**
@@ -531,9 +460,8 @@ describe("the workflows", () => {
     for (const workflow of loaded) {
       expect(
         workflow.text,
-        `${workflow.name} passes --unattested, so a row it writes rests on ` +
-          "whoever typed the gid",
-      ).not.toContain("--unattested");
+        `${workflow.name} passes --unattested, so a row it writes rests on ` + 'whoever typed the gid',
+      ).not.toContain('--unattested');
     }
   });
 
@@ -549,13 +477,12 @@ describe("the workflows", () => {
    * mentions either value. This refuses the restatement that would start the
    * drift.
    */
-  test("no workflow restates the archive destination", () => {
+  test('no workflow restates the archive destination', () => {
     for (const workflow of loaded) {
       for (const [field, value] of Object.entries(DESTINATION)) {
         expect(
           workflow.text,
-          `${workflow.name} restates the ${field} from archive.json, which is ` +
-            "the one place it is written down",
+          `${workflow.name} restates the ${field} from archive.json, which is ` + 'the one place it is written down',
         ).not.toContain(value);
       }
     }
@@ -578,17 +505,17 @@ describe("the workflows", () => {
    * over an empty list reports zero cases and guards nothing, which is the
    * shape this suite exists to avoid.
    */
-  test.each(loaded.filter((one) => one.name.startsWith("probe-")))(
-    "$name can only run on a probe branch, and uploads nothing",
+  test.each(loaded.filter((one) => one.name.startsWith('probe-')))(
+    '$name can only run on a probe branch, and uploads nothing',
     (workflow: LoadedWorkflow) => {
       expect(disposableProbeProblems(workflow.parsed)).toEqual([]);
     },
   );
 
-  test("the disposable-probe rule catches what it is for", () => {
+  test('the disposable-probe rule catches what it is for', () => {
     const onProbeBranch = {
-      on: { push: { branches: ["probe/**"] } },
-      jobs: { probe: { steps: [{ run: "echo hello" }] } },
+      on: { push: { branches: ['probe/**'] } },
+      jobs: { probe: { steps: [{ run: 'echo hello' }] } },
     };
     expect(disposableProbeProblems(onProbeBranch)).toEqual([]);
 
@@ -596,31 +523,31 @@ describe("the workflows", () => {
       disposableProbeProblems({
         ...onProbeBranch,
         on: {
-          push: { branches: ["probe/**"] },
-          schedule: [{ cron: "0 * * * *" }],
+          push: { branches: ['probe/**'] },
+          schedule: [{ cron: '0 * * * *' }],
         },
       }),
-    ).toContain("it runs on more than a push: push, schedule");
+    ).toContain('it runs on more than a push: push, schedule');
 
     expect(
       disposableProbeProblems({
         ...onProbeBranch,
-        on: { push: { branches: ["main"] } },
+        on: { push: { branches: ['main'] } },
       }),
-    ).toContain("it can be pushed to main");
+    ).toContain('it can be pushed to main');
 
-    expect(
-      disposableProbeProblems({ ...onProbeBranch, on: { push: {} } }),
-    ).toContain("it names no branch, so every branch reaches it");
+    expect(disposableProbeProblems({ ...onProbeBranch, on: { push: {} } })).toContain(
+      'it names no branch, so every branch reaches it',
+    );
 
     expect(
       disposableProbeProblems({
         ...onProbeBranch,
         jobs: {
-          probe: { steps: [{ uses: "actions/upload-artifact@aaaa" }] },
+          probe: { steps: [{ uses: 'actions/upload-artifact@aaaa' }] },
         },
       }),
-    ).toContain("it uploads an artifact: actions/upload-artifact@aaaa");
+    ).toContain('it uploads an artifact: actions/upload-artifact@aaaa');
   });
 
   /**
@@ -633,19 +560,17 @@ describe("the workflows", () => {
    * The drift is quiet in the worst direction: a filter that matches nothing
    * leaves SteamCMD reporting success over an empty directory.
    */
-  test("the SteamCMD file filter names exactly the archived files", () => {
+  test('the SteamCMD file filter names exactly the archived files', () => {
     let checked = 0;
     for (const workflow of loaded) {
-      const filter = (workflow.parsed.env ?? {})["STEAMCMD_FILE_FILTER"];
+      const filter = (workflow.parsed.env ?? {})['STEAMCMD_FILE_FILTER'];
       if (filter === undefined) {
         continue;
       }
       checked += 1;
-      expect(String(filter).split(";").sort()).toEqual(
-        [...ARCHIVE_FILES].sort(),
-      );
+      expect(String(filter).split(';').sort()).toEqual([...ARCHIVE_FILES].sort());
     }
-    expect(checked, "no workflow sets a file filter").toBeGreaterThan(0);
+    expect(checked, 'no workflow sets a file filter').toBeGreaterThan(0);
   });
 
   /**
@@ -653,32 +578,31 @@ describe("the workflows", () => {
    * depots by client platform. Without the flag the fetch dies with "Missing
    * configuration" and writes nothing, measured on ubuntu-latest.
    */
-  test("every app_update forces the platform the depot declares", () => {
+  test('every app_update forces the platform the depot declares', () => {
     let checked = 0;
     for (const workflow of loaded) {
       for (const job of Object.values(workflow.parsed.jobs ?? {})) {
-        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        const steps = Array.isArray(job['steps']) ? job['steps'] : [];
         for (const step of steps) {
-          const script = (step as Record<string, unknown>)["run"];
-          if (typeof script !== "string" || !script.includes("+app_update")) {
+          const script = (step as Record<string, unknown>)['run'];
+          if (typeof script !== 'string' || !script.includes('+app_update')) {
             continue;
           }
           checked += 1;
-          expect(
-            script,
-            `${workflow.name} runs app_update without forcing the platform`,
-          ).toContain("+@sSteamCmdForcePlatformType");
+          expect(script, `${workflow.name} runs app_update without forcing the platform`).toContain(
+            '+@sSteamCmdForcePlatformType',
+          );
         }
       }
     }
-    expect(checked, "no workflow fetches a build").toBeGreaterThan(0);
+    expect(checked, 'no workflow fetches a build').toBeGreaterThan(0);
   });
 
   /**
    * A tag is resolved when the job runs, so whoever owns it chooses the image
    * on the day rather than on the day the line was written.
    */
-  test("every container image is pinned by digest", () => {
+  test('every container image is pinned by digest', () => {
     let checked = 0;
     for (const workflow of loaded) {
       // Every image is named by a variable whose name ends in _IMAGE, and the
@@ -686,29 +610,27 @@ describe("the workflows", () => {
       // line by pattern does not survive contact with the line: a volume mount
       // or a --user flag puts other words, and other variables, ahead of it.
       for (const [name, value] of Object.entries(workflow.parsed.env ?? {})) {
-        if (!name.endsWith("_IMAGE")) {
+        if (!name.endsWith('_IMAGE')) {
           continue;
         }
         checked += 1;
-        expect(
-          String(value),
-          `${workflow.name} sets ${name} to an image that is not pinned by digest`,
-        ).toMatch(/@sha256:[0-9a-f]{64}$/);
+        expect(String(value), `${workflow.name} sets ${name} to an image that is not pinned by digest`).toMatch(
+          /@sha256:[0-9a-f]{64}$/,
+        );
       }
 
-      for (const line of workflow.text.split("\n")) {
+      for (const line of workflow.text.split('\n')) {
         // A comment naming the command is prose about it, not a run of it.
         if (/^\s*#/.test(line) || !/\bdocker\s+run\b/.test(line)) {
           continue;
         }
         expect(
           line,
-          `${workflow.name} runs a container without naming a pinned *_IMAGE ` +
-            `variable: ${line.trim()}`,
+          `${workflow.name} runs a container without naming a pinned *_IMAGE ` + `variable: ${line.trim()}`,
         ).toMatch(/\$\{?[A-Z0-9_]*_IMAGE\}?/);
       }
     }
-    expect(checked, "no workflow names a container image").toBeGreaterThan(0);
+    expect(checked, 'no workflow names a container image').toBeGreaterThan(0);
   });
 
   /**
@@ -716,25 +638,24 @@ describe("the workflows", () => {
    * check is the only thing binding the bytes, and deleting the line is a
    * one-character-looking change.
    */
-  test("every downloaded artifact is checked against a digest before it is used", () => {
+  test('every downloaded artifact is checked against a digest before it is used', () => {
     let checked = 0;
     for (const workflow of loaded) {
       for (const job of Object.values(workflow.parsed.jobs ?? {})) {
-        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        const steps = Array.isArray(job['steps']) ? job['steps'] : [];
         for (const step of steps) {
-          const script = (step as Record<string, unknown>)["run"];
-          if (typeof script !== "string" || !script.includes("curl ")) {
+          const script = (step as Record<string, unknown>)['run'];
+          if (typeof script !== 'string' || !script.includes('curl ')) {
             continue;
           }
           checked += 1;
-          expect(
-            script,
-            `${workflow.name} downloads a file and does not check it:\n${script}`,
-          ).toContain("sha256sum --check --strict");
+          expect(script, `${workflow.name} downloads a file and does not check it:\n${script}`).toContain(
+            'sha256sum --check --strict',
+          );
         }
       }
     }
-    expect(checked, "no workflow downloads anything").toBeGreaterThan(0);
+    expect(checked, 'no workflow downloads anything').toBeGreaterThan(0);
   });
 
   /**
@@ -747,24 +668,21 @@ describe("the workflows", () => {
    * its last action is gone is an allowance nothing uses, and it is the one a
    * repointed step would pass through.
    */
-  test("every action comes from a known owner, and every known owner is used", () => {
+  test('every action comes from a known owner, and every known owner is used', () => {
     const used = new Set<string>();
     for (const workflow of loaded) {
       for (const reference of actionReferences(workflow.parsed)) {
-        if (reference.startsWith("./")) {
+        if (reference.startsWith('./')) {
           continue;
         }
-        const owner = reference.split("/")[0] as string;
+        const owner = reference.split('/')[0] as string;
         used.add(owner);
-        expect(
-          ACTION_OWNERS,
-          `${workflow.name} uses ${reference}, whose owner is not on the list`,
-        ).toContain(owner);
+        expect(ACTION_OWNERS, `${workflow.name} uses ${reference}, whose owner is not on the list`).toContain(owner);
       }
     }
     expect(
       ACTION_OWNERS.filter((owner) => !used.has(owner)),
-      "an owner on the list has no action left in any workflow",
+      'an owner on the list has no action left in any workflow',
     ).toEqual([]);
   });
 
@@ -774,16 +692,14 @@ describe("the workflows", () => {
    * installs the tool belt, so the gate exits non-zero and the push is
    * refused. A workflow that installs and pushes has to keep the two apart.
    */
-  test("a workflow that installs and pushes does not run install scripts", () => {
+  test('a workflow that installs and pushes does not run install scripts', () => {
     for (const workflow of loaded) {
       const scripts = Object.values(workflow.parsed.jobs ?? {})
-        .flatMap((job) => (Array.isArray(job["steps"]) ? job["steps"] : []))
-        .map((step) => (step as Record<string, unknown>)["run"])
-        .filter((script): script is string => typeof script === "string");
+        .flatMap((job) => (Array.isArray(job['steps']) ? job['steps'] : []))
+        .map((step) => (step as Record<string, unknown>)['run'])
+        .filter((script): script is string => typeof script === 'string');
       const pushes = scripts.some((script) => /\bgit push\b/.test(script));
-      const installs = scripts.filter((script) =>
-        /\bbun(x)? install\b/.test(script),
-      );
+      const installs = scripts.filter((script) => /\bbun(x)? install\b/.test(script));
       if (!pushes || installs.length === 0) {
         continue;
       }
@@ -791,8 +707,8 @@ describe("the workflows", () => {
         expect(
           install,
           `${workflow.name} pushes and installs, so the install has to skip ` +
-            "the root prepare script that installs the pre-push hook",
-        ).toContain("--ignore-scripts");
+            'the root prepare script that installs the pre-push hook',
+        ).toContain('--ignore-scripts');
       }
     }
   });
@@ -802,34 +718,32 @@ describe("the workflows", () => {
    * line-anchored text match cannot, which is why the reader parses the
    * document.
    */
-  test("the reader finds an action written in flow style", () => {
+  test('the reader finds an action written in flow style', () => {
     const parsed = Bun.YAML.parse(
       [
-        "on: push",
-        "jobs:",
-        "  block:",
-        "    steps:",
-        "      - uses: actions/checkout@aaaa",
-        "  flow:",
-        "    steps:",
-        "      - { uses: actions/setup-node@bbbb }",
-        "  reusable:",
-        "    uses: ./.github/workflows/other.yml@cccc",
-      ].join("\n"),
+        'on: push',
+        'jobs:',
+        '  block:',
+        '    steps:',
+        '      - uses: actions/checkout@aaaa',
+        '  flow:',
+        '    steps:',
+        '      - { uses: actions/setup-node@bbbb }',
+        '  reusable:',
+        '    uses: ./.github/workflows/other.yml@cccc',
+      ].join('\n'),
     ) as Workflow;
     expect(actionReferences(parsed).sort()).toEqual([
-      "./.github/workflows/other.yml@cccc",
-      "actions/checkout@aaaa",
-      "actions/setup-node@bbbb",
+      './.github/workflows/other.yml@cccc',
+      'actions/checkout@aaaa',
+      'actions/setup-node@bbbb',
     ]);
   });
 });
 
 /** A file under `.github`, read as text. */
 async function githubText(relative: string): Promise<string> {
-  return Bun.file(
-    fileURLToPath(new URL(`../.github/${relative}`, import.meta.url)),
-  ).text();
+  return Bun.file(fileURLToPath(new URL(`../.github/${relative}`, import.meta.url))).text();
 }
 
 /** A YAML file under `.github`, parsed. */
@@ -842,7 +756,7 @@ async function githubYaml(relative: string): Promise<unknown> {
  * carries it.
  */
 function field(value: unknown, key: string): unknown {
-  if (typeof value !== "object" || value === null) {
+  if (typeof value !== 'object' || value === null) {
     return undefined;
   }
   return (value as Record<string, unknown>)[key];
@@ -853,12 +767,9 @@ function field(value: unknown, key: string): unknown {
  * `file:audit`. Both answer `artipacked` on a checkout whose job pushes over
  * SSH, which needs the key to stay in the checkout.
  */
-const ALLOWED_ZIZMOR_IGNORES = [
-  "build-watch.yml:artipacked",
-  "build-watch.yml:artipacked",
-];
+const ALLOWED_ZIZMOR_IGNORES = ['build-watch.yml:artipacked', 'build-watch.yml:artipacked'];
 
-describe("the GitHub configuration", () => {
+describe('the GitHub configuration', () => {
   /**
    * Dependabot's cooldown is the wait between a version being published and a
    * pull request proposing it, and an ecosystem with no cooldown block waits
@@ -866,26 +777,18 @@ describe("the GitHub configuration", () => {
    * `.github/zizmor.yml` sets, and passes a block removed entirely, so this
    * reads every entry.
    */
-  test("every dependabot ecosystem carries a cooldown zizmor can hold", async () => {
-    const zizmor = await githubYaml("zizmor.yml");
-    const threshold = field(
-      field(field(field(zizmor, "rules"), "dependabot-cooldown"), "config"),
-      "days",
-    );
-    expect(
-      typeof threshold,
-      ".github/zizmor.yml sets no dependabot-cooldown threshold in days",
-    ).toBe("number");
+  test('every dependabot ecosystem carries a cooldown zizmor can hold', async () => {
+    const zizmor = await githubYaml('zizmor.yml');
+    const threshold = field(field(field(field(zizmor, 'rules'), 'dependabot-cooldown'), 'config'), 'days');
+    expect(typeof threshold, '.github/zizmor.yml sets no dependabot-cooldown threshold in days').toBe('number');
 
-    const updates = field(await githubYaml("dependabot.yml"), "updates");
-    expect(Array.isArray(updates), "dependabot.yml lists no updates").toBe(
-      true,
-    );
+    const updates = field(await githubYaml('dependabot.yml'), 'updates');
+    expect(Array.isArray(updates), 'dependabot.yml lists no updates').toBe(true);
     const short: string[] = [];
     for (const update of updates as unknown[]) {
-      const ecosystem = String(field(update, "package-ecosystem"));
-      const days = field(field(update, "cooldown"), "default-days");
-      if (typeof days !== "number") {
+      const ecosystem = String(field(update, 'package-ecosystem'));
+      const days = field(field(update, 'cooldown'), 'default-days');
+      if (typeof days !== 'number') {
         short.push(`${ecosystem} carries no cooldown default-days`);
       } else if (days < (threshold as number)) {
         short.push(`${ecosystem} waits ${days} days`);
@@ -904,8 +807,8 @@ describe("the GitHub configuration", () => {
    * zizmor matches this exact spelling, one space and all, and skips an empty
    * entry between commas.
    */
-  test("zizmor answers only the findings this repository allows", async () => {
-    const github = fileURLToPath(new URL("../.github/", import.meta.url));
+  test('zizmor answers only the findings this repository allows', async () => {
+    const github = fileURLToPath(new URL('../.github/', import.meta.url));
     const found: string[] = [];
     for (const relative of await readdir(github, { recursive: true })) {
       const path = join(github, relative);
@@ -916,8 +819,8 @@ describe("the GitHub configuration", () => {
       const text = await Bun.file(path).text();
       const file = relative.split(/[\\/]/).pop() as string;
       for (const match of text.matchAll(/zizmor: ignore\[([^\]]*)\]/g)) {
-        for (const audit of (match[1] as string).split(",")) {
-          if (audit.trim() !== "") {
+        for (const audit of (match[1] as string).split(',')) {
+          if (audit.trim() !== '') {
             found.push(`${file}:${audit.trim()}`);
           }
         }
@@ -925,17 +828,13 @@ describe("the GitHub configuration", () => {
     }
     expect(found.sort()).toEqual([...ALLOWED_ZIZMOR_IGNORES].sort());
 
-    const rules = field(await githubYaml("zizmor.yml"), "rules");
-    const answering = Object.entries(
-      (rules ?? {}) as Record<string, unknown>,
-    ).filter(
-      ([, rule]) =>
-        field(rule, "ignore") !== undefined ||
-        field(rule, "disable") !== undefined,
+    const rules = field(await githubYaml('zizmor.yml'), 'rules');
+    const answering = Object.entries((rules ?? {}) as Record<string, unknown>).filter(
+      ([, rule]) => field(rule, 'ignore') !== undefined || field(rule, 'disable') !== undefined,
     );
     expect(
       answering.map(([name]) => name),
-      ".github/zizmor.yml ignores or disables an audit outright",
+      '.github/zizmor.yml ignores or disables an audit outright',
     ).toEqual([]);
   });
 
@@ -954,15 +853,9 @@ describe("the GitHub configuration", () => {
    * when the file names nothing it can read, so the file has to hold one exact
    * release.
    */
-  test("every Bun release a workflow uses is read from .bun-version", async () => {
-    const pin = (
-      await Bun.file(
-        fileURLToPath(new URL("../.bun-version", import.meta.url)),
-      ).text()
-    ).trim();
-    expect(pin, ".bun-version holds what is not one exact release").toMatch(
-      /^\d+\.\d+\.\d+$/,
-    );
+  test('every Bun release a workflow uses is read from .bun-version', async () => {
+    const pin = (await Bun.file(fileURLToPath(new URL('../.bun-version', import.meta.url))).text()).trim();
+    expect(pin, '.bun-version holds what is not one exact release').toMatch(/^\d+\.\d+\.\d+$/);
 
     let setups = 0;
     let fetches = 0;
@@ -973,56 +866,44 @@ describe("the GitHub configuration", () => {
           continue;
         }
         expect(
-          key === "bun-version-file" && value === ".bun-version",
-          `${workflow.name} sets ${path.join(".")} to ${String(value)} itself`,
+          key === 'bun-version-file' && value === '.bun-version',
+          `${workflow.name} sets ${path.join('.')} to ${String(value)} itself`,
         ).toBe(true);
       }
-      expect(
-        wholeVersionIn(workflow.text, pin),
-        `${workflow.name} writes the release .bun-version pins`,
-      ).toBe(false);
+      expect(wholeVersionIn(workflow.text, pin), `${workflow.name} writes the release .bun-version pins`).toBe(false);
 
       for (const job of Object.values(workflow.parsed.jobs ?? {})) {
-        const steps = Array.isArray(job["steps"]) ? job["steps"] : [];
+        const steps = Array.isArray(job['steps']) ? job['steps'] : [];
         for (const step of steps) {
-          const uses = String(field(step, "uses") ?? "");
-          const script = String(field(step, "run") ?? "");
-          if (uses.startsWith("oven-sh/setup-bun@")) {
+          const uses = String(field(step, 'uses') ?? '');
+          const script = String(field(step, 'run') ?? '');
+          if (uses.startsWith('oven-sh/setup-bun@')) {
             setups += 1;
             expect(
-              field(field(step, "with"), "bun-version-file"),
+              field(field(step, 'with'), 'bun-version-file'),
               `${workflow.name} runs setup-bun without the pin file`,
-            ).toBe(".bun-version");
+            ).toBe('.bun-version');
           }
-          if (script.includes("releases/download/bun-v")) {
+          if (script.includes('releases/download/bun-v')) {
             fetches += 1;
-            expect(
-              script,
-              `${workflow.name} fetches a release it writes down itself`,
-            ).not.toMatch(/bun-v\d/);
+            expect(script, `${workflow.name} fetches a release it writes down itself`).not.toMatch(/bun-v\d/);
             const release = /releases\/download\/bun-v([^/"']+)\//.exec(script);
-            const variable = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(
-              release?.[1] ?? "",
-            );
+            const variable = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(release?.[1] ?? '');
             expect(
               variable?.[1],
-              `${workflow.name} fetches bun-v${release?.[1]}, which is no ` +
-                "shell variable this case can follow",
+              `${workflow.name} fetches bun-v${release?.[1]}, which is no ` + 'shell variable this case can follow',
             ).toBeDefined();
-            const name = variable?.[1] ?? "";
+            const name = variable?.[1] ?? '';
             expect(
-              new RegExp(`(^|\\n)\\s*${name}=[^\\n]*\\.bun-version`).test(
-                script,
-              ),
-              `${workflow.name} fetches bun-v$${name} and never sets it from ` +
-                "the pin file",
+              new RegExp(`(^|\\n)\\s*${name}=[^\\n]*\\.bun-version`).test(script),
+              `${workflow.name} fetches bun-v$${name} and never sets it from ` + 'the pin file',
             ).toBe(true);
           }
         }
       }
     }
-    expect(setups, "no workflow runs setup-bun").toBeGreaterThan(0);
-    expect(fetches, "no workflow fetches Bun by hand").toBeGreaterThan(0);
+    expect(setups, 'no workflow runs setup-bun').toBeGreaterThan(0);
+    expect(fetches, 'no workflow fetches Bun by hand').toBeGreaterThan(0);
   });
 
   /**
@@ -1033,80 +914,61 @@ describe("the GitHub configuration", () => {
    * field added, renamed or reworded in the form turns this red until the
    * script says the same thing.
    */
-  test("the build issue the watcher opens matches the form a person fills", async () => {
-    const form = await githubYaml("ISSUE_TEMPLATE/new-keen-build.yml");
-    const fields = (field(form, "body") as unknown[]).filter(
-      (one) => field(one, "type") !== "markdown",
-    );
-    expect(fields.length, "the form holds no field").toBeGreaterThan(0);
+  test('the build issue the watcher opens matches the form a person fills', async () => {
+    const form = await githubYaml('ISSUE_TEMPLATE/new-keen-build.yml');
+    const fields = (field(form, 'body') as unknown[]).filter((one) => field(one, 'type') !== 'markdown');
+    expect(fields.length, 'the form holds no field').toBeGreaterThan(0);
 
-    const watch = loaded.find((one) => one.name === "build-watch.yml");
-    expect(watch, "there is no build-watch.yml").toBeDefined();
+    const watch = loaded.find((one) => one.name === 'build-watch.yml');
+    expect(watch, 'there is no build-watch.yml').toBeDefined();
     const steps = Object.values(watch?.parsed.jobs ?? {}).flatMap((job) =>
-      Array.isArray(job["steps"]) ? (job["steps"] as unknown[]) : [],
+      Array.isArray(job['steps']) ? (job['steps'] as unknown[]) : [],
     );
-    const opener = steps.find(
-      (step) => field(step, "name") === "Open the build issue",
-    );
-    expect(opener, "no step opens the build issue").toBeDefined();
-    const script = String(field(opener, "run") ?? "");
+    const opener = steps.find((step) => field(step, 'name') === 'Open the build issue');
+    expect(opener, 'no step opens the build issue').toBeDefined();
+    const script = String(field(opener, 'run') ?? '');
 
-    const title = String(field(form, "title"));
-    expect(script, "the issue title is not the form's").toContain(
-      `--title "${title}`,
-    );
-    for (const label of field(form, "labels") as string[]) {
-      expect(script, `the issue does not carry the ${label} label`).toContain(
-        `--label ${label}`,
-      );
+    const title = String(field(form, 'title'));
+    expect(script, "the issue title is not the form's").toContain(`--title "${title}`);
+    for (const label of field(form, 'labels') as string[]) {
+      expect(script, `the issue does not carry the ${label} label`).toContain(`--label ${label}`);
     }
 
     const sections = issueSections(printedText(script));
     expect(
       sections.map((section) => section.heading),
       "the issue's headings are not the form's field labels, in order",
-    ).toEqual(
-      fields.map((one) => String(field(field(one, "attributes"), "label"))),
-    );
+    ).toEqual(fields.map((one) => String(field(field(one, 'attributes'), 'label'))));
     for (const [index, section] of sections.entries()) {
-      const attributes = field(fields[index], "attributes");
-      const type = field(fields[index], "type");
-      if (type === "dropdown") {
+      const attributes = field(fields[index], 'attributes');
+      const type = field(fields[index], 'type');
+      if (type === 'dropdown') {
         expect(
-          (field(attributes, "options") as unknown[]).map(String),
+          (field(attributes, 'options') as unknown[]).map(String),
           `the issue answers "${section.heading}" with an option the form lacks`,
         ).toContain(section.content);
       }
-      if (type === "checkboxes") {
-        const labels = (field(attributes, "options") as unknown[]).map(
-          (option) => String(field(option, "label")),
-        );
-        const printed = section.content
-          .split("\n")
-          .map((line) => line.replace(/^- \[ \] /, ""));
-        expect(
-          printed,
-          `the issue's "${section.heading}" list is not the form's, in order`,
-        ).toEqual(labels);
+      if (type === 'checkboxes') {
+        const labels = (field(attributes, 'options') as unknown[]).map((option) => String(field(option, 'label')));
+        const printed = section.content.split('\n').map((line) => line.replace(/^- \[ \] /, ''));
+        expect(printed, `the issue's "${section.heading}" list is not the form's, in order`).toEqual(labels);
       }
     }
   });
 
   /** The script reader takes the shapes the opener prints in. */
-  test("the printed text of a script joins its printf formats", () => {
+  test('the printed text of a script joins its printf formats', () => {
     const script = [
-      "{",
-      "  printf '### A\\n\\n%s\\n\\n' \"$X\"",
+      '{',
+      '  printf \'### A\\n\\n%s\\n\\n\' "$X"',
       "  printf -- '- [ ] `b` c\\n'",
       "  echo 'ignored'",
-      "} > body.md",
-    ].join("\n");
-    expect(printedText(script)).toBe("### A\n\n%s\n\n- [ ] `b` c\n");
-    expect(
-      issueSections("### A\n\none\n\n### B\n\n- [ ] x\n- [ ] y\n"),
-    ).toEqual([
-      { heading: "A", content: "one" },
-      { heading: "B", content: "- [ ] x\n- [ ] y" },
+      '} > body.md',
+    ].join('\n');
+    expect(printedText(script)).toBe('### A\n\n%s\n\n- [ ] `b` c\n');
+    expect(issueSections('### A\n\none\n\n### B\n\n- [ ] x\n- [ ] y\n')).toEqual([
+      { heading: 'A', content: 'one' },
+      { heading: 'B', content: '- [ ] x\n- [ ] y' },
     ]);
   });
 });
@@ -1118,11 +980,8 @@ describe("the GitHub configuration", () => {
  * @param path - The keys that led to `value`.
  * @returns One entry per keyed value, at every depth.
  */
-function keyedValues(
-  value: unknown,
-  path: readonly string[] = [],
-): [string[], unknown][] {
-  if (typeof value !== "object" || value === null) {
+function keyedValues(value: unknown, path: readonly string[] = []): [string[], unknown][] {
+  if (typeof value !== 'object' || value === null) {
     return [];
   }
   const found: [string[], unknown][] = [];
@@ -1145,7 +1004,7 @@ function keyedValues(
  * @returns True when no digit or dotted digit continues it on either side.
  */
 function wholeVersionIn(text: string, version: string): boolean {
-  const escaped = version.replaceAll(".", "\\.");
+  const escaped = version.replaceAll('.', '\\.');
   return new RegExp(`(?<![\\d.])${escaped}(?![\\d]|\\.\\d)`).test(text);
 }
 
@@ -1158,10 +1017,10 @@ function wholeVersionIn(text: string, version: string): boolean {
  * @returns What the formats print, arguments aside.
  */
 function printedText(script: string): string {
-  const formats = [...script.matchAll(/printf(?:\s+--)?\s+'([^']*)'/g)].map(
-    (match) => (match[1] as string).replaceAll("\\n", "\n"),
+  const formats = [...script.matchAll(/printf(?:\s+--)?\s+'([^']*)'/g)].map((match) =>
+    (match[1] as string).replaceAll('\\n', '\n'),
   );
-  return formats.join("");
+  return formats.join('');
 }
 
 /**
@@ -1176,8 +1035,8 @@ function issueSections(body: string): { heading: string; content: string }[] {
     .split(/^### /m)
     .slice(1)
     .map((section) => {
-      const [heading, ...rest] = section.split("\n");
-      return { heading: heading as string, content: rest.join("\n").trim() };
+      const [heading, ...rest] = section.split('\n');
+      return { heading: heading as string, content: rest.join('\n').trim() };
     });
 }
 
@@ -1189,7 +1048,7 @@ function issueSections(body: string): { heading: string; content: string }[] {
  * `UNGATED_ENVIRONMENTS`.
  */
 function waitsForApproval(job: Record<string, unknown>): boolean {
-  const environment = job["environment"];
+  const environment = job['environment'];
   if (environment === undefined) {
     return false;
   }
@@ -1215,22 +1074,21 @@ function waitsForApproval(job: Record<string, unknown>): boolean {
 function disposableProbeProblems(workflow: Workflow): string[] {
   const problems: string[] = [];
   const triggers = Object.keys(workflow.on ?? {});
-  if (triggers.length !== 1 || triggers[0] !== "push") {
-    problems.push(`it runs on more than a push: ${triggers.join(", ")}`);
+  if (triggers.length !== 1 || triggers[0] !== 'push') {
+    problems.push(`it runs on more than a push: ${triggers.join(', ')}`);
   }
-  const push = (workflow.on ?? {})["push"] as
-    { branches?: string[] } | undefined;
+  const push = (workflow.on ?? {})['push'] as { branches?: string[] } | undefined;
   const branches = push?.branches ?? [];
   if (branches.length === 0) {
-    problems.push("it names no branch, so every branch reaches it");
+    problems.push('it names no branch, so every branch reaches it');
   }
   for (const branch of branches) {
-    if (!branch.startsWith("probe/")) {
+    if (!branch.startsWith('probe/')) {
       problems.push(`it can be pushed to ${branch}`);
     }
   }
   for (const reference of actionReferences(workflow)) {
-    if (reference.includes("upload-artifact")) {
+    if (reference.includes('upload-artifact')) {
       problems.push(`it uploads an artifact: ${reference}`);
     }
   }
@@ -1247,17 +1105,17 @@ function actionReferences(workflow: Workflow): string[] {
   const found: string[] = [];
   for (const job of Object.values(workflow.jobs ?? {})) {
     // A job-level `uses` is a reusable workflow, pinned the same way.
-    const jobUses = job["uses"];
-    if (typeof jobUses === "string") {
+    const jobUses = job['uses'];
+    if (typeof jobUses === 'string') {
       found.push(jobUses);
     }
-    const steps = job["steps"];
+    const steps = job['steps'];
     if (!Array.isArray(steps)) {
       continue;
     }
     for (const step of steps) {
-      const uses = (step as Record<string, unknown>)["uses"];
-      if (typeof uses === "string") {
+      const uses = (step as Record<string, unknown>)['uses'];
+      if (typeof uses === 'string') {
         found.push(uses);
       }
     }
@@ -1271,12 +1129,10 @@ function actionReferences(workflow: Workflow): string[] {
  * @param workflow - The parsed document.
  * @returns One entry per step, at every job.
  */
-function jobSteps(
-  workflow: Workflow,
-): { job: string; step: Record<string, unknown> }[] {
+function jobSteps(workflow: Workflow): { job: string; step: Record<string, unknown> }[] {
   const found: { job: string; step: Record<string, unknown> }[] = [];
   for (const [job, body] of Object.entries(workflow.jobs ?? {})) {
-    const steps = Array.isArray(body["steps"]) ? body["steps"] : [];
+    const steps = Array.isArray(body['steps']) ? body['steps'] : [];
     for (const step of steps) {
       found.push({ job, step: step as Record<string, unknown> });
     }
@@ -1285,7 +1141,7 @@ function jobSteps(
 }
 
 /** The file pinning a version for every tool mise installs. */
-const PINS = "mise.toml";
+const PINS = 'mise.toml';
 
 /** One tool the pin file names, and the version it holds. */
 interface PinnedTool {
@@ -1310,26 +1166,18 @@ interface PinnedTool {
  * @returns One entry per tool, in the order the file holds them.
  */
 async function pinnedTools(): Promise<PinnedTool[]> {
-  const parsed = Bun.TOML.parse(await Bun.file(PINS).text()) as Record<
-    string,
-    unknown
-  >;
-  const tools = parsed["tools"];
-  if (typeof tools !== "object" || tools === null) {
+  const parsed = Bun.TOML.parse(await Bun.file(PINS).text()) as Record<string, unknown>;
+  const tools = parsed['tools'];
+  if (typeof tools !== 'object' || tools === null) {
     throw new Error(`${PINS} holds no tools table`);
   }
-  return Object.entries(tools as Record<string, unknown>).map(
-    ([name, entry]) => {
-      const version =
-        typeof entry === "string"
-          ? entry
-          : (entry as Record<string, unknown>)["version"];
-      if (typeof version !== "string") {
-        throw new Error(`${PINS} pins no version for ${name}`);
-      }
-      return { name, version };
-    },
-  );
+  return Object.entries(tools as Record<string, unknown>).map(([name, entry]) => {
+    const version = typeof entry === 'string' ? entry : (entry as Record<string, unknown>)['version'];
+    if (typeof version !== 'string') {
+      throw new Error(`${PINS} pins no version for ${name}`);
+    }
+    return { name, version };
+  });
 }
 
 /**
@@ -1351,10 +1199,7 @@ async function pinnedTools(): Promise<PinnedTool[]> {
  * @returns One sentence per problem, empty when the workflow is bound to its
  * pins.
  */
-function pinProblems(
-  workflow: LoadedWorkflow,
-  tools: readonly PinnedTool[],
-): string[] {
+function pinProblems(workflow: LoadedWorkflow, tools: readonly PinnedTool[]): string[] {
   const problems: string[] = [];
   for (const tool of tools) {
     if (wholeVersionIn(workflow.text, tool.version)) {
@@ -1363,30 +1208,24 @@ function pinProblems(
   }
 
   for (const { step } of jobSteps(workflow.parsed)) {
-    if (!String(step["uses"] ?? "").startsWith("jdx/mise-action@")) {
+    if (!String(step['uses'] ?? '').startsWith('jdx/mise-action@')) {
       continue;
     }
-    const inputs = (step["with"] ?? {}) as Record<string, unknown>;
-    for (const written of ["mise_toml", "tool_versions"]) {
+    const inputs = (step['with'] ?? {}) as Record<string, unknown>;
+    for (const written of ['mise_toml', 'tool_versions']) {
       if (inputs[written] !== undefined) {
-        problems.push(
-          `mise-action takes ${written}, which writes over ${PINS}`,
-        );
+        problems.push(`mise-action takes ${written}, which writes over ${PINS}`);
       }
     }
-    if (inputs["sha256"] !== undefined) {
-      problems.push(
-        "mise-action takes a sha256, which skips the signed checksum file",
-      );
+    if (inputs['sha256'] !== undefined) {
+      problems.push('mise-action takes a sha256, which skips the signed checksum file');
     }
-    if (inputs["install"] === false) {
-      problems.push("mise-action installs nothing, so no tool is there to run");
+    if (inputs['install'] === false) {
+      problems.push('mise-action installs nothing, so no tool is there to run');
     }
-    const release = String(inputs["version"] ?? "");
+    const release = String(inputs['version'] ?? '');
     if (!/^\d+\.\d+\.\d+$/.test(release)) {
-      problems.push(
-        `mise-action takes ${release || "no version"}, which is not one exact release`,
-      );
+      problems.push(`mise-action takes ${release || 'no version'}, which is not one exact release`);
     }
   }
   return problems;
@@ -1394,13 +1233,11 @@ function pinProblems(
 
 const tools = await pinnedTools();
 
-describe("the pinned tools", () => {
-  test("every tool names one exact release", () => {
+describe('the pinned tools', () => {
+  test('every tool names one exact release', () => {
     expect(tools.length, `${PINS} pins nothing`).toBeGreaterThan(0);
     for (const tool of tools) {
-      expect(tool.version, `${PINS} pins ${tool.name} at a range`).toMatch(
-        /^\d+\.\d+\.\d+$/,
-      );
+      expect(tool.version, `${PINS} pins ${tool.name} at a range`).toMatch(/^\d+\.\d+\.\d+$/);
     }
   });
 
@@ -1410,11 +1247,9 @@ describe("the pinned tools", () => {
    * behind while continuous integration keeps installing the old one.
    */
   test.each(loaded.map((workflow) => [workflow.name] as const))(
-    "%s takes every version from the file that pins it",
+    '%s takes every version from the file that pins it',
     (name) => {
-      const workflow = loaded.find(
-        (one) => one.name === name,
-      ) as LoadedWorkflow;
+      const workflow = loaded.find((one) => one.name === name) as LoadedWorkflow;
       expect(pinProblems(workflow, tools)).toEqual([]);
     },
   );
@@ -1423,15 +1258,13 @@ describe("the pinned tools", () => {
    * Some workflow step installs through mise. A pin file nothing installs from
    * pins versions that reach no runner, and every case above still passes.
    */
-  test("a workflow step installs through mise", () => {
+  test('a workflow step installs through mise', () => {
     const installers = loaded
       .filter((workflow) =>
-        jobSteps(workflow.parsed).some(({ step }) =>
-          String(step["uses"] ?? "").startsWith("jdx/mise-action@"),
-        ),
+        jobSteps(workflow.parsed).some(({ step }) => String(step['uses'] ?? '').startsWith('jdx/mise-action@')),
       )
       .map((workflow) => workflow.name);
-    expect(installers, "no workflow installs through mise").not.toEqual([]);
+    expect(installers, 'no workflow installs through mise').not.toEqual([]);
   });
 });
 
@@ -1446,21 +1279,21 @@ describe("the pinned tools", () => {
  * is a rule that proves nothing, so each case names the sentence it expects.
  */
 const SOUND_GATE = [
-  "name: ci",
-  "on: [push]",
-  "jobs:",
-  "  gate:",
-  "    strategy:",
-  "      matrix:",
-  "        os: [windows-latest, ubuntu-latest]",
-  "    runs-on: ${{ matrix.os }}",
-  "    steps:",
-  "      - uses: jdx/mise-action@aaaa",
-  "        with:",
-  "          version: 2026.9.5",
-  "      - run: bun install --frozen-lockfile",
-  "        shell: bash",
-].join("\n");
+  'name: ci',
+  'on: [push]',
+  'jobs:',
+  '  gate:',
+  '    strategy:',
+  '      matrix:',
+  '        os: [windows-latest, ubuntu-latest]',
+  '    runs-on: ${{ matrix.os }}',
+  '    steps:',
+  '      - uses: jdx/mise-action@aaaa',
+  '        with:',
+  '          version: 2026.9.5',
+  '      - run: bun install --frozen-lockfile',
+  '        shell: bash',
+].join('\n');
 
 /**
  * A document the pin rule can read, built from text written here.
@@ -1469,68 +1302,56 @@ const SOUND_GATE = [
  * @returns The document with the text it came from.
  */
 function doctored(text: string): LoadedWorkflow {
-  return { name: "ci.yml", text, parsed: Bun.YAML.parse(text) as Workflow };
+  return { name: 'ci.yml', text, parsed: Bun.YAML.parse(text) as Workflow };
 }
 
-describe("the pin rule against a doctored document", () => {
-  const onePin: PinnedTool[] = [{ name: "cargo-deny", version: "0.20.2" }];
+describe('the pin rule against a doctored document', () => {
+  const onePin: PinnedTool[] = [{ name: 'cargo-deny', version: '0.20.2' }];
 
-  test("the sound document is accepted", () => {
+  test('the sound document is accepted', () => {
     expect(pinProblems(doctored(SOUND_GATE), onePin)).toEqual([]);
   });
 
   test.each([
     [
-      "a pinned version written into a comment",
+      'a pinned version written into a comment',
       `${SOUND_GATE}\n      # cargo-deny 0.20.2 is what this installs`,
-      "it writes 0.20.2, which mise.toml pins",
+      'it writes 0.20.2, which mise.toml pins',
     ],
     [
-      "a pin file handed to the action",
+      'a pin file handed to the action',
+      SOUND_GATE.replace('          version: 2026.9.5', '          version: 2026.9.5\n          mise_toml: "[tools]"'),
+      'mise-action takes mise_toml, which writes over mise.toml',
+    ],
+    [
+      'a tool-versions file handed to the action',
       SOUND_GATE.replace(
-        "          version: 2026.9.5",
-        '          version: 2026.9.5\n          mise_toml: "[tools]"',
+        '          version: 2026.9.5',
+        '          version: 2026.9.5\n          tool_versions: cargo-deny 0.20.1',
       ),
-      "mise-action takes mise_toml, which writes over mise.toml",
+      'mise-action takes tool_versions, which writes over mise.toml',
     ],
     [
-      "a tool-versions file handed to the action",
-      SOUND_GATE.replace(
-        "          version: 2026.9.5",
-        "          version: 2026.9.5\n          tool_versions: cargo-deny 0.20.1",
-      ),
-      "mise-action takes tool_versions, which writes over mise.toml",
+      'a typed hash in place of the signed checksum file',
+      SOUND_GATE.replace('          version: 2026.9.5', '          version: 2026.9.5\n          sha256: abc123'),
+      'mise-action takes a sha256, which skips the signed checksum file',
     ],
     [
-      "a typed hash in place of the signed checksum file",
-      SOUND_GATE.replace(
-        "          version: 2026.9.5",
-        "          version: 2026.9.5\n          sha256: abc123",
-      ),
-      "mise-action takes a sha256, which skips the signed checksum file",
+      'the install turned off',
+      SOUND_GATE.replace('          version: 2026.9.5', '          version: 2026.9.5\n          install: false'),
+      'mise-action installs nothing, so no tool is there to run',
     ],
     [
-      "the install turned off",
-      SOUND_GATE.replace(
-        "          version: 2026.9.5",
-        "          version: 2026.9.5\n          install: false",
-      ),
-      "mise-action installs nothing, so no tool is there to run",
+      'a mise release left to resolve at run time',
+      SOUND_GATE.replace('          version: 2026.9.5', '          version: 2026'),
+      'mise-action takes 2026, which is not one exact release',
     ],
     [
-      "a mise release left to resolve at run time",
-      SOUND_GATE.replace(
-        "          version: 2026.9.5",
-        "          version: 2026",
-      ),
-      "mise-action takes 2026, which is not one exact release",
+      'no mise release at all',
+      SOUND_GATE.replace('        with:\n          version: 2026.9.5\n', ''),
+      'mise-action takes no version, which is not one exact release',
     ],
-    [
-      "no mise release at all",
-      SOUND_GATE.replace("        with:\n          version: 2026.9.5\n", ""),
-      "mise-action takes no version, which is not one exact release",
-    ],
-  ])("%s", (_what, text, expected) => {
+  ])('%s', (_what, text, expected) => {
     expect(pinProblems(doctored(text), onePin)).toContain(expected);
   });
 });

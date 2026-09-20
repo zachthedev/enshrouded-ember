@@ -19,10 +19,10 @@
  * ```
  */
 
-import { appendFile } from "node:fs/promises";
-import { parseArgs } from "node:util";
-import * as VDF from "vdf-parser";
-import { z } from "zod";
+import { appendFile } from 'node:fs/promises';
+import { parseArgs } from 'node:util';
+import * as VDF from 'vdf-parser';
+import { z } from 'zod';
 import {
   appendRecord,
   BranchTable,
@@ -30,7 +30,7 @@ import {
   readRecords,
   STEAM_BUILDS_PATH,
   SteamBuildRecord,
-} from "./records.ts";
+} from './records.ts';
 
 /**
  * ///////////////////////////////////////////////
@@ -55,7 +55,7 @@ export interface AppInfo {
 export class AppInfoError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "AppInfoError";
+    this.name = 'AppInfoError';
   }
 }
 
@@ -70,37 +70,30 @@ export class AppInfoError extends Error {
  * `app_info_update 1` first.
  */
 export function sliceAppBlock(text: string, appId: number): string {
-  const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
+  const lines = text.split('\n').map((line) => line.replace(/\r$/, ''));
   const opening = `"${appId}"`;
   const start = lines.findIndex((line) => line.trimEnd() === opening);
   if (start === -1) {
     throw new AppInfoError(
       `SteamCMD printed no block for app ${appId}. A cold SteamCMD prints an ` +
-        "empty block, so the caller runs app_info_update 1 first.",
+        'empty block, so the caller runs app_info_update 1 first.',
     );
   }
-  const end = lines.findIndex(
-    (line, index) => index > start && line.trimEnd() === "}",
-  );
+  const end = lines.findIndex((line, index) => index > start && line.trimEnd() === '}');
   if (end === -1) {
-    throw new AppInfoError(
-      `SteamCMD's block for app ${appId} has no closing brace, so the output ` +
-        "was cut short.",
-    );
+    throw new AppInfoError(`SteamCMD's block for app ${appId} has no closing brace, so the output ` + 'was cut short.');
   }
-  return lines.slice(start, end + 1).join("\n");
+  return lines.slice(start, end + 1).join('\n');
 }
 
 /** The children of a node, or nothing when it is a leaf or a repeated key. */
 function asTable(node: VdfNode | VdfNode[] | undefined): VdfTable {
-  return typeof node === "object" && node !== null && !Array.isArray(node)
-    ? node
-    : {};
+  return typeof node === 'object' && node !== null && !Array.isArray(node) ? node : {};
 }
 
 /** The string a node carries, or null when it is anything else. */
 function asString(node: VdfNode | VdfNode[] | undefined): string | null {
-  return typeof node === "string" ? node : null;
+  return typeof node === 'string' ? node : null;
 }
 
 /**
@@ -129,11 +122,11 @@ export function parseAppInfo(text: string, appId: number): AppInfo {
   // is touched. It also turns a repeated key into an array, which the readers
   // below refuse rather than silently taking one of the two.
   const root = VDF.parse<VdfTable>(block, { types: false, arrayify: true });
-  const depots = asTable(asTable(root[String(appId)])["depots"]);
+  const depots = asTable(asTable(root[String(appId)])['depots']);
 
   const branches: Record<string, string> = {};
-  for (const [name, node] of Object.entries(asTable(depots["branches"]))) {
-    const buildId = asString(asTable(node)["buildid"]);
+  for (const [name, node] of Object.entries(asTable(depots['branches']))) {
+    const buildId = asString(asTable(node)['buildid']);
     if (buildId !== null) {
       branches[name] = buildId;
     }
@@ -144,43 +137,29 @@ export function parseAppInfo(text: string, appId: number): AppInfo {
     if (!/^\d+$/.test(depotId)) {
       continue;
     }
-    const publicManifest = asTable(
-      asTable(asTable(node)["manifests"])["public"],
-    );
-    const gid = asString(publicManifest["gid"]);
+    const publicManifest = asTable(asTable(asTable(node)['manifests'])['public']);
+    const gid = asString(publicManifest['gid']);
     if (gid !== null) {
       manifests[depotId] = gid;
     }
   }
 
   if (Object.keys(branches).length === 0) {
-    throw new AppInfoError(
-      `app ${appId} advertises no branch build id, so the block is empty or ` +
-        "truncated.",
-    );
+    throw new AppInfoError(`app ${appId} advertises no branch build id, so the block is empty or ` + 'truncated.');
   }
   if (Object.keys(manifests).length === 0) {
-    throw new AppInfoError(
-      `app ${appId} advertises no depot manifest, so the block is empty or ` +
-        "truncated.",
-    );
+    throw new AppInfoError(`app ${appId} advertises no depot manifest, so the block is empty or ` + 'truncated.');
   }
 
   // Scoped to this application, because one SteamCMD run can print several.
-  const line = new RegExp(
-    `^AppID\\s*:\\s*${appId}\\s*,\\s*change number\\s*:\\s*(\\d+)`,
-    "m",
-  ).exec(text);
+  const line = new RegExp(`^AppID\\s*:\\s*${appId}\\s*,\\s*change number\\s*:\\s*(\\d+)`, 'm').exec(text);
 
   // Checked here rather than at the append, because a run where nothing moved
   // appends no row and still hands these values to a workflow.
-  const checked = z
-    .object({ branches: BranchTable, manifests: ManifestTable })
-    .safeParse({ branches, manifests });
+  const checked = z.object({ branches: BranchTable, manifests: ManifestTable }).safeParse({ branches, manifests });
   if (!checked.success) {
     throw new AppInfoError(
-      `app ${appId} advertises something this tool will not record: ` +
-        z.prettifyError(checked.error),
+      `app ${appId} advertises something this tool will not record: ` + z.prettifyError(checked.error),
     );
   }
 
@@ -198,7 +177,7 @@ export function parseAppInfo(text: string, appId: number): AppInfo {
  */
 
 /** The fields that decide whether a build actually moved. */
-type BuildIdentity = Pick<SteamBuildRecord, "branches" | "manifests">;
+type BuildIdentity = Pick<SteamBuildRecord, 'branches' | 'manifests'>;
 
 /**
  * A stable key for comparing two observations, insensitive to key ordering.
@@ -207,9 +186,7 @@ type BuildIdentity = Pick<SteamBuildRecord, "branches" | "manifests">;
  * @returns A string that is equal for two observations of the same state.
  */
 export function identityKey(record: BuildIdentity): string {
-  const sorted = (
-    table: Readonly<Record<string, string>>,
-  ): [string, string][] =>
+  const sorted = (table: Readonly<Record<string, string>>): [string, string][] =>
     Object.entries(table).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify({
     branches: sorted(record.branches),
@@ -224,10 +201,7 @@ export function identityKey(record: BuildIdentity): string {
  * @param appId - The application to look for.
  * @returns The last row for that application, or null when it has none.
  */
-export function lastRecordFor(
-  records: readonly SteamBuildRecord[],
-  appId: number,
-): SteamBuildRecord | null {
+export function lastRecordFor(records: readonly SteamBuildRecord[], appId: number): SteamBuildRecord | null {
   let found: SteamBuildRecord | null = null;
   for (const record of records) {
     if (record.appId === appId) {
@@ -251,14 +225,10 @@ export interface WatchResult {
  * @param record - The observation just taken.
  * @returns What was concluded, and the row it was compared against.
  */
-export async function recordIfChanged(
-  path: string,
-  record: SteamBuildRecord,
-): Promise<WatchResult> {
+export async function recordIfChanged(path: string, record: SteamBuildRecord): Promise<WatchResult> {
   const existing = await readRecords(path, SteamBuildRecord);
   const previous = lastRecordFor(existing, record.appId);
-  const changed =
-    previous === null || identityKey(previous) !== identityKey(record);
+  const changed = previous === null || identityKey(previous) !== identityKey(record);
   if (changed) {
     await appendRecord(path, SteamBuildRecord, record);
   }
@@ -266,7 +236,7 @@ export async function recordIfChanged(
 }
 
 /** The branch whose build id every downstream job is named for. */
-export const PUBLIC_BRANCH = "public";
+export const PUBLIC_BRANCH = 'public';
 
 /**
  * Every branch whose build id differs from the row this one is compared to.
@@ -282,10 +252,7 @@ export const PUBLIC_BRANCH = "public";
 export function movedBranches(result: WatchResult): string[] {
   const before = result.previous?.branches ?? {};
   return Object.entries(result.record.branches)
-    .filter(
-      ([name, buildId]) =>
-        !Object.hasOwn(before, name) || before[name] !== buildId,
-    )
+    .filter(([name, buildId]) => !Object.hasOwn(before, name) || before[name] !== buildId)
     .map(([name]) => name);
 }
 
@@ -316,10 +283,7 @@ function dim(text: string): string {
  * archive job needs it to name the build it fetches.
  * @returns One line per value, in a fixed order.
  */
-export function stepOutputs(
-  result: WatchResult,
-  depotId: string | undefined,
-): string[] {
+export function stepOutputs(result: WatchResult, depotId: string | undefined): string[] {
   const moved = movedBranches(result);
   return [
     `changed=${result.changed}`,
@@ -327,10 +291,10 @@ export function stepOutputs(
     // Both follow the public branch, so both are read together with
     // public_moved and never with branches_moved. A beta branch moving is a
     // real event that names neither of these.
-    `build_id=${result.record.branches[PUBLIC_BRANCH] ?? ""}`,
+    `build_id=${result.record.branches[PUBLIC_BRANCH] ?? ''}`,
     `manifest_id=${manifestFor(result, depotId)}`,
-    `change_number=${result.record.changeNumber ?? ""}`,
-    `branches_moved=${moved.join(" ")}`,
+    `change_number=${result.record.changeNumber ?? ''}`,
+    `branches_moved=${moved.join(' ')}`,
     `public_moved=${moved.includes(PUBLIC_BRANCH)}`,
   ];
 }
@@ -347,7 +311,7 @@ export function stepOutputs(
  */
 function manifestFor(result: WatchResult, depotId: string | undefined): string {
   if (depotId === undefined) {
-    return "";
+    return '';
   }
   const gid = result.record.manifests[depotId];
   if (gid === undefined) {
@@ -360,11 +324,8 @@ function manifestFor(result: WatchResult, depotId: string | undefined): string {
 }
 
 /** Append the step outputs to the file a workflow named, when one did. */
-async function emitStepOutputs(
-  result: WatchResult,
-  depotId: string | undefined,
-): Promise<void> {
-  const path = process.env["GITHUB_OUTPUT"];
+async function emitStepOutputs(result: WatchResult, depotId: string | undefined): Promise<void> {
+  const path = process.env['GITHUB_OUTPUT'];
   if (path === undefined || path.length === 0) {
     return;
   }
@@ -378,7 +339,7 @@ async function emitStepOutputs(
   for (const line of lines) {
     if (/[\r\n]/.test(line)) {
       throw new AppInfoError(
-        "a step output carries a line break, which would declare an output " +
+        'a step output carries a line break, which would declare an output ' +
           `name of its own: ${JSON.stringify(line)}`,
       );
     }
@@ -386,47 +347,40 @@ async function emitStepOutputs(
   // Appended rather than read and rewritten. The runner hands each step a file
   // that may already hold another command's output, and a rewrite would lose
   // it, or merge into it when it ends without a newline.
-  await appendFile(path, `${lines.join("\n")}\n`, "utf8");
+  await appendFile(path, `${lines.join('\n')}\n`, 'utf8');
 }
 
 /** Print what the run concluded. */
 function report(result: WatchResult): void {
-  console.log("build watch");
-  console.log("");
-  const glyph = result.changed ? "✓" : "·";
-  const verdict = result.changed ? "recorded" : "unchanged";
+  console.log('build watch');
+  console.log('');
+  const glyph = result.changed ? '✓' : '·';
+  const verdict = result.changed ? 'recorded' : 'unchanged';
   console.log(`  ${glyph} app ${result.record.appId} ${verdict}`);
   for (const [name, buildId] of Object.entries(result.record.branches)) {
     const before = result.previous?.branches[name];
-    const from =
-      before !== undefined && before !== buildId ? ` was ${before}` : "";
-    console.log(`    ${dim("branch")} ${name} ${buildId}${from}`);
+    const from = before !== undefined && before !== buildId ? ` was ${before}` : '';
+    console.log(`    ${dim('branch')} ${name} ${buildId}${from}`);
   }
   for (const [depotId, gid] of Object.entries(result.record.manifests)) {
     const before = result.previous?.manifests[depotId];
-    const from = before !== undefined && before !== gid ? ` was ${before}` : "";
-    console.log(`    ${dim("depot")} ${depotId} ${gid}${from}`);
+    const from = before !== undefined && before !== gid ? ` was ${before}` : '';
+    console.log(`    ${dim('depot')} ${depotId} ${gid}${from}`);
   }
 
-  console.log("");
-  console.log(
-    result.changed
-      ? `  one row appended to ${STEAM_BUILDS_PATH}`
-      : "  no row appended",
-  );
+  console.log('');
+  console.log(result.changed ? `  one row appended to ${STEAM_BUILDS_PATH}` : '  no row appended');
 }
 
 if (import.meta.main) {
   const { values, positionals } = parseArgs({
     args: Bun.argv.slice(2),
     allowPositionals: true,
-    options: { depot: { type: "string" } },
+    options: { depot: { type: 'string' } },
   });
   const [appIdText, infoPath] = positionals;
   if (appIdText === undefined || infoPath === undefined) {
-    console.error(
-      "usage: watch-builds.ts <appid> <app_info_print output> [--depot <id>]",
-    );
+    console.error('usage: watch-builds.ts <appid> <app_info_print output> [--depot <id>]');
     process.exit(2);
   }
   const appId = Number(appIdText);

@@ -20,9 +20,9 @@
  * converts it to a number can silently change it.
  */
 
-import { appendFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { z } from "zod";
+import { appendFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 
 /**
  * ///////////////////////////////////////////////
@@ -38,14 +38,10 @@ import { z } from "zod";
  * One reaches a path component, an issue title and a command-line argument, so
  * an unbounded one reaches each of them.
  */
-const steamId = z
-  .string()
-  .regex(/^\d{1,20}$/, "a Steam identifier is up to twenty decimal digits");
+const steamId = z.string().regex(/^\d{1,20}$/, 'a Steam identifier is up to twenty decimal digits');
 
 /** A SHA-256 digest, lowercase hex, as `sha256sum` and `Bun.CryptoHasher` write it. */
-const sha256 = z
-  .string()
-  .regex(/^[0-9a-f]{64}$/, "a SHA-256 digest is 64 lowercase hex characters");
+const sha256 = z.string().regex(/^[0-9a-f]{64}$/, 'a SHA-256 digest is 64 lowercase hex characters');
 
 /**
  * The files an archived build carries, and the order they are handled in.
@@ -55,10 +51,7 @@ const sha256 = z
  * only that subset, and `pull` fetches only that subset while still reporting
  * the build complete, which is the quieter half of naming none at all.
  */
-export const ARCHIVE_FILES = [
-  "enshrouded_server.exe",
-  "enshrouded_server.kfc",
-] as const;
+export const ARCHIVE_FILES = ['enshrouded_server.exe', 'enshrouded_server.kfc'] as const;
 
 /**
  * One file inside an archived build.
@@ -74,13 +67,10 @@ export const ARCHIVE_FILES = [
  */
 const archiveFileName = z
   .string()
-  .regex(
-    /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
-    "an archived file name is one plain file name",
-  )
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'an archived file name is one plain file name')
   .refine(
-    (name) => !["__proto__", "constructor", "prototype"].includes(name),
-    "an archived file name is not a property of Object",
+    (name) => !['__proto__', 'constructor', 'prototype'].includes(name),
+    'an archived file name is not a property of Object',
   );
 
 /**
@@ -108,10 +98,7 @@ export function isArchiveFileName(name: string): boolean {
  */
 const branchName = z
   .string()
-  .regex(
-    /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,
-    "a branch name is letters, digits, dot, hyphen and underscore",
-  );
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, 'a branch name is letters, digits, dot, hyphen and underscore');
 
 /**
  * The branch path in a build's `enshrouded_server.kfc` header.
@@ -121,9 +108,7 @@ const branchName = z
  * and always starts with `^/`. Requiring that catches a shell that rewrote the
  * leading slash into a filesystem path on its way to the recorder.
  */
-const branchPath = z
-  .string()
-  .regex(/^\^\/[A-Za-z0-9._/-]+$/, "a branch path is Subversion caret syntax");
+const branchPath = z.string().regex(/^\^\/[A-Za-z0-9._/-]+$/, 'a branch path is Subversion caret syntax');
 
 /**
  * ///////////////////////////////////////////////
@@ -221,7 +206,7 @@ export const BuildDigestRecord = z.strictObject({
     .record(archiveFileName, FileDigest)
     .refine(
       (files) => ARCHIVE_FILES.every((name) => Object.hasOwn(files, name)),
-      `a digest row names every archived file: ${ARCHIVE_FILES.join(", ")}`,
+      `a digest row names every archived file: ${ARCHIVE_FILES.join(', ')}`,
     ),
 });
 
@@ -235,17 +220,13 @@ export type BuildDigestRecord = z.infer<typeof BuildDigestRecord>;
  */
 
 /** The directory holding both records, resolved from this module. */
-const dataDir = new URL("../data/", import.meta.url);
+const dataDir = new URL('../data/', import.meta.url);
 
 /** Every observation of what Steam advertises. */
-export const STEAM_BUILDS_PATH = fileURLToPath(
-  new URL("steam-builds.jsonl", dataDir),
-);
+export const STEAM_BUILDS_PATH = fileURLToPath(new URL('steam-builds.jsonl', dataDir));
 
 /** Every recorded build's file digests. */
-export const BUILD_DIGESTS_PATH = fileURLToPath(
-  new URL("build-digests.jsonl", dataDir),
-);
+export const BUILD_DIGESTS_PATH = fileURLToPath(new URL('build-digests.jsonl', dataDir));
 
 /**
  * ///////////////////////////////////////////////
@@ -257,7 +238,7 @@ export const BUILD_DIGESTS_PATH = fileURLToPath(
 export class RecordError extends Error {
   constructor(path: string, line: number, detail: string) {
     super(`${path} line ${line}: ${detail}`);
-    this.name = "RecordError";
+    this.name = 'RecordError';
   }
 }
 
@@ -269,16 +250,13 @@ export class RecordError extends Error {
  * @returns The rows, in file order.
  * @throws {@link RecordError} When a row is not JSON, or does not match.
  */
-export async function readRecords<T>(
-  path: string,
-  schema: z.ZodType<T>,
-): Promise<T[]> {
+export async function readRecords<T>(path: string, schema: z.ZodType<T>): Promise<T[]> {
   const file = Bun.file(path);
   if (!(await file.exists())) {
     return [];
   }
   const rows: T[] = [];
-  const lines = (await file.text()).split("\n");
+  const lines = (await file.text()).split('\n');
   for (const [index, line] of lines.entries()) {
     if (line.trim().length === 0) {
       continue;
@@ -287,11 +265,7 @@ export async function readRecords<T>(
     try {
       value = JSON.parse(line);
     } catch (error) {
-      throw new RecordError(
-        path,
-        index + 1,
-        `is not JSON: ${(error as Error).message}`,
-      );
+      throw new RecordError(path, index + 1, `is not JSON: ${(error as Error).message}`);
     }
     const parsed = schema.safeParse(value);
     if (!parsed.success) {
@@ -310,14 +284,10 @@ export async function readRecords<T>(
  * @param record - The row to write.
  * @throws {@link RecordError} When the row does not match the shape.
  */
-export async function appendRecord<T>(
-  path: string,
-  schema: z.ZodType<T>,
-  record: T,
-): Promise<void> {
+export async function appendRecord<T>(path: string, schema: z.ZodType<T>, record: T): Promise<void> {
   const parsed = schema.safeParse(record);
   if (!parsed.success) {
     throw new RecordError(path, 0, z.prettifyError(parsed.error));
   }
-  await appendFile(path, `${JSON.stringify(parsed.data)}\n`, "utf8");
+  await appendFile(path, `${JSON.stringify(parsed.data)}\n`, 'utf8');
 }

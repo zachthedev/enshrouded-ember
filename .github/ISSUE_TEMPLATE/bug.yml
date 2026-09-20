@@ -1,7 +1,7 @@
 name: Bug
 description: Ember does something other than what it documents.
-title: "bug: "
-labels: ["bug"]
+title: 'bug: '
+labels: ['bug']
 body:
   - type: markdown
     attributes:
@@ -19,8 +19,7 @@ body:
     id: steps
     attributes:
       label: How to reproduce it
-      description:
-        The steps that produce it, starting from a server that is not running.
+      description: The steps that produce it, starting from a server that is not running.
     validations:
       required: true
   - type: input
@@ -29,7 +28,7 @@ body:
       label: Ember version
       description: >
         The release you installed, or the commit sha for a build from source.
-      placeholder: "0.1.0, or 6f9be1d"
+      placeholder: '0.1.0, or 6f9be1d'
     validations:
       required: true
   - type: input
@@ -39,7 +38,7 @@ body:
       description: >
         The `buildid` line in `steamapps/appmanifest_2278520.acf` beside your
         server. A finding is worthless without the build behind it.
-      placeholder: "23178631"
+      placeholder: '23178631'
     validations:
       required: true
   - type: textarea
@@ -75,8 +74,8 @@ body:
         This separates a defect in Ember from two mods interacting. Pick "Not
         checked" rather than guessing.
       options:
-        - "Yes"
-        - "No, it needs at least one mod"
+        - 'Yes'
+        - 'No, it needs at least one mod'
         - Not checked
     validations:
       required: true
