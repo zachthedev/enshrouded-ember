@@ -65,6 +65,26 @@ const WRITE_SECRETS = [
 const PUSH_KEY_SECRET = "EMBER_CI_SSH_KEY";
 
 /**
+ * The deployment environments known to carry no required reviewer.
+ *
+ * @remarks
+ * A reviewer list is a GitHub setting rather than a file, so nothing in this
+ * repository can read one. GitHub is the authority and this list is a claim
+ * about it, which is the weakness of every case that reads it: a reviewer
+ * added to one of these names turns an unattended run into a wait and leaves
+ * the gate green.
+ *
+ * What the list does close is the direction that changes under a diff. An
+ * environment absent from it is read as gating on a person, so a job wired to
+ * a new environment is refused until somebody states which kind it is.
+ *
+ * Reviewers aside, every environment carries a deployment branch policy naming
+ * `main`. A workflow on any other branch is refused the secrets the
+ * environment holds, which a repository-level secret cannot do.
+ */
+const UNGATED_ENVIRONMENTS = ["archive-read", "digest-push"];
+
+/**
  * Triggers that carry repository secrets on an event a fork can influence.
  *
  * @remarks
@@ -265,10 +285,15 @@ describe("the workflows", () => {
    * The archive job waits on a maintainer's approval every time it starts, so
    * what starts it has to answer without waiting on one. One job hands on
    * `needs_archive`, and it asks the bucket with the read token alone: no
-   * write secret, no deploy key and no environment, so a scheduled run never
-   * sits in `waiting`. Every job holding a write secret starts on that answer,
-   * and a second job answering would mean something other than the bucket was
+   * write secret and no deploy key, so a scheduled run never sits in
+   * `waiting`. Every job holding a write secret starts on that answer, and a
+   * second job answering would mean something other than the bucket was
    * deciding.
+   *
+   * The deciding job declares an environment, for the deployment branch policy
+   * that refuses its token to a workflow on any other branch. What this case
+   * reads is whether that environment gates on a person, because the wait is
+   * the thing an hourly unattended check cannot afford.
    */
   test("the archive job starts on the bucket's answer, which waits on no approval", () => {
     let checked = 0;
@@ -300,10 +325,11 @@ describe("the workflows", () => {
 
         const deciderText = JSON.stringify(decider);
         expect(
-          decider["environment"],
-          `${deciderName} declares an environment, so every scheduled run waits ` +
-            "on an approval",
-        ).toBeUndefined();
+          waitsForApproval(decider),
+          `${deciderName} declares environment ` +
+            `${String(decider["environment"])}, which is not on the ` +
+            "reviewer-free list, so every scheduled run waits on an approval",
+        ).toBe(false);
         for (const secret of READ_SECRETS) {
           expect(deciderText, `${deciderName} cannot ask the bucket`).toContain(
             secret,
@@ -317,6 +343,47 @@ describe("the workflows", () => {
         }
       }
     }
+    expect(
+      checked,
+      "no job holds a write secret, so this case checked nothing",
+    ).toBeGreaterThan(0);
+  });
+
+  /**
+   * `UNGATED_ENVIRONMENTS` is where the case above can be silenced. Adding the
+   * write environment to it reads as one more name on a list and turns that
+   * case green with the approval gate gone, so this refuses it at the list.
+   *
+   * The list is read in the other direction too. A name left on it after its
+   * last job is gone is an allowance nothing uses, and it is the one a job
+   * wired later passes through unread. `ACTION_OWNERS` carries the same guard,
+   * for the same reason.
+   */
+  test("the reviewer-free list is used in full and gates no write secret", () => {
+    const declared = new Set<string>();
+    let checked = 0;
+    for (const workflow of loaded) {
+      for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
+        const environment = job["environment"];
+        if (typeof environment === "string") {
+          declared.add(environment);
+        }
+        const text = JSON.stringify(job);
+        if (!WRITE_SECRETS.some((secret) => text.includes(secret))) {
+          continue;
+        }
+        checked += 1;
+        expect(
+          waitsForApproval(job),
+          `${workflow.name} job ${jobName} holds a write secret and starts ` +
+            `without an approval, under environment ${String(environment)}`,
+        ).toBe(true);
+      }
+    }
+    expect(
+      UNGATED_ENVIRONMENTS.filter((name) => !declared.has(name)),
+      "an environment on the reviewer-free list is declared by no job",
+    ).toEqual([]);
     expect(
       checked,
       "no job holds a write secret, so this case checked nothing",
@@ -383,12 +450,17 @@ describe("the workflows", () => {
    * Every group therefore sits on the job that needs it. A job that pushes
    * needs one, because two pushers racing the same record is the other way
    * this file loses work.
+   *
+   * A job whose environment is on `UNGATED_ENVIRONMENTS` starts immediately,
+   * so it holds no group for a wait and needs none on this account. Reading
+   * the bare presence of an environment instead would demand a group of the
+   * hourly bucket check, which serializes a job that races nothing.
    */
   test("a workflow with an approval gate keeps concurrency on the jobs", () => {
     let checked = 0;
     for (const workflow of loaded) {
       const jobs = Object.entries(workflow.parsed.jobs ?? {});
-      if (!jobs.some(([, job]) => job["environment"] !== undefined)) {
+      if (!jobs.some(([, job]) => waitsForApproval(job))) {
         continue;
       }
       checked += 1;
@@ -403,7 +475,7 @@ describe("the workflows", () => {
           const script = (step as Record<string, unknown>)["run"];
           return typeof script === "string" && /\bgit push\b/.test(script);
         });
-        if (!pushes && job["environment"] === undefined) {
+        if (!pushes && !waitsForApproval(job)) {
           continue;
         }
         expect(
@@ -1150,6 +1222,21 @@ function issueSections(body: string): { heading: string; content: string }[] {
       const [heading, ...rest] = section.split("\n");
       return { heading: heading as string, content: rest.join("\n").trim() };
     });
+}
+
+/**
+ * Whether a job waits on a person before it starts.
+ *
+ * @param job - The job, as the parsed document holds it.
+ * @returns True when the job declares an environment that is not on
+ * `UNGATED_ENVIRONMENTS`.
+ */
+function waitsForApproval(job: Record<string, unknown>): boolean {
+  const environment = job["environment"];
+  if (environment === undefined) {
+    return false;
+  }
+  return !UNGATED_ENVIRONMENTS.includes(String(environment));
 }
 
 /**
