@@ -17,6 +17,14 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Exempts a path dependency from the rule above, for a crate that publishes
+# nowhere. The exemption keys on publishability rather than on where the path
+# points, and it covers an explicit `version = "*"` as well as the implicit
+# wildcard a path-only entry produces. A crate that becomes publishable loses
+# it. The rule exists to catch a registry dependency with no version bound, and
+# this keeps it doing that: a wildcard on a crate from a registry is refused
+# whatever this says.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
