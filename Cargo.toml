@@ -47,6 +47,10 @@ time = { version = "0.3.55", features = ["formatting"] }
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# A YAML parser, for the tests that read the workflow configuration. They read
+# UTF-8 text, so the encoding detection stays out.
+yaml-rust2 = { version = "0.13.0", default-features = false }
+
 which = "8.0.6"
 windows-link = "0.100.0"
 # Decoding only, so the dictionary builder, the legacy frame formats and the

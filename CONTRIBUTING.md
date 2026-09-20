@@ -1,12 +1,10 @@
 # Contributing
 
 The gate opens by holding `mise.toml` and `mise.lock` to their rules, before it
-runs any tool. `cargo xtask pins` runs that on its own. A lockfile entry with a
-url and no checksum installs whatever the url serves, so a rule that ran later
-would report a finding about a binary that had already executed. The steps after
-it:
-
-| Step | What it checks
+runs any tool. `cargo xtask pins` runs that on its own. A lockfile entry the
+rules reject installs whatever its url serves, so a rule that ran later would
+report a finding about a binary that had already executed.
+[The gate](#the-gate) names every step in order.
 
 ## Toolchain
 
@@ -31,6 +29,20 @@ their own names, which is what makes `cargo nextest run` and its siblings work
 at a prompt. The split is deliberate: a check runs the binary it resolved, and a
 person gets the convenience.
 
+`mise.lock` is generated, so the gate holds it to something that is not in it.
+`xtask/src/pins.rs` carries the owner and the repository every tool's artifacts
+come from, and the rules refuse a lockfile entry whose `url` or `backend` names
+anything else. A bare registry key in `mise.toml` names no owner, so for those
+tools that table is the only record of the account outside the generated file.
+Moving a tool to another account takes an edit there, in the same diff as the
+lockfile it explains.
+
+`mise.toml` sets `locked` twice, under `[settings]` and under `[tool_config]`,
+because they are not the same setting. `MISE_LOCKED=false` and a `locked_scopes`
+that drops `project` each turn the `[settings]` one off. The `[tool_config]` one
+holds regardless of the environment, and mise reads it from the file alone, so
+the gate asserts it from the file.
+
 `taplo` is the one tool whose checksum does not come from its publisher. GitHub
 began recording a digest for release assets after the taplo release `mise.toml`
 pins was published, so its hashes were computed here and committed. They say the
@@ -38,9 +50,9 @@ bytes came from that release URL and that every install since has to match them,
 which is narrower than a digest the publisher recorded and is not provenance.
 Bumping taplo writes a lockfile entry with no checksum at all, which the gate's
 own tests refuse, so whoever bumps it computes and commits the new hashes. A
-relock at the same version keeps them, so only a bump drops them. put it on
-`PATH`. A release the pin file does not name is refused by name, so a wrong
-install fails at the gate rather than reading a script under other rules.
+relock at the same version keeps them, so only a bump drops them. A release the
+pin file does not name is refused by name, so a wrong install fails at the gate
+rather than reading a script under other rules.
 
 ## The gate
 

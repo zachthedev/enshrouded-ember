@@ -16,7 +16,7 @@ mod hooks;
 mod image;
 mod kfc;
 mod loca;
-mod pins;
+pub mod pins;
 #[cfg(test)]
 mod policy;
 mod proc;

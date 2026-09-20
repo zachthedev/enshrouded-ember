@@ -191,17 +191,25 @@ pub(crate) fn pin_problems(root: &Path) -> Vec<String> {
     let read = |path: &str| {
         std::fs::read_to_string(root.join(path)).map_err(|err| format!("reading {path}: {err}"))
     };
-    match (
-        read(crate::pins::PINS),
-        read(crate::pins::LOCK),
-        read(crate::pins::WORKFLOW),
-    ) {
-        (Ok(pins), Ok(lock), Ok(workflow)) => crate::pins::problems(&pins, &lock, &workflow),
-        (first, second, third) => [first, second, third]
-            .into_iter()
-            .filter_map(Result::err)
-            .collect(),
-    }
+    // The environment can point mise at a file other than the one these rules
+    // read, which would leave them judging a document mise ignores. Reading the
+    // variables costs no process, so the row still runs before mise exists on a
+    // machine.
+    let mut found = crate::pins::environment_problems(|name| std::env::var(name).ok());
+    found.extend(
+        match (
+            read(crate::pins::PINS),
+            read(crate::pins::LOCK),
+            read(crate::pins::WORKFLOW),
+        ) {
+            (Ok(pins), Ok(lock), Ok(workflow)) => crate::pins::problems(&pins, &lock, &workflow),
+            (first, second, third) => [first, second, third]
+                .into_iter()
+                .filter_map(Result::err)
+                .collect(),
+        },
+    );
+    found
 }
 
 /// What to run when a tool mise owns is absent. One command covers every one of

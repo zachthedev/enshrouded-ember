@@ -37,6 +37,13 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
+      # The pin rules, ahead of the step that installs from them. mise-action
+      # runs `mise install`, which fetches and unpacks every artifact mise.lock
+      # records, so a rule that ran after it would report a finding about bytes
+      # already on disk. This command reads mise.toml, mise.lock and this file
+      # and runs nothing, so it needs neither mise nor any pinned tool.
+      - run: cargo xtask pins
+        shell: bash
       # mise reads mise.toml for every tool the gate runs and mise.lock for the
       # checksum of each artifact, so no release is written here. The action
       # verifies its own mise download against a minisign-signed SHASUMS256.txt,
@@ -68,7 +75,6 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      - run:
-          bunx --no-install commitlint --from ${{
+      - run: bunx --no-install commitlint --from ${{
           github.event.pull_request.base.sha }} --to ${{
           github.event.pull_request.head.sha }}

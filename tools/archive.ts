@@ -41,18 +41,14 @@
  * ```
  */
 
-import { readFileSync } from "node:fs";
-import { appendFile, mkdir, readdir, rename, rm } from "node:fs/promises";
-import { basename, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
-import * as VDF from "vdf-parser";
-import { z } from "zod";
-import {
-  compareToManifest,
-  DdManifestError,
-  readDdManifest,
-} from "./dd-manifest.ts";
+import { readFileSync } from 'node:fs';
+import { appendFile, mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { basename, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+import * as VDF from 'vdf-parser';
+import { z } from 'zod';
+import { compareToManifest, DdManifestError, readDdManifest } from './dd-manifest.ts';
 import {
   ARCHIVE_FILES,
   appendRecord,
@@ -62,7 +58,7 @@ import {
   isArchiveFileName,
   readRecords,
   RecordError,
-} from "./records.ts";
+} from './records.ts';
 
 /**
  * ///////////////////////////////////////////////
@@ -91,22 +87,19 @@ const DestinationFile = z.object({
     .string()
     .regex(
       /^[0-9a-f]{32}$/,
-      "accountId is a Cloudflare account id: 32 lowercase hex characters, " +
-        "which is the first label of the R2 endpoint host",
+      'accountId is a Cloudflare account id: 32 lowercase hex characters, ' +
+        'which is the first label of the R2 endpoint host',
     ),
   bucket: z
     .string()
     .regex(
       /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/,
-      "bucket is an R2 bucket name: lowercase letters, digits and hyphens, " +
-        "3 to 63 characters",
+      'bucket is an R2 bucket name: lowercase letters, digits and hyphens, ' + '3 to 63 characters',
     ),
 });
 
 /** Where `archive.json` sits, resolved from this module. */
-const DESTINATION_PATH = fileURLToPath(
-  new URL("../archive.json", import.meta.url),
-);
+const DESTINATION_PATH = fileURLToPath(new URL('../archive.json', import.meta.url));
 
 /**
  * Read the destination out of the committed configuration file.
@@ -129,20 +122,17 @@ const DESTINATION_PATH = fileURLToPath(
 function readDestination(): Destination {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(DESTINATION_PATH, "utf8"));
+    raw = JSON.parse(readFileSync(DESTINATION_PATH, 'utf8'));
   } catch (error) {
     throw new Error(
       `${DESTINATION_PATH} could not be read: ${(error as Error).message}. ` +
-        "It names the R2 account and bucket the archive commands reach, and " +
-        "a fork points it at its own.",
+        'It names the R2 account and bucket the archive commands reach, and ' +
+        'a fork points it at its own.',
     );
   }
   const parsed = DestinationFile.safeParse(raw);
   if (!parsed.success) {
-    throw new Error(
-      `${DESTINATION_PATH} is not a destination: ` +
-        z.prettifyError(parsed.error),
-    );
+    throw new Error(`${DESTINATION_PATH} is not a destination: ` + z.prettifyError(parsed.error));
   }
   return parsed.data;
 }
@@ -195,7 +185,7 @@ export interface FetchedManifest {
    * DepotDownloader's cached manifest is Valve's own, and it carries a digest
    * per file, so the attribution can be checked rather than taken.
    */
-  readonly by: "SteamCMD" | "DepotDownloader";
+  readonly by: 'SteamCMD' | 'DepotDownloader';
 }
 
 /**
@@ -233,34 +223,25 @@ export interface FetchedManifest {
  * cannot be listed. Evidence that cannot be read is not the same as none, and
  * `--unattested` is allowed to wave through only the second one.
  */
-export async function fetchedManifests(
-  dir: string,
-  appId: number,
-  depotId: number,
-): Promise<FetchedManifest[]> {
+export async function fetchedManifests(dir: string, appId: number, depotId: number): Promise<FetchedManifest[]> {
   const found: FetchedManifest[] = [];
 
-  const acf = join(dir, "steamapps", `appmanifest_${appId}.acf`);
+  const acf = join(dir, 'steamapps', `appmanifest_${appId}.acf`);
   if (await Bun.file(acf).exists()) {
     // The same two options the app info parser passes, for the same two
     // reasons: a gid rounds if it becomes a number, and arrayify keeps the
     // parser off Object.prototype.
-    const root = VDF.parse<Record<string, unknown>>(
-      await Bun.file(acf).text(),
-      { types: false, arrayify: true },
-    );
-    const state = root["AppState"] as Record<string, unknown> | undefined;
-    const installed = state?.["InstalledDepots"] as
-      Record<string, unknown> | undefined;
-    const entry = installed?.[String(depotId)] as
-      Record<string, unknown> | undefined;
-    const manifestId = entry?.["manifest"];
-    if (typeof manifestId === "string" && /^\d{1,20}$/.test(manifestId)) {
-      found.push({ manifestId, source: acf, by: "SteamCMD" });
+    const root = VDF.parse<Record<string, unknown>>(await Bun.file(acf).text(), { types: false, arrayify: true });
+    const state = root['AppState'] as Record<string, unknown> | undefined;
+    const installed = state?.['InstalledDepots'] as Record<string, unknown> | undefined;
+    const entry = installed?.[String(depotId)] as Record<string, unknown> | undefined;
+    const manifestId = entry?.['manifest'];
+    if (typeof manifestId === 'string' && /^\d{1,20}$/.test(manifestId)) {
+      found.push({ manifestId, source: acf, by: 'SteamCMD' });
     }
   }
 
-  const cache = join(dir, ".DepotDownloader");
+  const cache = join(dir, '.DepotDownloader');
   const pattern = new RegExp(`^${depotId}_(\\d{1,20})\\.manifest$`);
   for (const name of await listCache(cache)) {
     const match = pattern.exec(name);
@@ -268,7 +249,7 @@ export async function fetchedManifests(
       found.push({
         manifestId: match[1] as string,
         source: join(cache, name),
-        by: "DepotDownloader",
+        by: 'DepotDownloader',
       });
     }
   }
@@ -288,12 +269,12 @@ async function listCache(cache: string): Promise<string[]> {
     return await readdir(cache);
   } catch (error) {
     const code = (error as { code?: unknown } | null)?.code;
-    if (code === "ENOENT") {
+    if (code === 'ENOENT') {
       return [];
     }
     throw new DdManifestError(
       cache,
-      `could not be listed${typeof code === "string" ? `, which failed with ${code}` : ""}`,
+      `could not be listed${typeof code === 'string' ? `, which failed with ${code}` : ''}`,
     );
   }
 }
@@ -313,7 +294,7 @@ export interface KfcVersion {
 }
 
 /** The ASCII bytes `KFC3`, which open a Keen resource container. */
-const KFC_MAGIC = "KFC3";
+const KFC_MAGIC = 'KFC3';
 
 /** Where the container's location records start. */
 const KFC_LOCATIONS_AT = 0x10;
@@ -343,20 +324,14 @@ const KFC_VERSION_CAP = 512;
  */
 export async function kfcVersion(path: string): Promise<KfcVersion | null> {
   const file = Bun.file(path);
-  const header = new Uint8Array(
-    await file.slice(0, KFC_LOCATIONS_AT + 8).arrayBuffer(),
-  );
+  const header = new Uint8Array(await file.slice(0, KFC_LOCATIONS_AT + 8).arrayBuffer());
   if (header.byteLength < KFC_LOCATIONS_AT + 8) {
     return null;
   }
   if (new TextDecoder().decode(header.slice(0, 4)) !== KFC_MAGIC) {
     return null;
   }
-  const record = new DataView(
-    header.buffer,
-    header.byteOffset + KFC_LOCATIONS_AT,
-    8,
-  );
+  const record = new DataView(header.buffer, header.byteOffset + KFC_LOCATIONS_AT, 8);
   // A relative offset of zero marks a location the build does not use, and the
   // offset is relative to the record that holds it.
   const relative = record.getUint32(0, true);
@@ -380,7 +355,7 @@ export async function kfcVersion(path: string): Promise<KfcVersion | null> {
  */
 
 /** Which of the two scoped tokens a command needs. */
-export type Access = "read" | "write";
+export type Access = 'read' | 'write';
 
 /**
  * The environment variables each access level reads, in report order.
@@ -390,11 +365,8 @@ export type Access = "read" | "write";
  * that decides where a request goes comes from the environment.
  */
 const CREDENTIAL_VARS: Record<Access, readonly [string, string]> = {
-  read: ["R2_ARCHIVE_READ_ACCESS_KEY_ID", "R2_ARCHIVE_READ_SECRET_ACCESS_KEY"],
-  write: [
-    "R2_ARCHIVE_WRITE_ACCESS_KEY_ID",
-    "R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY",
-  ],
+  read: ['R2_ARCHIVE_READ_ACCESS_KEY_ID', 'R2_ARCHIVE_READ_SECRET_ACCESS_KEY'],
+  write: ['R2_ARCHIVE_WRITE_ACCESS_KEY_ID', 'R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY'],
 };
 
 /** A refusal raised when the archive credential is not in the environment. */
@@ -404,11 +376,11 @@ export class MissingCredentialError extends Error {
 
   constructor(access: Access, missing: readonly string[]) {
     super(
-      `the R2 archive ${access} credential is not set: ${missing.join(", ")}. ` +
-        "The tokens are minted by hand in the Cloudflare dashboard and set as " +
-        "GitHub secrets, so a run without them reaches no archive.",
+      `the R2 archive ${access} credential is not set: ${missing.join(', ')}. ` +
+        'The tokens are minted by hand in the Cloudflare dashboard and set as ' +
+        'GitHub secrets, so a run without them reaches no archive.',
     );
-    this.name = "MissingCredentialError";
+    this.name = 'MissingCredentialError';
     this.missing = missing;
   }
 }
@@ -430,14 +402,9 @@ export interface Credentials {
  * string rather than as an absent name, which is the state of a run triggered
  * from a fork.
  */
-export function credentials(
-  access: Access,
-  env: Record<string, string | undefined> = process.env,
-): Credentials {
+export function credentials(access: Access, env: Record<string, string | undefined> = process.env): Credentials {
   const [idName, secretName] = CREDENTIAL_VARS[access];
-  const missing = [idName, secretName].filter(
-    (name) => (env[name] ?? "").length === 0,
-  );
+  const missing = [idName, secretName].filter((name) => (env[name] ?? '').length === 0);
   if (missing.length > 0) {
     throw new MissingCredentialError(access, missing);
   }
@@ -466,7 +433,7 @@ export function archiveClient(of: Credentials): Bun.S3Client {
     bucket: DESTINATION.bucket,
     // R2 ignores the region and signs against it, so every request uses the
     // value Cloudflare documents.
-    region: "auto",
+    region: 'auto',
     endpoint: `https://${DESTINATION.accountId}.r2.cloudflarestorage.com`,
   });
 }
@@ -494,11 +461,11 @@ export class ArchiveUnreachableError extends Error {
     const code = (cause as { code?: unknown } | null)?.code;
     super(
       `${key} could not be checked in the archive` +
-        (typeof code === "string" ? `, which answered ${code}` : "") +
-        ". A token without read access, a revoked token and an R2 outage " +
-        "all answer this way, so nothing was decided from it.",
+        (typeof code === 'string' ? `, which answered ${code}` : '') +
+        '. A token without read access, a revoked token and an R2 outage ' +
+        'all answer this way, so nothing was decided from it.',
     );
-    this.name = "ArchiveUnreachableError";
+    this.name = 'ArchiveUnreachableError';
   }
 }
 
@@ -518,14 +485,11 @@ export class ArchiveUnreachableError extends Error {
  * @throws {@link ArchiveUnreachableError} When the bucket answered anything
  * other than the object or its absence.
  */
-export async function objectSize(
-  bucket: Bun.S3Client,
-  key: string,
-): Promise<number | null> {
+export async function objectSize(bucket: Bun.S3Client, key: string): Promise<number | null> {
   try {
     return (await bucket.file(key).stat()).size;
   } catch (error) {
-    if ((error as { code?: unknown } | null)?.code === "NoSuchKey") {
+    if ((error as { code?: unknown } | null)?.code === 'NoSuchKey') {
       return null;
     }
     throw new ArchiveUnreachableError(key, error);
@@ -565,9 +529,9 @@ export async function bucketSizes(
 
 /** Whether the archive job has work to do for one build. */
 export type ArchiveState =
-  | { readonly state: "archived" }
-  | { readonly state: "missing"; readonly detail: string }
-  | { readonly state: "conflict"; readonly detail: string };
+  | { readonly state: 'archived' }
+  | { readonly state: 'missing'; readonly detail: string }
+  | { readonly state: 'conflict'; readonly detail: string };
 
 /**
  * Decide whether one build is archived, from its row and what the bucket holds.
@@ -601,7 +565,7 @@ export function archiveState(
 ): ArchiveState {
   if (record === null) {
     return {
-      state: "missing",
+      state: 'missing',
       detail: `${manifestId} has no digest row, so the build was never recorded`,
     };
   }
@@ -609,27 +573,23 @@ export function archiveState(
   const conflicts: string[] = [];
   for (const [fileName, want] of Object.entries(record.files)) {
     const key = objectKey(manifestId, fileName);
-    const got = Object.hasOwn(sizes, fileName)
-      ? (sizes[fileName] ?? null)
-      : null;
+    const got = Object.hasOwn(sizes, fileName) ? (sizes[fileName] ?? null) : null;
     if (got === null) {
       absent.push(key);
     } else if (got !== want.bytes) {
-      conflicts.push(
-        `${key} holds ${got} bytes, and the record says ${want.bytes}`,
-      );
+      conflicts.push(`${key} holds ${got} bytes, and the record says ${want.bytes}`);
     }
   }
   if (conflicts.length > 0) {
-    return { state: "conflict", detail: conflicts.join("; ") };
+    return { state: 'conflict', detail: conflicts.join('; ') };
   }
   if (absent.length > 0) {
     return {
-      state: "missing",
-      detail: `${absent.join(" and ")} ${absent.length === 1 ? "is" : "are"} not in the bucket`,
+      state: 'missing',
+      detail: `${absent.join(' and ')} ${absent.length === 1 ? 'is' : 'are'} not in the bucket`,
     };
   }
-  return { state: "archived" };
+  return { state: 'archived' };
 }
 
 /**
@@ -644,16 +604,14 @@ export function archiveState(
  * @param stream - The bytes, from a file on disk or an object in the bucket.
  * @returns Their count and their lowercase hex SHA-256.
  */
-export async function digestStream(
-  stream: ReadableStream<Uint8Array>,
-): Promise<FileDigest> {
-  const hasher = new Bun.CryptoHasher("sha256");
+export async function digestStream(stream: ReadableStream<Uint8Array>): Promise<FileDigest> {
+  const hasher = new Bun.CryptoHasher('sha256');
   let bytes = 0;
   for await (const chunk of stream) {
     hasher.update(chunk);
     bytes += chunk.byteLength;
   }
-  return { bytes, sha256: hasher.digest("hex") };
+  return { bytes, sha256: hasher.digest('hex') };
 }
 
 /**
@@ -688,7 +646,7 @@ export function compareDigests(
   for (const [fileName, want] of Object.entries(expected)) {
     const got = actual[fileName] ?? null;
     if (got === null) {
-      problems.push({ fileName, detail: "is absent" });
+      problems.push({ fileName, detail: 'is absent' });
       continue;
     }
     if (got.bytes !== want.bytes) {
@@ -712,11 +670,11 @@ export class DuplicateRowError extends Error {
   constructor(manifestId: string, count: number, path: string) {
     super(
       `${path} holds ${count} rows for manifest ${manifestId}. A build is ` +
-        "recorded once. A second row for a manifest that already has one " +
-        "replaces the digests the first row pinned, which is how a swapped " +
-        "object would be blessed.",
+        'recorded once. A second row for a manifest that already has one ' +
+        'replaces the digests the first row pinned, which is how a swapped ' +
+        'object would be blessed.',
     );
-    this.name = "DuplicateRowError";
+    this.name = 'DuplicateRowError';
   }
 }
 
@@ -753,16 +711,11 @@ export async function digestRow(
  * @param row - The row naming the files.
  * @returns Each file's digest, or null where the file is absent.
  */
-async function digestDirectory(
-  dir: string,
-  row: BuildDigestRecord,
-): Promise<Record<string, FileDigest | null>> {
+async function digestDirectory(dir: string, row: BuildDigestRecord): Promise<Record<string, FileDigest | null>> {
   const actual: Record<string, FileDigest | null> = {};
   for (const fileName of Object.keys(row.files)) {
     const path = join(dir, fileName);
-    actual[fileName] = (await Bun.file(path).exists())
-      ? await digestFile(path)
-      : null;
+    actual[fileName] = (await Bun.file(path).exists()) ? await digestFile(path) : null;
   }
   return actual;
 }
@@ -780,13 +733,13 @@ function dim(text: string): string {
 
 /** Print one result row. */
 function row(ok: boolean, text: string): void {
-  console.log(`  ${ok ? "✓" : "✗"} ${text}`);
+  console.log(`  ${ok ? '✓' : '✗'} ${text}`);
 }
 
 /** Print the section label every command opens with. */
 function section(name: string): void {
   console.log(`archive ${name}`);
-  console.log("");
+  console.log('');
 }
 
 /** A count with its noun, so a summary line reads as English at one. */
@@ -807,20 +760,20 @@ function count(n: number, one: string, many: string): string {
  * @param value - What to hand it.
  */
 async function emitStepOutput(name: string, value: string): Promise<void> {
-  const path = process.env["GITHUB_OUTPUT"];
+  const path = process.env['GITHUB_OUTPUT'];
   if (path === undefined || path.length === 0) {
     return;
   }
   if (/[\r\n]/.test(value)) {
     row(false, `the ${name} output carries a line break`);
-    summary("nothing was handed to the next job", true);
+    summary('nothing was handed to the next job', true);
   }
-  await appendFile(path, `${name}=${value}\n`, "utf8");
+  await appendFile(path, `${name}=${value}\n`, 'utf8');
 }
 
 /** Print the closing line and pick the exit code. */
 function summary(text: string, failed: boolean): never {
-  console.log("");
+  console.log('');
   console.log(`  ${text}`);
   process.exit(failed ? 1 : 0);
 }
@@ -862,26 +815,19 @@ async function attestFetch(
   const refuse = (detail: string): never => {
     row(false, `${fetched.source} ${detail}`);
     return summary(
-      "nothing recorded. The manifest beside these bytes does not attribute " +
-        "them, and a gid in a file name is a claim rather than evidence",
+      'nothing recorded. The manifest beside these bytes does not attribute ' +
+        'them, and a gid in a file name is a claim rather than evidence',
       true,
     );
   };
   if (manifest.manifestId !== fetched.manifestId) {
-    refuse(
-      `states manifest ${manifest.manifestId} inside, and its name says ` +
-        fetched.manifestId,
-    );
+    refuse(`states manifest ${manifest.manifestId} inside, and its name says ` + fetched.manifestId);
   }
   if (manifest.depotId !== depotId) {
-    refuse(
-      `describes depot ${manifest.depotId}, and this build is depot ${depotId}`,
-    );
+    refuse(`describes depot ${manifest.depotId}, and this build is depot ${depotId}`);
   }
   if (manifest.filenamesEncrypted) {
-    refuse(
-      "carries encrypted file names, so no file in it can be matched by name",
-    );
+    refuse('carries encrypted file names, so no file in it can be matched by name');
   }
 
   row(true, `${fetched.manifestId} confirmed by ${dim(fetched.source)}`);
@@ -891,8 +837,7 @@ async function attestFetch(
       row(false, `${problem.fileName} ${problem.detail}`);
     }
     summary(
-      "nothing recorded. The bytes are not the ones Valve's manifest for " +
-        `${fetched.manifestId} describes`,
+      "nothing recorded. The bytes are not the ones Valve's manifest for " + `${fetched.manifestId} describes`,
       true,
     );
   }
@@ -950,17 +895,14 @@ async function confirmProvenance(
     if (!unattested) {
       row(false, `${dir} carries no record of which manifest it came from`);
       summary(
-        "nothing recorded. SteamCMD leaves an app manifest and " +
-          "DepotDownloader leaves a cached one, so bytes with neither are " +
-          "attributed by whoever typed the gid. Pass --unattested to record " +
-          "them on that basis",
+        'nothing recorded. SteamCMD leaves an app manifest and ' +
+          'DepotDownloader leaves a cached one, so bytes with neither are ' +
+          'attributed by whoever typed the gid. Pass --unattested to record ' +
+          'them on that basis',
         true,
       );
     }
-    row(
-      true,
-      dim(`${manifestId} is the caller's word: ${dir} carries no fetch record`),
-    );
+    row(true, dim(`${manifestId} is the caller's word: ${dir} carries no fetch record`));
     return;
   }
 
@@ -968,19 +910,18 @@ async function confirmProvenance(
     if (one.manifestId !== manifestId) {
       row(
         false,
-        `${one.source} says this build came from manifest ` +
-          `${one.manifestId}, and the row would say ${manifestId}`,
+        `${one.source} says this build came from manifest ` + `${one.manifestId}, and the row would say ${manifestId}`,
       );
       summary(
-        "nothing recorded. The bytes are a different build than the one " +
-          "asked for, so the row would key them under the wrong manifest",
+        'nothing recorded. The bytes are a different build than the one ' +
+          'asked for, so the row would key them under the wrong manifest',
         true,
       );
     }
   }
 
   for (const one of fetched) {
-    if (one.by === "DepotDownloader") {
+    if (one.by === 'DepotDownloader') {
       await attestFetch(dir, one, depotId, fileNames);
     } else {
       row(true, `${manifestId} confirmed by ${dim(one.source)}`);
@@ -1000,19 +941,12 @@ async function confirmProvenance(
  * @param recordPath - The record to check for an existing row.
  * @returns The row, after every check it has to pass.
  */
-async function buildRow(
-  options: Options,
-  recordPath: string,
-): Promise<BuildDigestRecord> {
-  const dir = required(options, "dir");
-  const manifestId = required(options, "manifest");
+async function buildRow(options: Options, recordPath: string): Promise<BuildDigestRecord> {
+  const dir = required(options, 'dir');
+  const manifestId = required(options, 'manifest');
   if ((await digestRow(manifestId, recordPath)) !== null) {
     row(false, `${manifestId} already has a row`);
-    summary(
-      "a digest row is written once, because rewriting one would let a swap " +
-        "be blessed",
-      true,
-    );
+    summary('a digest row is written once, because rewriting one would let a swap ' + 'be blessed', true);
   }
 
   const appId = Number(options.app ?? APP_ID);
@@ -1026,25 +960,18 @@ async function buildRow(
   for (const fileName of fileNames) {
     if (!isArchiveFileName(fileName)) {
       row(false, `${fileName} is not one plain archived file name`);
-      summary("nothing recorded", true);
+      summary('nothing recorded', true);
     }
   }
 
-  await confirmProvenance(
-    dir,
-    manifestId,
-    appId,
-    depotId,
-    fileNames,
-    options.unattested === true,
-  );
+  await confirmProvenance(dir, manifestId, appId, depotId, fileNames, options.unattested === true);
 
   const files: Record<string, FileDigest> = {};
   for (const fileName of fileNames) {
     const path = join(dir, fileName);
     if (!(await Bun.file(path).exists())) {
       row(false, `${fileName} is not in ${dir}`);
-      summary("nothing recorded", true);
+      summary('nothing recorded', true);
     }
     const digest = await digestFile(path);
     files[fileName] = digest;
@@ -1054,9 +981,9 @@ async function buildRow(
   // The container names the content the build was cut from, and no Steam field
   // does. A flag still wins, because a caller reading a build this tool cannot
   // parse has to be able to say what it is.
-  const version = await kfcVersion(join(dir, "enshrouded_server.kfc"));
+  const version = await kfcVersion(join(dir, 'enshrouded_server.kfc'));
   if (version === null) {
-    row(true, dim("enshrouded_server.kfc carries no version line"));
+    row(true, dim('enshrouded_server.kfc carries no version line'));
   } else {
     row(true, `revision ${version.revision} on ${dim(version.branch)}`);
   }
@@ -1066,10 +993,7 @@ async function buildRow(
     buildId: options.build ?? null,
     appId,
     depotId,
-    revision:
-      options.revision === undefined
-        ? (version?.revision ?? null)
-        : Number(options.revision),
+    revision: options.revision === undefined ? (version?.revision ?? null) : Number(options.revision),
     branch: options.branch ?? version?.branch ?? null,
     recordedAt: (options.date ?? new Date().toISOString()).slice(0, 10),
     files,
@@ -1094,11 +1018,7 @@ async function buildRow(
  * @param record - The committed row for the build that was asked for.
  * @returns The committed row, once every file it names matches.
  */
-async function confirmRow(
-  options: Options,
-  dir: string,
-  record: BuildDigestRecord,
-): Promise<BuildDigestRecord> {
+async function confirmRow(options: Options, dir: string, record: BuildDigestRecord): Promise<BuildDigestRecord> {
   await confirmProvenance(
     dir,
     record.manifestId,
@@ -1107,17 +1027,13 @@ async function confirmRow(
     Object.keys(record.files),
     options.unattested === true,
   );
-  const problems = compareDigests(
-    await digestDirectory(dir, record),
-    record.files,
-  );
+  const problems = compareDigests(await digestDirectory(dir, record), record.files);
   if (problems.length > 0) {
     for (const problem of problems) {
       row(false, `${problem.fileName} ${problem.detail}`);
     }
     summary(
-      "nothing handed on. The fetched bytes are not the ones the committed " +
-        `row pins for ${record.manifestId}`,
+      'nothing handed on. The fetched bytes are not the ones the committed ' + `row pins for ${record.manifestId}`,
       true,
     );
   }
@@ -1129,7 +1045,7 @@ async function confirmRow(
 
 /** Hash a local build and append its row to the digest record. */
 async function commandRecord(options: Options): Promise<never> {
-  section("record");
+  section('record');
   const recordPath = options.record ?? BUILD_DIGESTS_PATH;
   const built = await buildRow(options, recordPath);
   await appendRecord(recordPath, BuildDigestRecord, built);
@@ -1156,21 +1072,18 @@ async function commandRecord(options: Options): Promise<never> {
  * not, and a recorded one is uploaded under the digests its row already pins.
  */
 async function commandEmit(options: Options): Promise<never> {
-  section("emit");
+  section('emit');
   const recordPath = options.record ?? BUILD_DIGESTS_PATH;
-  const dir = required(options, "dir");
-  const committed = await digestRow(required(options, "manifest"), recordPath);
-  const built =
-    committed === null
-      ? await buildRow(options, recordPath)
-      : await confirmRow(options, dir, committed);
+  const dir = required(options, 'dir');
+  const committed = await digestRow(required(options, 'manifest'), recordPath);
+  const built = committed === null ? await buildRow(options, recordPath) : await confirmRow(options, dir, committed);
   const line = JSON.stringify(built);
 
   // Every field here is committed to a public repository moments later, so
   // none of it is secret. A job output is readable by anyone who can read the
   // run, which for this row is the same audience as the file.
-  await emitStepOutput("row", line);
-  console.log("");
+  await emitStepOutput('row', line);
+  console.log('');
   console.log(line);
   summary(`the row for ${built.manifestId} was not written to any file`, false);
 }
@@ -1185,30 +1098,26 @@ async function commandEmit(options: Options): Promise<never> {
  * and this one.
  */
 async function commandAppend(options: Options): Promise<never> {
-  section("append");
+  section('append');
   const recordPath = options.record ?? BUILD_DIGESTS_PATH;
-  const raw = required(options, "row");
+  const raw = required(options, 'row');
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
     row(false, `--row is not JSON: ${(error as Error).message}`);
-    summary("nothing appended", true);
+    summary('nothing appended', true);
   }
   const checked = BuildDigestRecord.safeParse(parsed);
   if (!checked.success) {
     row(false, `--row is not a digest row: ${z.prettifyError(checked.error)}`);
-    summary("nothing appended", true);
+    summary('nothing appended', true);
   }
 
   if ((await digestRow(checked.data.manifestId, recordPath)) !== null) {
     row(true, `${checked.data.manifestId} already has a row`);
-    summary(
-      "nothing appended, and nothing is wrong: the row this job was handed " +
-        "is already in the record",
-      false,
-    );
+    summary('nothing appended, and nothing is wrong: the row this job was handed ' + 'is already in the record', false);
   }
 
   await appendRecord(recordPath, BuildDigestRecord, checked.data);
@@ -1220,24 +1129,19 @@ async function commandAppend(options: Options): Promise<never> {
 
 /** Hash a local build and compare it to its committed row. */
 async function commandVerify(options: Options): Promise<never> {
-  section("verify");
+  section('verify');
   const recordPath = options.record ?? BUILD_DIGESTS_PATH;
-  const dir = required(options, "dir");
-  const manifestId = required(options, "manifest");
+  const dir = required(options, 'dir');
+  const manifestId = required(options, 'manifest');
   const record = await digestRow(manifestId, recordPath);
   if (record === null) {
     row(false, `${manifestId} has no row in ${recordPath}`);
-    summary("nothing to verify against, so the bytes are unproven", true);
+    summary('nothing to verify against, so the bytes are unproven', true);
   }
 
-  const problems = compareDigests(
-    await digestDirectory(dir, record),
-    record.files,
-  );
+  const problems = compareDigests(await digestDirectory(dir, record), record.files);
   for (const fileName of Object.keys(record.files)) {
-    const failures = problems.filter(
-      (problem) => problem.fileName === fileName,
-    );
+    const failures = problems.filter((problem) => problem.fileName === fileName);
     if (failures.length === 0) {
       row(true, `${fileName} matches`);
       continue;
@@ -1251,14 +1155,14 @@ async function commandVerify(options: Options): Promise<never> {
   const failed = new Set(problems.map((problem) => problem.fileName)).size;
   summary(
     failed === 0
-      ? `${count(Object.keys(record.files).length, "file matches", "files match")} build ${manifestId}`
-      : `${count(failed, "file does not match", "files do not match")} build ${manifestId}`,
+      ? `${count(Object.keys(record.files).length, 'file matches', 'files match')} build ${manifestId}`
+      : `${count(failed, 'file does not match', 'files do not match')} build ${manifestId}`,
     failed > 0,
   );
 }
 
 /** The step output the archive job's gate reads. */
-export const NEEDS_ARCHIVE = "needs_archive";
+export const NEEDS_ARCHIVE = 'needs_archive';
 
 /** What one recorded build looks like in the bucket. */
 export interface ArchiveSweep {
@@ -1324,13 +1228,10 @@ export async function sweepArchive(
  * passes one pointed at a loopback server, the same seam {@link bucketSizes}
  * takes.
  */
-export async function commandStatus(
-  options: Options,
-  bucket: Bun.S3Client = client("read"),
-): Promise<never> {
-  section("status");
+export async function commandStatus(options: Options, bucket: Bun.S3Client = client('read')): Promise<never> {
+  section('status');
   const recordPath = options.record ?? BUILD_DIGESTS_PATH;
-  const manifestId = required(options, "manifest");
+  const manifestId = required(options, 'manifest');
   const record = await digestRow(manifestId, recordPath);
 
   const sizes = await bucketSizes(bucket, manifestId, record);
@@ -1343,62 +1244,46 @@ export async function commandStatus(
     if (size === null) {
       row(false, `${key} is not in the bucket`);
     } else if (want !== undefined && size !== want.bytes) {
-      row(
-        false,
-        `${key} holds ${size} bytes, and the record says ${want.bytes}`,
-      );
+      row(false, `${key} holds ${size} bytes, and the record says ${want.bytes}`);
     } else {
       row(true, `${key} ${size} bytes`);
     }
   }
 
   const decided = archiveState(manifestId, record, sizes);
-  if (decided.state === "conflict") {
+  if (decided.state === 'conflict') {
     summary(
-      "the bucket holds bytes the record does not describe. push refuses to " +
-        "write over them, so this needs a person rather than another run",
+      'the bucket holds bytes the record does not describe. push refuses to ' +
+        'write over them, so this needs a person rather than another run',
       true,
     );
   }
-  const needsArchive = decided.state === "missing";
-  row(
-    !needsArchive,
-    needsArchive
-      ? `${manifestId} needs archiving: ${decided.detail}`
-      : `${manifestId} is archived`,
-  );
+  const needsArchive = decided.state === 'missing';
+  row(!needsArchive, needsArchive ? `${manifestId} needs archiving: ${decided.detail}` : `${manifestId} is archived`);
   await emitStepOutput(NEEDS_ARCHIVE, String(needsArchive));
 
-  const swept = await sweepArchive(
-    bucket,
-    await readRecords(recordPath, BuildDigestRecord),
-    manifestId,
-  );
+  const swept = await sweepArchive(bucket, await readRecords(recordPath, BuildDigestRecord), manifestId);
   for (const other of swept) {
-    if (other.state.state === "archived") {
+    if (other.state.state === 'archived') {
       row(true, dim(`${other.manifestId} is archived`));
     } else {
       row(false, `${other.manifestId} ${other.state.detail}`);
     }
   }
 
-  const lost = swept.filter((other) => other.state.state !== "archived");
-  const answer = needsArchive
-    ? `build ${manifestId} needs archiving`
-    : `build ${manifestId} is archived`;
+  const lost = swept.filter((other) => other.state.state !== 'archived');
+  const answer = needsArchive ? `build ${manifestId} needs archiving` : `build ${manifestId} is archived`;
   summary(
     lost.length === 0
       ? `${answer}, and every other recorded build is in the archive`
-      : `${answer}, and ${count(lost.length, "other recorded build is", "other recorded builds are")} not. Steam serves none of them any more`,
+      : `${answer}, and ${count(lost.length, 'other recorded build is', 'other recorded builds are')} not. Steam serves none of them any more`,
     lost.length > 0,
   );
 }
 
 /** What `push` does about one key. */
 export type UploadAction =
-  | { readonly action: "upload" }
-  | { readonly action: "skip" }
-  | { readonly action: "refuse"; readonly detail: string };
+  { readonly action: 'upload' } | { readonly action: 'skip' } | { readonly action: 'refuse'; readonly detail: string };
 
 /**
  * Decide what to do about one key, from what the bucket already holds there.
@@ -1432,58 +1317,49 @@ export async function uploadDecision(
   existingSha256: () => Promise<string>,
 ): Promise<UploadAction> {
   if (existingBytes === null) {
-    return { action: "upload" };
+    return { action: 'upload' };
   }
   if (existingBytes !== expected.bytes) {
     return {
-      action: "refuse",
+      action: 'refuse',
       detail: `holds ${existingBytes} bytes, and the record says ${expected.bytes}`,
     };
   }
   const sha256 = await existingSha256();
   if (sha256 !== expected.sha256) {
     return {
-      action: "refuse",
+      action: 'refuse',
       detail: `hashes to ${sha256}, and the record says ${expected.sha256}`,
     };
   }
-  return { action: "skip" };
+  return { action: 'skip' };
 }
 
 /** Verify a local build, then upload it under its manifest gid. */
 async function commandPush(options: Options): Promise<never> {
-  section("push");
+  section('push');
   const recordPath = options.record ?? BUILD_DIGESTS_PATH;
-  const dir = required(options, "dir");
-  const manifestId = required(options, "manifest");
+  const dir = required(options, 'dir');
+  const manifestId = required(options, 'manifest');
   const record = await digestRow(manifestId, recordPath);
   if (record === null) {
     row(false, `${manifestId} has no row in ${recordPath}`);
-    summary(
-      "run `archive record` first, so the upload has a digest to prove",
-      true,
-    );
+    summary('run `archive record` first, so the upload has a digest to prove', true);
   }
 
-  const problems = compareDigests(
-    await digestDirectory(dir, record),
-    record.files,
-  );
+  const problems = compareDigests(await digestDirectory(dir, record), record.files);
   if (problems.length > 0) {
     for (const problem of problems) {
       row(false, `${problem.fileName} ${problem.detail}`);
     }
-    summary(
-      "nothing uploaded, because the local copy is not the recorded one",
-      true,
-    );
+    summary('nothing uploaded, because the local copy is not the recorded one', true);
   }
 
   // One key at a time, checked and written before the next is considered. A
   // run that dies between two files leaves the ones it wrote in place, and the
   // next run skips those and uploads the rest, so a half-finished archive
   // repairs itself rather than blocking the build forever.
-  const bucket = client("write");
+  const bucket = client('write');
   let uploaded = 0;
   for (const fileName of Object.keys(record.files)) {
     const key = objectKey(manifestId, fileName);
@@ -1492,15 +1368,15 @@ async function commandPush(options: Options): Promise<never> {
       await objectSize(bucket, key),
       async () => (await digestStream(bucket.file(key).stream())).sha256,
     );
-    if (decided.action === "skip") {
+    if (decided.action === 'skip') {
       row(true, `${key} already holds the recorded bytes`);
       continue;
     }
-    if (decided.action === "refuse") {
+    if (decided.action === 'refuse') {
       row(false, `${key} ${decided.detail}`);
       summary(
-        "nothing further uploaded. R2 has no versioning, so an overwrite is " +
-          "final and this tool never takes that decision on its own",
+        'nothing further uploaded. R2 has no versioning, so an overwrite is ' +
+          'final and this tool never takes that decision on its own',
         true,
       );
     }
@@ -1511,24 +1387,21 @@ async function commandPush(options: Options): Promise<never> {
   summary(
     uploaded === 0
       ? `build ${manifestId} was already archived`
-      : `build ${manifestId} archived, ${count(uploaded, "file", "files")} uploaded`,
+      : `build ${manifestId} archived, ${count(uploaded, 'file', 'files')} uploaded`,
     false,
   );
 }
 
 /** Download a build, verify what arrived, and only then give it its name. */
 async function commandPull(options: Options): Promise<never> {
-  section("pull");
+  section('pull');
   const recordPath = options.record ?? BUILD_DIGESTS_PATH;
-  const manifestId = required(options, "manifest");
-  const out = required(options, "out");
+  const manifestId = required(options, 'manifest');
+  const out = required(options, 'out');
   const record = await digestRow(manifestId, recordPath);
   if (record === null) {
     row(false, `${manifestId} has no row in ${recordPath}`);
-    summary(
-      "refusing to download bytes with nothing to check them against",
-      true,
-    );
+    summary('refusing to download bytes with nothing to check them against', true);
   }
 
   // An output directory that already holds something is refused rather than
@@ -1536,16 +1409,13 @@ async function commandPull(options: Options): Promise<never> {
   // what is there is never something it decides on its own.
   const occupants = await readdir(out).catch(() => [] as string[]);
   if (occupants.length > 0) {
-    row(
-      false,
-      `${out} already holds ${count(occupants.length, "file", "files")}`,
-    );
-    summary("refusing to replace a directory this command did not fill", true);
+    row(false, `${out} already holds ${count(occupants.length, 'file', 'files')}`);
+    summary('refusing to replace a directory this command did not fill', true);
   }
 
   // The credential is read before anything is created, so a run without one
   // leaves the filesystem exactly as it found it.
-  const bucket = client("read");
+  const bucket = client('read');
 
   // Every object's own size is checked before a byte is streamed or a
   // directory is made. Comparing digests afterwards catches the same object,
@@ -1562,7 +1432,7 @@ async function commandPull(options: Options): Promise<never> {
           ? `${key} is not in the bucket`
           : `${key} advertises ${size} bytes, and the record says ${expected.bytes}`,
       );
-      summary("nothing was downloaded", true);
+      summary('nothing was downloaded', true);
     }
   }
 
@@ -1586,11 +1456,7 @@ async function commandPull(options: Options): Promise<never> {
     for (const problem of problems) {
       row(false, `${problem.fileName} ${problem.detail}`);
     }
-    summary(
-      "the archive does not hold what the record says it holds, so nothing " +
-        "was written",
-      true,
-    );
+    summary('the archive does not hold what the record says it holds, so nothing ' + 'was written', true);
   }
 
   // The output directory is either absent or the empty one checked above, so
@@ -1643,10 +1509,7 @@ interface Options {
 }
 
 /** The flag a command cannot run without, or a usage failure naming it. */
-function required(
-  options: Options,
-  name: "dir" | "out" | "manifest" | "row",
-): string {
+function required(options: Options, name: 'dir' | 'out' | 'manifest' | 'row'): string {
   const value = options[name];
   if (value === undefined || value.length === 0) {
     console.error(`--${name} is required`);
@@ -1657,13 +1520,13 @@ function required(
 
 /** What each verb does, for the usage text. */
 const VERBS: Record<string, string> = {
-  record: "hash a local build and append its digest row",
-  emit: "hash a local build and print its digest row, or the committed one it matches",
-  append: "append a digest row another job built",
-  verify: "check a local build against its digest row",
-  status: "ask the bucket about a build, and sweep every other recorded one",
-  push: "verify a local build, then upload it to the archive",
-  pull: "download a build and verify it before it is named",
+  record: 'hash a local build and append its digest row',
+  emit: 'hash a local build and print its digest row, or the committed one it matches',
+  append: 'append a digest row another job built',
+  verify: 'check a local build against its digest row',
+  status: 'ask the bucket about a build, and sweep every other recorded one',
+  push: 'verify a local build, then upload it to the archive',
+  pull: 'download a build and verify it before it is named',
 };
 
 if (import.meta.main) {
@@ -1671,19 +1534,19 @@ if (import.meta.main) {
     args: Bun.argv.slice(2),
     allowPositionals: true,
     options: {
-      dir: { type: "string" },
-      out: { type: "string" },
-      manifest: { type: "string" },
-      build: { type: "string" },
-      app: { type: "string" },
-      depot: { type: "string" },
-      revision: { type: "string" },
-      branch: { type: "string" },
-      date: { type: "string" },
-      record: { type: "string" },
-      row: { type: "string" },
-      file: { type: "string", multiple: true },
-      unattested: { type: "boolean" },
+      dir: { type: 'string' },
+      out: { type: 'string' },
+      manifest: { type: 'string' },
+      build: { type: 'string' },
+      app: { type: 'string' },
+      depot: { type: 'string' },
+      revision: { type: 'string' },
+      branch: { type: 'string' },
+      date: { type: 'string' },
+      record: { type: 'string' },
+      row: { type: 'string' },
+      file: { type: 'string', multiple: true },
+      unattested: { type: 'boolean' },
     },
   });
   const verb = positionals[0];
@@ -1698,43 +1561,37 @@ if (import.meta.main) {
   }
 
   try {
-    if (verb === "record") await commandRecord(options);
-    if (verb === "emit") await commandEmit(options);
-    if (verb === "append") await commandAppend(options);
-    if (verb === "verify") await commandVerify(options);
-    if (verb === "status") await commandStatus(options);
-    if (verb === "push") await commandPush(options);
-    if (verb === "pull") await commandPull(options);
+    if (verb === 'record') await commandRecord(options);
+    if (verb === 'emit') await commandEmit(options);
+    if (verb === 'append') await commandAppend(options);
+    if (verb === 'verify') await commandVerify(options);
+    if (verb === 'status') await commandStatus(options);
+    if (verb === 'push') await commandPush(options);
+    if (verb === 'pull') await commandPull(options);
   } catch (error) {
     // A refusal this tool raises on purpose prints as a result row. Anything
     // else is a defect and keeps its stack, because a stack is what a defect
     // needs and a refusal is not helped by one.
-    if (
-      error instanceof MissingCredentialError ||
-      error instanceof ArchiveUnreachableError
-    ) {
+    if (error instanceof MissingCredentialError || error instanceof ArchiveUnreachableError) {
       row(false, error.message);
       summary(
         error instanceof MissingCredentialError
-          ? "no archive was reached"
-          : "the archive could not be asked, so nothing was decided",
+          ? 'no archive was reached'
+          : 'the archive could not be asked, so nothing was decided',
         true,
       );
     }
     if (error instanceof DdManifestError) {
       row(false, error.message);
       summary(
-        "nothing recorded. The manifest that would attribute these bytes " +
+        'nothing recorded. The manifest that would attribute these bytes ' +
           "cannot be read, so the gid is nobody's evidence",
         true,
       );
     }
     if (error instanceof DuplicateRowError || error instanceof RecordError) {
       row(false, error.message);
-      summary(
-        `${BUILD_DIGESTS_PATH} has to be repaired before this can run`,
-        true,
-      );
+      summary(`${BUILD_DIGESTS_PATH} has to be repaired before this can run`, true);
     }
     throw error;
   }

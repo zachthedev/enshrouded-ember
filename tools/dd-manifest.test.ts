@@ -16,26 +16,20 @@
  * ```
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  compareToManifest,
-  DdManifestError,
-  parseDdManifest,
-  readDdManifest,
-  sha1File,
-} from "./dd-manifest.ts";
-import { BuildDigestRecord, readRecords } from "./records.ts";
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { compareToManifest, DdManifestError, parseDdManifest, readDdManifest, sha1File } from './dd-manifest.ts';
+import { BuildDigestRecord, readRecords } from './records.ts';
 
 /** Every sandbox this file made, removed once the case ends. */
 const sandboxes: string[] = [];
 
 /** A directory of this suite's own, under the temp root the session sets. */
 async function sandbox(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "ember-manifest-"));
+  const dir = await mkdtemp(join(tmpdir(), 'ember-manifest-'));
   sandboxes.push(dir);
   return dir;
 }
@@ -53,17 +47,16 @@ afterEach(async () => {
  */
 
 /** The SHA-1 of the three bytes "abc", from the FIPS 180-4 example. */
-const ABC_SHA1 = "a9993e364706816aba3e25717850c26c9cd0d89d";
+const ABC_SHA1 = 'a9993e364706816aba3e25717850c26c9cd0d89d';
 
 /** The SHA-256 of the same three bytes, which the digest row pins. */
-const ABC_SHA256 =
-  "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+const ABC_SHA256 = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
 
 /** The depot the dedicated server ships in. */
 const DEPOT = 2278521;
 
 /** A manifest gid past 53 bits, which is where a number would lose digits. */
-const GID = "5177045887918896292";
+const GID = '5177045887918896292';
 
 /** One protobuf varint, low group first, every group but the last flagged. */
 function varint(value: number | bigint): number[] {
@@ -90,7 +83,7 @@ function delimited(field: number, body: Iterable<number>): number[] {
 
 /** The bytes one hex digest stands for. */
 function digest(hex: string): number[] {
-  return [...(Buffer.from(hex, "hex") as Uint8Array)];
+  return [...(Buffer.from(hex, 'hex') as Uint8Array)];
 }
 
 /** One file, as a manifest describes it. */
@@ -114,9 +107,7 @@ interface Mapping {
  */
 function mapping(one: Mapping): number[] {
   return [
-    ...(one.name === null
-      ? []
-      : delimited(1, new TextEncoder().encode(one.name))),
+    ...(one.name === null ? [] : delimited(1, new TextEncoder().encode(one.name))),
     ...scalar(2, one.bytes),
     ...scalar(3, 0),
     ...delimited(4, new Uint8Array(20)),
@@ -154,15 +145,13 @@ function section(magic: number, body: number[]): number[] {
 
 /** The two files every archived build carries, as one manifest states them. */
 const BOTH: Mapping[] = [
-  { name: "enshrouded_server.exe", bytes: 3 },
-  { name: "enshrouded_server.kfc", bytes: 3 },
+  { name: 'enshrouded_server.exe', bytes: 3 },
+  { name: 'enshrouded_server.kfc', bytes: 3 },
 ];
 
 /** A whole manifest file, in the layout DepotDownloader writes. */
 function manifest(options: Synthetic = {}): Uint8Array {
-  const payload = (options.mappings ?? BOTH).flatMap((one) =>
-    delimited(1, mapping(one)),
-  );
+  const payload = (options.mappings ?? BOTH).flatMap((one) => delimited(1, mapping(one)));
   const metadata = [
     ...scalar(1, options.depotId ?? DEPOT),
     ...scalar(2, BigInt(options.manifestId ?? GID)),
@@ -170,10 +159,7 @@ function manifest(options: Synthetic = {}): Uint8Array {
     ...scalar(4, options.encrypted === true ? 1 : 0),
     ...(options.unknown ?? []),
   ];
-  const signature =
-    options.signature === null
-      ? []
-      : section(0x1b81b817, options.signature ?? []);
+  const signature = options.signature === null ? [] : section(0x1b81b817, options.signature ?? []);
   const closing = options.close === false ? [] : [0xab, 0x15, 0xc4, 0x32];
   return new Uint8Array([
     ...section(options.payloadMagic ?? 0x71f617d0, payload),
@@ -203,16 +189,11 @@ async function writeManifest(
   bytes: Uint8Array,
   options: { gid?: string; checksum?: Uint8Array } = {},
 ): Promise<string> {
-  const path = join(
-    dir,
-    ".DepotDownloader",
-    `${DEPOT}_${options.gid ?? GID}.manifest`,
-  );
+  const path = join(dir, '.DepotDownloader', `${DEPOT}_${options.gid ?? GID}.manifest`);
   await Bun.write(path, bytes);
   await Bun.write(
     `${path}.sha`,
-    options.checksum ??
-      new Uint8Array(new Bun.CryptoHasher("sha1").update(bytes).digest()),
+    options.checksum ?? new Uint8Array(new Bun.CryptoHasher('sha1').update(bytes).digest()),
   );
   return path;
 }
@@ -223,8 +204,8 @@ async function fetched(options: Synthetic & { gid?: string } = {}): Promise<{
   path: string;
 }> {
   const dir = await sandbox();
-  await Bun.write(join(dir, "enshrouded_server.exe"), "abc");
-  await Bun.write(join(dir, "enshrouded_server.kfc"), "abc");
+  await Bun.write(join(dir, 'enshrouded_server.exe'), 'abc');
+  await Bun.write(join(dir, 'enshrouded_server.kfc'), 'abc');
   const path = await writeManifest(dir, manifest(options), {
     gid: options.gid,
   });
@@ -233,22 +214,22 @@ async function fetched(options: Synthetic & { gid?: string } = {}): Promise<{
 
 /** The app manifest SteamCMD leaves, naming one gid for the server depot. */
 async function writeAppManifest(dir: string, gid: string): Promise<string> {
-  const path = join(dir, "steamapps", "appmanifest_2278520.acf");
+  const path = join(dir, 'steamapps', 'appmanifest_2278520.acf');
   await Bun.write(
     path,
     [
       '"AppState"',
-      "{",
+      '{',
       '\t"buildid"\t\t"23178631"',
       '\t"InstalledDepots"',
-      "\t{",
+      '\t{',
       `\t\t"${DEPOT}"`,
-      "\t\t{",
+      '\t\t{',
       `\t\t\t"manifest"\t\t"${gid}"`,
-      "\t\t}",
-      "\t}",
-      "}",
-    ].join("\n"),
+      '\t\t}',
+      '\t}',
+      '}',
+    ].join('\n'),
   );
   return path;
 }
@@ -259,30 +240,27 @@ async function writeAppManifest(dir: string, gid: string): Promise<string> {
  * ///////////////////////////////////////////////
  */
 
-describe("sha1File", () => {
+describe('sha1File', () => {
   /**
    * The digest Valve's manifest states is SHA-1, and the published vector is
    * what says this reads the same function the manifest was written with.
    */
-  test("the published vector for abc is what a file of abc hashes to", async () => {
-    const path = join(await sandbox(), "abc");
-    await Bun.write(path, "abc");
+  test('the published vector for abc is what a file of abc hashes to', async () => {
+    const path = join(await sandbox(), 'abc');
+    await Bun.write(path, 'abc');
     expect(await sha1File(path)).toEqual({ bytes: 3, sha1: ABC_SHA1 });
   });
 });
 
-describe("parseDdManifest", () => {
-  test("the depot, the manifest gid and every mapping are read", () => {
-    const read = parseDdManifest(manifest(), "<laid out here>");
+describe('parseDdManifest', () => {
+  test('the depot, the manifest gid and every mapping are read', () => {
+    const read = parseDdManifest(manifest(), '<laid out here>');
     expect(read.depotId).toBe(DEPOT);
     expect(read.manifestId).toBe(GID);
     expect(read.filenamesEncrypted).toBe(false);
-    expect([...read.files.keys()]).toEqual([
-      "enshrouded_server.exe",
-      "enshrouded_server.kfc",
-    ]);
-    expect(read.files.get("enshrouded_server.exe")).toEqual({
-      name: "enshrouded_server.exe",
+    expect([...read.files.keys()]).toEqual(['enshrouded_server.exe', 'enshrouded_server.kfc']);
+    expect(read.files.get('enshrouded_server.exe')).toEqual({
+      name: 'enshrouded_server.exe',
       bytes: 3,
       sha1: ABC_SHA1,
     });
@@ -292,37 +270,31 @@ describe("parseDdManifest", () => {
    * A gid exceeds `Number.MAX_SAFE_INTEGER`, so a reader that made it a number
    * would change it and still look right.
    */
-  test("a gid past 53 bits keeps every digit", () => {
-    const read = parseDdManifest(
-      manifest({ manifestId: "18446744073709551615" }),
-      "<laid out here>",
-    );
-    expect(read.manifestId).toBe("18446744073709551615");
+  test('a gid past 53 bits keeps every digit', () => {
+    const read = parseDdManifest(manifest({ manifestId: '18446744073709551615' }), '<laid out here>');
+    expect(read.manifestId).toBe('18446744073709551615');
   });
 
-  test("an encrypted payload is reported rather than decoded", () => {
-    expect(
-      parseDdManifest(manifest({ encrypted: true }), "<laid out here>")
-        .filenamesEncrypted,
-    ).toBe(true);
+  test('an encrypted payload is reported rather than decoded', () => {
+    expect(parseDdManifest(manifest({ encrypted: true }), '<laid out here>').filenamesEncrypted).toBe(true);
   });
 
   /** Valve extends these messages, and an older reader has to survive it. */
   test.each([
-    ["a varint", [...scalar(31, 1)]],
-    ["a length-delimited field", [...delimited(32, [1, 2, 3])]],
-    ["a fixed 32-bit field", [0xfd, 0x01, 1, 2, 3, 4]],
-    ["a fixed 64-bit field", [0xf9, 0x01, 1, 2, 3, 4, 5, 6, 7, 8]],
-  ])("%s this reader does not know is skipped", (_name, unknown) => {
+    ['a varint', [...scalar(31, 1)]],
+    ['a length-delimited field', [...delimited(32, [1, 2, 3])]],
+    ['a fixed 32-bit field', [0xfd, 0x01, 1, 2, 3, 4]],
+    ['a fixed 64-bit field', [0xf9, 0x01, 1, 2, 3, 4, 5, 6, 7, 8]],
+  ])('%s this reader does not know is skipped', (_name, unknown) => {
     const read = parseDdManifest(
       manifest({
         unknown,
-        mappings: [{ name: "enshrouded_server.exe", bytes: 3, unknown }],
+        mappings: [{ name: 'enshrouded_server.exe', bytes: 3, unknown }],
       }),
-      "<laid out here>",
+      '<laid out here>',
     );
     expect(read.manifestId).toBe(GID);
-    expect(read.files.get("enshrouded_server.exe")?.sha1).toBe(ABC_SHA1);
+    expect(read.files.get('enshrouded_server.exe')?.sha1).toBe(ABC_SHA1);
   });
 
   /**
@@ -330,106 +302,77 @@ describe("parseDdManifest", () => {
    * what reaches disk is DepotDownloader's own serialization, which drops the
    * signature. A manifest that carried one still has to read.
    */
-  test("a signature section is skipped", () => {
-    const read = parseDdManifest(
-      manifest({ signature: [...delimited(1, [1, 2, 3, 4])] }),
-      "<laid out here>",
-    );
+  test('a signature section is skipped', () => {
+    const read = parseDdManifest(manifest({ signature: [...delimited(1, [1, 2, 3, 4])] }), '<laid out here>');
     expect(read.manifestId).toBe(GID);
   });
 
-  test("a manifest with no signature section reads", () => {
-    expect(
-      parseDdManifest(manifest({ signature: null }), "<laid out here>")
-        .manifestId,
-    ).toBe(GID);
+  test('a manifest with no signature section reads', () => {
+    expect(parseDdManifest(manifest({ signature: null }), '<laid out here>').manifestId).toBe(GID);
   });
 
   test.each([
     [
-      "a section magic word this format does not use",
+      'a section magic word this format does not use',
       manifest({ payloadMagic: 0x12345678 }),
-      "opens a section with magic 0x12345678",
+      'opens a section with magic 0x12345678',
     ],
+    ['the older binary manifest', manifest({ payloadMagic: 0x16349781 }), 'is a Steam3 binary manifest'],
     [
-      "the older binary manifest",
-      manifest({ payloadMagic: 0x16349781 }),
-      "is a Steam3 binary manifest",
-    ],
-    [
-      "a length past the end of the file",
+      'a length past the end of the file',
       manifest().subarray(0, 40),
       String.raw`claims \d+ bytes at offset 8 and holds 32`,
     ],
+    ['no closing magic word', manifest({ close: false }), 'does not end with the closing magic word'],
+    ['bytes after the closing magic word', manifest({ trailer: [1, 2, 3, 4] }), 'carries 4 bytes after it ends'],
     [
-      "no closing magic word",
-      manifest({ close: false }),
-      "does not end with the closing magic word",
-    ],
-    [
-      "bytes after the closing magic word",
-      manifest({ trailer: [1, 2, 3, 4] }),
-      "carries 4 bytes after it ends",
-    ],
-    [
-      "a content digest that is not a SHA-1",
+      'a content digest that is not a SHA-1',
       manifest({
         mappings: [
           {
-            name: "enshrouded_server.exe",
+            name: 'enshrouded_server.exe',
             bytes: 3,
             sha1: null,
             unknown: [...delimited(5, [1, 2, 3])],
           },
         ],
       }),
-      "states a 3 byte content digest",
+      'states a 3 byte content digest',
     ],
     [
-      "a mapping whose name is empty",
-      manifest({ mappings: [{ name: "", bytes: 3 }] }),
-      "carries a file mapping with no name",
+      'a mapping whose name is empty',
+      manifest({ mappings: [{ name: '', bytes: 3 }] }),
+      'carries a file mapping with no name',
     ],
     [
-      "a mapping with no name field",
+      'a mapping with no name field',
       manifest({ mappings: [{ name: null, bytes: 3 }] }),
-      "carries a file mapping with no name",
+      'carries a file mapping with no name',
     ],
-    [
-      "a wire type protobuf removed",
-      manifest({ unknown: [...varint(30 * 8 + 3)] }),
-      "carries wire type 3",
-    ],
-  ])("%s is refused, naming the file", (_name, bytes, detail) => {
-    expect(() => parseDdManifest(bytes, "<the file>")).toThrow(DdManifestError);
+    ['a wire type protobuf removed', manifest({ unknown: [...varint(30 * 8 + 3)] }), 'carries wire type 3'],
+  ])('%s is refused, naming the file', (_name, bytes, detail) => {
+    expect(() => parseDdManifest(bytes, '<the file>')).toThrow(DdManifestError);
     // Each detail is a regular expression, and the file name opens every
     // message, so a refusal that dropped either one fails here.
-    expect(() => parseDdManifest(bytes, "<the file>")).toThrow(
-      new RegExp(`^<the file> ${detail}`),
-    );
+    expect(() => parseDdManifest(bytes, '<the file>')).toThrow(new RegExp(`^<the file> ${detail}`));
   });
 
   /** A mapping with no size is a mapping this reader cannot check. */
-  test("a mapping with no size is refused", () => {
+  test('a mapping with no size is refused', () => {
     const bytes = new Uint8Array([
-      ...section(
-        0x71f617d0,
-        delimited(1, [
-          ...delimited(1, new TextEncoder().encode("enshrouded_server.exe")),
-        ]),
-      ),
+      ...section(0x71f617d0, delimited(1, [...delimited(1, new TextEncoder().encode('enshrouded_server.exe'))])),
       ...section(0x1f4812be, [...scalar(1, DEPOT), ...scalar(2, BigInt(GID))]),
       0xab,
       0x15,
       0xc4,
       0x32,
     ]);
-    expect(() => parseDdManifest(bytes, "<the file>")).toThrow(
-      "<the file> states no readable size for enshrouded_server.exe",
+    expect(() => parseDdManifest(bytes, '<the file>')).toThrow(
+      '<the file> states no readable size for enshrouded_server.exe',
     );
   });
 
-  test("a manifest with no metadata section is refused", () => {
+  test('a manifest with no metadata section is refused', () => {
     const bytes = new Uint8Array([
       ...section(0x71f617d0, delimited(1, mapping(BOTH[0] as Mapping))),
       0xab,
@@ -437,12 +380,10 @@ describe("parseDdManifest", () => {
       0xc4,
       0x32,
     ]);
-    expect(() => parseDdManifest(bytes, "<the file>")).toThrow(
-      "<the file> carries no metadata section",
-    );
+    expect(() => parseDdManifest(bytes, '<the file>')).toThrow('<the file> carries no metadata section');
   });
 
-  test("a manifest with no payload section is refused", () => {
+  test('a manifest with no payload section is refused', () => {
     const bytes = new Uint8Array([
       ...section(0x1f4812be, [...scalar(1, DEPOT), ...scalar(2, BigInt(GID))]),
       0xab,
@@ -450,24 +391,22 @@ describe("parseDdManifest", () => {
       0xc4,
       0x32,
     ]);
-    expect(() => parseDdManifest(bytes, "<the file>")).toThrow(
-      "<the file> carries no payload section",
-    );
+    expect(() => parseDdManifest(bytes, '<the file>')).toThrow('<the file> carries no payload section');
   });
 });
 
-describe("readDdManifest", () => {
-  test("a manifest and its checksum read", async () => {
+describe('readDdManifest', () => {
+  test('a manifest and its checksum read', async () => {
     const { path } = await fetched();
     expect((await readDdManifest(path)).manifestId).toBe(GID);
   });
 
-  test("a manifest that is not there is refused, naming it", async () => {
-    const path = join(await sandbox(), "absent.manifest");
+  test('a manifest that is not there is refused, naming it', async () => {
+    const path = join(await sandbox(), 'absent.manifest');
     expect(readDdManifest(path)).rejects.toThrow(`${path} is not there`);
   });
 
-  test("a manifest with no checksum beside it is refused, naming it", async () => {
+  test('a manifest with no checksum beside it is refused, naming it', async () => {
     const dir = await sandbox();
     const path = join(dir, `${DEPOT}_${GID}.manifest`);
     await Bun.write(path, manifest());
@@ -478,7 +417,7 @@ describe("readDdManifest", () => {
    * One byte of the manifest moved, which is what a hand-edited attribution
    * looks like when the checksum is left alone.
    */
-  test("a manifest its checksum does not describe is refused, naming both", async () => {
+  test('a manifest its checksum does not describe is refused, naming both', async () => {
     const dir = await sandbox();
     const good = manifest();
     const path = await writeManifest(dir, good);
@@ -490,87 +429,83 @@ describe("readDdManifest", () => {
     expect(failure).rejects.toThrow(/hashes to [0-9a-f]{40}, and .*\.sha says/);
   });
 
-  test("a checksum that is not a raw SHA-1 is refused, naming its length", async () => {
+  test('a checksum that is not a raw SHA-1 is refused, naming its length', async () => {
     const dir = await sandbox();
     const path = await writeManifest(dir, manifest(), {
       checksum: new Uint8Array(4),
     });
-    expect(readDdManifest(path)).rejects.toThrow(
-      `${path}.sha holds 4 bytes, and a raw SHA-1 is 20`,
-    );
+    expect(readDdManifest(path)).rejects.toThrow(`${path}.sha holds 4 bytes, and a raw SHA-1 is 20`);
   });
 });
 
-describe("compareToManifest", () => {
-  const names = ["enshrouded_server.exe", "enshrouded_server.kfc"];
+describe('compareToManifest', () => {
+  const names = ['enshrouded_server.exe', 'enshrouded_server.kfc'];
 
-  test("a build whose bytes match the manifest has no problem", async () => {
+  test('a build whose bytes match the manifest has no problem', async () => {
     const { dir, path } = await fetched();
     const read = await readDdManifest(path);
     expect(await compareToManifest(read, dir, names)).toEqual([]);
   });
 
-  test("a file the manifest does not describe is a problem, naming it", async () => {
+  test('a file the manifest does not describe is a problem, naming it', async () => {
     const { dir, path } = await fetched({
-      mappings: [{ name: "enshrouded_server.exe", bytes: 3 }],
+      mappings: [{ name: 'enshrouded_server.exe', bytes: 3 }],
     });
     const read = await readDdManifest(path);
     expect(await compareToManifest(read, dir, names)).toEqual([
       {
-        fileName: "enshrouded_server.kfc",
+        fileName: 'enshrouded_server.kfc',
         detail: `is not one of the files ${path} describes`,
       },
     ]);
   });
 
-  test("a file the manifest describes and the directory lacks is a problem", async () => {
+  test('a file the manifest describes and the directory lacks is a problem', async () => {
     const { dir, path } = await fetched();
-    await rm(join(dir, "enshrouded_server.kfc"));
+    await rm(join(dir, 'enshrouded_server.kfc'));
     const read = await readDdManifest(path);
     expect(await compareToManifest(read, dir, names)).toEqual([
-      { fileName: "enshrouded_server.kfc", detail: `is not in ${dir}` },
+      { fileName: 'enshrouded_server.kfc', detail: `is not in ${dir}` },
     ]);
   });
 
-  test("a file of another size is a problem, naming both sizes", async () => {
+  test('a file of another size is a problem, naming both sizes', async () => {
     const { dir, path } = await fetched();
-    await Bun.write(join(dir, "enshrouded_server.kfc"), "abcd");
+    await Bun.write(join(dir, 'enshrouded_server.kfc'), 'abcd');
     const read = await readDdManifest(path);
     expect(await compareToManifest(read, dir, names)).toEqual([
       {
-        fileName: "enshrouded_server.kfc",
-        detail: "is 4 bytes, and the manifest says 3",
+        fileName: 'enshrouded_server.kfc',
+        detail: 'is 4 bytes, and the manifest says 3',
       },
     ]);
   });
 
   /** The same size and other bytes, which a size check alone lets through. */
-  test("a file of the same size and other bytes is a problem", async () => {
+  test('a file of the same size and other bytes is a problem', async () => {
     const { dir, path } = await fetched();
-    await Bun.write(join(dir, "enshrouded_server.kfc"), "abd");
+    await Bun.write(join(dir, 'enshrouded_server.kfc'), 'abd');
     const read = await readDdManifest(path);
     const [problem] = await compareToManifest(read, dir, names);
-    expect(problem?.fileName).toBe("enshrouded_server.kfc");
-    expect(problem?.detail).toMatch(
-      new RegExp(`^hashes to [0-9a-f]{40}, and the manifest says ${ABC_SHA1}$`),
-    );
+    expect(problem?.fileName).toBe('enshrouded_server.kfc');
+    expect(problem?.detail).toMatch(new RegExp(`^hashes to [0-9a-f]{40}, and the manifest says ${ABC_SHA1}$`));
   });
 
   /**
    * A mapping with no content digest cannot be checked, and the chunk list is
    * not walked to rebuild one. A refusal sends it to a person.
    */
-  test("a mapping with no content digest is a problem, naming the file", async () => {
+  test('a mapping with no content digest is a problem, naming the file', async () => {
     const { dir, path } = await fetched({
       mappings: [
-        { name: "enshrouded_server.exe", bytes: 3 },
-        { name: "enshrouded_server.kfc", bytes: 3, sha1: null },
+        { name: 'enshrouded_server.exe', bytes: 3 },
+        { name: 'enshrouded_server.kfc', bytes: 3, sha1: null },
       ],
     });
     const read = await readDdManifest(path);
     expect(await compareToManifest(read, dir, names)).toEqual([
       {
-        fileName: "enshrouded_server.kfc",
+        fileName: 'enshrouded_server.kfc',
         detail: `has no content digest in ${path}`,
       },
     ]);
@@ -583,7 +518,7 @@ describe("compareToManifest", () => {
  * ///////////////////////////////////////////////
  */
 
-describe("the record command against a DepotDownloader fetch", () => {
+describe('the record command against a DepotDownloader fetch', () => {
   /**
    * The real command, pointed at a sandbox record so no case can append to the
    * repository's own. Running the command rather than a piece of it is the
@@ -596,54 +531,52 @@ describe("the record command against a DepotDownloader fetch", () => {
     Bun.spawnSync({
       cmd: [
         process.execPath,
-        "run",
-        fileURLToPath(new URL("archive.ts", import.meta.url)),
-        "record",
-        "--dir",
+        'run',
+        fileURLToPath(new URL('archive.ts', import.meta.url)),
+        'record',
+        '--dir',
         dir,
-        "--manifest",
+        '--manifest',
         GID,
-        "--record",
+        '--record',
         recordPath,
         ...extra,
       ],
-      env: { ...process.env, GITHUB_OUTPUT: "" },
-      stdout: "pipe",
-      stderr: "pipe",
+      env: { ...process.env, GITHUB_OUTPUT: '' },
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
 
-  test("a build its manifest describes is recorded", async () => {
+  test('a build its manifest describes is recorded', async () => {
     const { dir } = await fetched();
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     const run = record(dir, recordPath);
-    expect(run.stdout.toString()).toContain(
-      "enshrouded_server.exe matches Valve's digest",
-    );
+    expect(run.stdout.toString()).toContain("enshrouded_server.exe matches Valve's digest");
     expect(run.exitCode).toBe(0);
     const rows = await readRecords(recordPath, BuildDigestRecord);
     expect(rows.map((one) => one.manifestId)).toEqual([GID]);
-    expect(rows[0]?.files["enshrouded_server.exe"]?.sha256).toBe(ABC_SHA256);
+    expect(rows[0]?.files['enshrouded_server.exe']?.sha256).toBe(ABC_SHA256);
   });
 
   test.each([
     [
-      "one byte of the build flipped",
+      'one byte of the build flipped',
       async (dir: string): Promise<void> => {
-        await Bun.write(join(dir, "enshrouded_server.exe"), "abd");
+        await Bun.write(join(dir, 'enshrouded_server.exe'), 'abd');
       },
-      "enshrouded_server.exe hashes to",
+      'enshrouded_server.exe hashes to',
     ],
     [
-      "a file the row names cut out of the build",
+      'a file the row names cut out of the build',
       async (dir: string): Promise<void> => {
-        await rm(join(dir, "enshrouded_server.kfc"));
+        await rm(join(dir, 'enshrouded_server.kfc'));
       },
-      "enshrouded_server.kfc is not in",
+      'enshrouded_server.kfc is not in',
     ],
-  ])("%s is refused, and records nothing", async (_name, bend, detail) => {
+  ])('%s is refused, and records nothing', async (_name, bend, detail) => {
     const { dir } = await fetched();
     await bend(dir);
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     const run = record(dir, recordPath);
     expect(run.exitCode).toBe(1);
     expect(run.stdout.toString()).toContain(detail);
@@ -656,72 +589,62 @@ describe("the record command against a DepotDownloader fetch", () => {
    * to claim another. The gid in the file name matches the row, and the gid
    * inside the manifest does not.
    */
-  test("a manifest renamed to claim another build is refused, naming both gids", async () => {
-    const { dir } = await fetched({ manifestId: "954904204024183479" });
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+  test('a manifest renamed to claim another build is refused, naming both gids', async () => {
+    const { dir } = await fetched({ manifestId: '954904204024183479' });
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     const run = record(dir, recordPath);
     expect(run.exitCode).toBe(1);
-    expect(run.stdout.toString()).toContain(
-      "states manifest 954904204024183479 inside, and its name says " + GID,
-    );
+    expect(run.stdout.toString()).toContain('states manifest 954904204024183479 inside, and its name says ' + GID);
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
 
-  test("a manifest for another depot is refused, naming both depots", async () => {
+  test('a manifest for another depot is refused, naming both depots', async () => {
     const { dir } = await fetched({ depotId: 1004 });
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     const run = record(dir, recordPath);
     expect(run.exitCode).toBe(1);
-    expect(run.stdout.toString()).toContain(
-      `describes depot 1004, and this build is depot ${DEPOT}`,
-    );
+    expect(run.stdout.toString()).toContain(`describes depot 1004, and this build is depot ${DEPOT}`);
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
 
   /** Encrypted names cannot be matched, so no file in the build is attested. */
-  test("a manifest with encrypted file names is refused", async () => {
+  test('a manifest with encrypted file names is refused', async () => {
     const { dir } = await fetched({ encrypted: true });
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     const run = record(dir, recordPath);
     expect(run.exitCode).toBe(1);
-    expect(run.stdout.toString()).toContain("carries encrypted file names");
+    expect(run.stdout.toString()).toContain('carries encrypted file names');
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
 
   test.each([
-    ["truncated", (bytes: Uint8Array): Uint8Array => bytes.subarray(0, 40)],
-    [
-      "opened with another magic word",
-      (): Uint8Array => manifest({ payloadMagic: 0x12345678 }),
-    ],
-  ])(
-    "a manifest %s is a parse refusal naming the file",
-    async (_name, bend) => {
-      const dir = await sandbox();
-      await Bun.write(join(dir, "enshrouded_server.exe"), "abc");
-      await Bun.write(join(dir, "enshrouded_server.kfc"), "abc");
-      const path = await writeManifest(dir, bend(manifest()));
-      const recordPath = join(await sandbox(), "build-digests.jsonl");
-      const run = record(dir, recordPath);
-      expect(run.exitCode).toBe(1);
-      expect(run.stdout.toString()).toContain(path);
-      expect(run.stdout.toString()).toContain("cannot be read");
-      expect(await Bun.file(recordPath).exists()).toBe(false);
-    },
-  );
-
-  test("a manifest its checksum does not describe is refused, naming it", async () => {
+    ['truncated', (bytes: Uint8Array): Uint8Array => bytes.subarray(0, 40)],
+    ['opened with another magic word', (): Uint8Array => manifest({ payloadMagic: 0x12345678 })],
+  ])('a manifest %s is a parse refusal naming the file', async (_name, bend) => {
     const dir = await sandbox();
-    await Bun.write(join(dir, "enshrouded_server.exe"), "abc");
-    await Bun.write(join(dir, "enshrouded_server.kfc"), "abc");
-    const path = await writeManifest(dir, manifest(), {
-      checksum: new Uint8Array(20),
-    });
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    await Bun.write(join(dir, 'enshrouded_server.exe'), 'abc');
+    await Bun.write(join(dir, 'enshrouded_server.kfc'), 'abc');
+    const path = await writeManifest(dir, bend(manifest()));
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     const run = record(dir, recordPath);
     expect(run.exitCode).toBe(1);
     expect(run.stdout.toString()).toContain(path);
-    expect(run.stdout.toString()).toContain("hashes to");
+    expect(run.stdout.toString()).toContain('cannot be read');
+    expect(await Bun.file(recordPath).exists()).toBe(false);
+  });
+
+  test('a manifest its checksum does not describe is refused, naming it', async () => {
+    const dir = await sandbox();
+    await Bun.write(join(dir, 'enshrouded_server.exe'), 'abc');
+    await Bun.write(join(dir, 'enshrouded_server.kfc'), 'abc');
+    const path = await writeManifest(dir, manifest(), {
+      checksum: new Uint8Array(20),
+    });
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
+    const run = record(dir, recordPath);
+    expect(run.exitCode).toBe(1);
+    expect(run.stdout.toString()).toContain(path);
+    expect(run.stdout.toString()).toContain('hashes to');
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
 
@@ -731,14 +654,12 @@ describe("the record command against a DepotDownloader fetch", () => {
    * filesystem, so the refusal has to be the name rule rather than a later
    * one.
    */
-  test("a file name that is not one plain name is refused, and nothing is hashed", async () => {
+  test('a file name that is not one plain name is refused, and nothing is hashed', async () => {
     const { dir } = await fetched();
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
-    const run = record(dir, recordPath, ["--file", "../enshrouded_server.exe"]);
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
+    const run = record(dir, recordPath, ['--file', '../enshrouded_server.exe']);
     expect(run.exitCode).toBe(1);
-    expect(run.stdout.toString()).toContain(
-      "is not one plain archived file name",
-    );
+    expect(run.stdout.toString()).toContain('is not one plain archived file name');
     expect(run.stdout.toString()).not.toMatch(/[0-9a-f]{40}/);
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
@@ -750,12 +671,12 @@ describe("the record command against a DepotDownloader fetch", () => {
    * There are two disagreements, and the flag sits beside the second one. This
    * case bends the gid inside the manifest, which `attestFetch` refuses.
    */
-  test("--unattested does not wave a manifest that disagrees with itself through", async () => {
-    const { dir } = await fetched({ manifestId: "954904204024183479" });
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
-    const run = record(dir, recordPath, ["--unattested"]);
+  test('--unattested does not wave a manifest that disagrees with itself through', async () => {
+    const { dir } = await fetched({ manifestId: '954904204024183479' });
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
+    const run = record(dir, recordPath, ['--unattested']);
     expect(run.exitCode).toBe(1);
-    expect(run.stdout.toString()).toContain("states manifest");
+    expect(run.stdout.toString()).toContain('states manifest');
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
 
@@ -765,14 +686,12 @@ describe("the record command against a DepotDownloader fetch", () => {
    * an edit could widen the flag onto. The fixture renames the manifest file
    * rather than editing it, which is the only way to reach that branch.
    */
-  test("--unattested does not wave a gid that disagrees with the caller through", async () => {
-    const { dir } = await fetched({ gid: "954904204024183479" });
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
-    const run = record(dir, recordPath, ["--unattested"]);
+  test('--unattested does not wave a gid that disagrees with the caller through', async () => {
+    const { dir } = await fetched({ gid: '954904204024183479' });
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
+    const run = record(dir, recordPath, ['--unattested']);
     expect(run.exitCode).toBe(1);
-    expect(run.stdout.toString()).toContain(
-      "says this build came from manifest",
-    );
+    expect(run.stdout.toString()).toContain('says this build came from manifest');
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
 
@@ -781,29 +700,25 @@ describe("the record command against a DepotDownloader fetch", () => {
    * Taking the first would let the app manifest stand for the cached manifest
    * beside it, and the bytes would go unhashed under a green row.
    */
-  test("a build carrying both records is still attested", async () => {
+  test('a build carrying both records is still attested', async () => {
     const { dir } = await fetched();
     await writeAppManifest(dir, GID);
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     const run = record(dir, recordPath);
-    expect(run.stdout.toString()).toContain(
-      "enshrouded_server.exe matches Valve's digest",
-    );
+    expect(run.stdout.toString()).toContain("enshrouded_server.exe matches Valve's digest");
     expect(run.exitCode).toBe(0);
     const rows = await readRecords(recordPath, BuildDigestRecord);
     expect(rows.map((one) => one.manifestId)).toEqual([GID]);
   });
 
-  test("a build whose app manifest names another gid is refused, naming it", async () => {
+  test('a build whose app manifest names another gid is refused, naming it', async () => {
     const { dir } = await fetched();
-    const acf = await writeAppManifest(dir, "954904204024183479");
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const acf = await writeAppManifest(dir, '954904204024183479');
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     const run = record(dir, recordPath);
     expect(run.exitCode).toBe(1);
     expect(run.stdout.toString()).toContain(acf);
-    expect(run.stdout.toString()).toContain(
-      "says this build came from manifest 954904204024183479",
-    );
+    expect(run.stdout.toString()).toContain('says this build came from manifest 954904204024183479');
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
 
@@ -812,17 +727,15 @@ describe("the record command against a DepotDownloader fetch", () => {
    * One of them disagrees with the caller whatever the caller asked for, so
    * the directory is refused rather than resolved by directory order.
    */
-  test("a second cached manifest is refused, naming it", async () => {
+  test('a second cached manifest is refused, naming it', async () => {
     const { dir } = await fetched();
-    await writeManifest(dir, manifest({ manifestId: "954904204024183479" }), {
-      gid: "954904204024183479",
+    await writeManifest(dir, manifest({ manifestId: '954904204024183479' }), {
+      gid: '954904204024183479',
     });
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     const run = record(dir, recordPath);
     expect(run.exitCode).toBe(1);
-    expect(run.stdout.toString()).toContain(
-      "says this build came from manifest 954904204024183479",
-    );
+    expect(run.stdout.toString()).toContain('says this build came from manifest 954904204024183479');
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
 
@@ -831,21 +744,21 @@ describe("the record command against a DepotDownloader fetch", () => {
    * Reading it as absent would put the directory in the branch the flag waves
    * through, which is how evidence would be lost by making it unreadable.
    */
-  test("a cache that cannot be listed is refused, even with --unattested", async () => {
+  test('a cache that cannot be listed is refused, even with --unattested', async () => {
     const dir = await sandbox();
-    await Bun.write(join(dir, "enshrouded_server.exe"), "abc");
-    await Bun.write(join(dir, "enshrouded_server.kfc"), "abc");
-    await Bun.write(join(dir, ".DepotDownloader"), "not a directory");
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
-    const run = record(dir, recordPath, ["--unattested"]);
+    await Bun.write(join(dir, 'enshrouded_server.exe'), 'abc');
+    await Bun.write(join(dir, 'enshrouded_server.kfc'), 'abc');
+    await Bun.write(join(dir, '.DepotDownloader'), 'not a directory');
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
+    const run = record(dir, recordPath, ['--unattested']);
     expect(run.exitCode).toBe(1);
-    expect(run.stdout.toString()).toContain("could not be listed");
+    expect(run.stdout.toString()).toContain('could not be listed');
     expect(run.stdout.toString()).not.toContain("is the caller's word");
     expect(await Bun.file(recordPath).exists()).toBe(false);
   });
 });
 
-describe("the emit command against a DepotDownloader fetch", () => {
+describe('the emit command against a DepotDownloader fetch', () => {
   /** The row a committed record already holds for this build. */
   const committed = {
     manifestId: GID,
@@ -854,10 +767,10 @@ describe("the emit command against a DepotDownloader fetch", () => {
     depotId: DEPOT,
     revision: null,
     branch: null,
-    recordedAt: "2026-09-18",
+    recordedAt: '2026-09-18',
     files: {
-      "enshrouded_server.exe": { bytes: 3, sha256: ABC_SHA256 },
-      "enshrouded_server.kfc": { bytes: 3, sha256: ABC_SHA256 },
+      'enshrouded_server.exe': { bytes: 3, sha256: ABC_SHA256 },
+      'enshrouded_server.kfc': { bytes: 3, sha256: ABC_SHA256 },
     },
   };
 
@@ -867,44 +780,40 @@ describe("the emit command against a DepotDownloader fetch", () => {
     Bun.spawnSync({
       cmd: [
         process.execPath,
-        "run",
-        fileURLToPath(new URL("archive.ts", import.meta.url)),
-        "emit",
-        "--dir",
+        'run',
+        fileURLToPath(new URL('archive.ts', import.meta.url)),
+        'emit',
+        '--dir',
         dir,
-        "--manifest",
+        '--manifest',
         GID,
-        "--record",
+        '--record',
         recordPath,
       ],
-      env: { ...process.env, GITHUB_OUTPUT: "" },
-      stdout: "pipe",
-      stderr: "pipe",
+      env: { ...process.env, GITHUB_OUTPUT: '' },
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
 
   /** A build with a row takes the same attribution as one without. */
   const recorded = async (): Promise<string> => {
-    const recordPath = join(await sandbox(), "build-digests.jsonl");
+    const recordPath = join(await sandbox(), 'build-digests.jsonl');
     await Bun.write(recordPath, `${JSON.stringify(committed)}\n`);
     return recordPath;
   };
 
-  test("a build its manifest describes is handed on", async () => {
+  test('a build its manifest describes is handed on', async () => {
     const { dir } = await fetched();
     const run = emit(dir, await recorded());
-    expect(run.stdout.toString()).toContain(
-      "enshrouded_server.exe matches Valve's digest",
-    );
+    expect(run.stdout.toString()).toContain("enshrouded_server.exe matches Valve's digest");
     expect(run.exitCode).toBe(0);
   });
 
-  test("a manifest renamed to claim another build is refused", async () => {
-    const { dir } = await fetched({ manifestId: "954904204024183479" });
+  test('a manifest renamed to claim another build is refused', async () => {
+    const { dir } = await fetched({ manifestId: '954904204024183479' });
     const run = emit(dir, await recorded());
     expect(run.exitCode).toBe(1);
-    expect(run.stdout.toString()).toContain(
-      "states manifest 954904204024183479 inside",
-    );
+    expect(run.stdout.toString()).toContain('states manifest 954904204024183479 inside');
   });
 });
 
@@ -915,16 +824,14 @@ describe("the emit command against a DepotDownloader fetch", () => {
  */
 
 /** The directory holding one subdirectory per archived build. */
-const archiveDir = process.env["EMBER_ARCHIVE_DIR"];
+const archiveDir = process.env['EMBER_ARCHIVE_DIR'];
 
-describe("the archived builds", () => {
+describe('the archived builds', () => {
   test.skipIf(archiveDir === undefined || archiveDir.length === 0)(
-    "every archived build is attributed by its own manifest",
+    'every archived build is attributed by its own manifest',
     async () => {
-      const { readdir } = await import("node:fs/promises");
-      const gids = (
-        await readdir(archiveDir as string, { withFileTypes: true })
-      )
+      const { readdir } = await import('node:fs/promises');
+      const gids = (await readdir(archiveDir as string, { withFileTypes: true }))
         .filter((entry) => entry.isDirectory() && /^\d{1,20}$/.test(entry.name))
         .map((entry) => entry.name);
       // A wrong path would leave nothing to check and report a pass.
@@ -932,18 +839,11 @@ describe("the archived builds", () => {
 
       for (const gid of gids) {
         const dir = join(archiveDir as string, gid);
-        const read = await readDdManifest(
-          join(dir, ".DepotDownloader", `${DEPOT}_${gid}.manifest`),
-        );
+        const read = await readDdManifest(join(dir, '.DepotDownloader', `${DEPOT}_${gid}.manifest`));
         expect(read.manifestId).toBe(gid);
         expect(read.depotId).toBe(DEPOT);
         expect(read.filenamesEncrypted).toBe(false);
-        expect(
-          await compareToManifest(read, dir, [
-            "enshrouded_server.exe",
-            "enshrouded_server.kfc",
-          ]),
-        ).toEqual([]);
+        expect(await compareToManifest(read, dir, ['enshrouded_server.exe', 'enshrouded_server.kfc'])).toEqual([]);
       }
     },
   );

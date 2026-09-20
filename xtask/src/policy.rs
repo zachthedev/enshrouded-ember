@@ -955,6 +955,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use clap::CommandFactory;
+    use yaml_rust2::{Yaml, YamlLoader};
 
     use super::{
         XTASK, bare_references, build_directory_ids, cargo_install_package, code_span_lists,
@@ -1001,25 +1002,33 @@ mod tests {
         assert!(problems.is_empty(), "{problems:?}");
     }
 
-    /// The pin file turns mise's locked mode on.
+    /// The pin file turns mise's locked mode on, in both of its spellings.
     ///
     /// This has a case of its own because it is the whole guarantee and it is
-    /// one line. Without it `mise install` accepts a tool the lockfile does not
-    /// name, and `mise which` answers for a tool this repository pins nowhere
-    /// out of a developer's global configuration, which the gate would then
-    /// run. The action that installs on a runner passes `--locked` itself when
-    /// it sees a lockfile, so continuous integration keeps most of the
-    /// guarantee while a developer's machine loses all of it, and that split is
-    /// what makes the loss quiet.
+    /// two lines. Without them `mise install` accepts a tool the lockfile does
+    /// not name, and `mise which` answers for a tool this repository pins
+    /// nowhere out of a developer's global configuration, which the gate would
+    /// then run.
+    ///
+    /// Both spellings are asserted because they are not the same setting.
+    /// `MISE_LOCKED=false` and a `locked_scopes` that drops `project` each turn
+    /// `settings.locked` off while `mise settings get locked` still prints what
+    /// the file holds. `tool_config.locked` answers to neither, and mise reads
+    /// it from the file alone.
     #[test]
     fn the_pin_file_turns_locked_mode_on() {
+        let text = read(crate::pins::PINS);
         assert!(
-            crate::pins::locked(&read(crate::pins::PINS)),
-            "{} does not set locked = true",
+            crate::pins::locked(&text),
+            "{} does not set locked = true under [settings]",
+            crate::pins::PINS
+        );
+        assert!(
+            crate::pins::tool_config_locked(&text),
+            "{} does not set locked = true under [tool_config]",
             crate::pins::PINS
         );
     }
-
     /// Every binary the gate resolves is one the pin file names, and every tool
     /// the pin file names is one the gate resolves.
     ///
@@ -1027,7 +1036,7 @@ mod tests {
     /// the other leave the count intact while the gate resolves a name nothing
     /// pins. A pin key is a bare registry name or a backend coordinate, and a
     /// coordinate names an owner and a repository rather than the binary
-    /// inside, so `pins::COORDINATE_BINARIES` carries that mapping and a rename
+    /// inside, so `pins::TOOLS` carries that mapping and a rename
     /// has to touch it.
     #[test]
     fn the_pin_file_and_the_gate_name_the_same_binaries() {
@@ -1056,145 +1065,264 @@ mod tests {
         );
     }
 
-    // The workflow-facing rules live in tools/workflows.test.ts, which parses
-    // every job of every workflow. One rule per suite is what keeps a failure
-    // naming the thing that broke.
-
-    /// A pin file every rule accepts, for the cases below to change one thing in.
-    const SOUND_PINS: &str = concat!(
-        "[tools]\n",
-        "taplo = \"0.10.0\"\n",
-        "\"github:nextest-rs/nextest\" = { version = \"0.9.145\" }\n",
-        "\"github:bnjbvr/cargo-machete\" = \"0.9.2\"\n",
-        "\"github:rustsec/rustsec\" = \"0.22.2\"\n",
-        "\n[settings]\nlocked = true\n",
-    );
-    const SOUND_LOCK: &str = concat!(
-        "[[tools.taplo]]\nversion = \"0.10.0\"\n",
-        "[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:aa\"\n",
-        "[tools.taplo.\"platforms.windows-x64\"]\nchecksum = \"sha256:bb\"\n",
-        "[[tools.\"github:nextest-rs/nextest\"]]\nversion = \"0.9.145\"\n",
-        "[tools.\"github:nextest-rs/nextest\".\"platforms.linux-x64\"]\nchecksum = \"sha256:cc\"\n",
-        "[tools.\"github:nextest-rs/nextest\".\"platforms.windows-x64\"]\nchecksum = \"sha256:dd\"\n",
-        "[[tools.\"github:bnjbvr/cargo-machete\"]]\nversion = \"0.9.2\"\n",
-        "[tools.\"github:bnjbvr/cargo-machete\".\"platforms.linux-x64\"]\nchecksum = \"sha256:ee\"\n",
-        "[tools.\"github:bnjbvr/cargo-machete\".\"platforms.windows-x64\"]\nchecksum = \"sha256:ff\"\n",
-        "[[tools.\"github:rustsec/rustsec\"]]\nversion = \"0.22.2\"\n",
-        "[tools.\"github:rustsec/rustsec\".\"platforms.linux-x64\"]\nchecksum = \"sha256:01\"\n",
-        "[tools.\"github:rustsec/rustsec\".\"platforms.windows-x64\"]\nchecksum = \"sha256:02\"\n",
-    );
-    const SOUND_WORKFLOW: &str = "        os: [windows-latest, ubuntu-latest]\n";
-
-    /// The rules refuse each shape they name, against documents written here.
-    ///
-    /// A rule nothing can break is a rule that proves nothing, so every case is
-    /// the sound trio with one thing changed, and the sound trio sits beside
-    /// them as the control.
-    #[test]
-    fn the_pin_rules_refuse_the_shapes_they_name() {
+    /// A YAML file under the repository root, parsed as its one document.
+    fn yaml(relative: &str) -> Yaml {
+        let mut documents = YamlLoader::load_from_str(&read(relative))
+            .unwrap_or_else(|err| panic!("{relative} is not YAML: {err}"));
         assert_eq!(
-            crate::pins::problems(SOUND_PINS, SOUND_LOCK, SOUND_WORKFLOW),
-            Vec::<String>::new(),
-            "the sound documents are refused, so every case below proves nothing"
+            documents.len(),
+            1,
+            "{relative} holds {} documents, and a reader takes the first",
+            documents.len()
         );
+        documents.remove(0)
+    }
 
-        let cases: &[(&str, String, String, String, &str)] = &[
-            (
-                "locked mode off",
-                SOUND_PINS.replace("locked = true", "locked = false"),
-                SOUND_LOCK.to_string(),
-                SOUND_WORKFLOW.to_string(),
-                "does not set locked = true",
-            ),
-            (
-                "the locked line deleted",
-                SOUND_PINS.replace("\n[settings]\nlocked = true\n", ""),
-                SOUND_LOCK.to_string(),
-                SOUND_WORKFLOW.to_string(),
-                "does not set locked = true",
-            ),
-            (
-                "a checksum dropped, the platform block kept",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace("checksum = \"sha256:bb\"\n", ""),
-                SOUND_WORKFLOW.to_string(),
-                "taplo on windows-x64 carries no checksum",
-            ),
-            (
-                "a platform block dropped",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:aa\"\n",
-                    "",
-                ),
-                SOUND_WORKFLOW.to_string(),
-                "taplo records no linux-x64 entry",
-            ),
-            (
-                "the two files disagreeing on a version",
-                SOUND_PINS.replace("taplo = \"0.10.0\"", "taplo = \"0.10.1\""),
-                SOUND_LOCK.to_string(),
-                SOUND_WORKFLOW.to_string(),
-                "pins taplo 0.10.1 and mise.lock records 0.10.0",
-            ),
-            (
-                "a range in place of an exact release",
-                SOUND_PINS.replace("taplo = \"0.10.0\"", "taplo = \"0.10\""),
-                SOUND_LOCK.to_string(),
-                SOUND_WORKFLOW.to_string(),
-                "which is not one exact release",
-            ),
-            (
-                "a lockfile entry the pin file no longer names",
-                SOUND_PINS.replace("taplo = \"0.10.0\"\n", ""),
-                SOUND_LOCK.to_string(),
-                SOUND_WORKFLOW.to_string(),
-                "locks taplo, which mise.toml no longer pins",
-            ),
-            (
-                "a runner leg with no platform",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.to_string(),
-                SOUND_WORKFLOW.replace("ubuntu-latest", "macos-latest"),
-                "macos-latest has no mise platform",
-            ),
-            (
-                "a coordinate naming no binary",
-                SOUND_PINS.replace("github:rustsec/rustsec", "github:rustsec/elsewhere"),
-                SOUND_LOCK.replace("github:rustsec/rustsec", "github:rustsec/elsewhere"),
-                SOUND_WORKFLOW.to_string(),
-                "is a coordinate no entry names a binary for",
-            ),
-        ];
+    /// Whether `run` invokes mise to do anything but read.
+    ///
+    /// Every line is read, because a multi-line block runs every one of them.
+    /// A word naming the program starts an invocation, and the words after it
+    /// are matched against `READING_MISE_COMMANDS` as a prefix. A prefix rather
+    /// than one word, because `settings` and `config` each have a `set` that
+    /// rewrites the pin file. An invocation with nothing after it counts as an
+    /// install.
+    fn run_installs(run: &str) -> bool {
+        if crate::pins::MISE_BOOTSTRAP_URLS
+            .iter()
+            .any(|url| run.contains(url))
+        {
+            return true;
+        }
+        run.lines().any(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            words.iter().enumerate().any(|(at, word)| {
+                let program = word.rsplit(['/', '\\']).next().unwrap_or(word);
+                if program != "mise" && program != "mise.exe" {
+                    return false;
+                }
+                let rest = &words[at + 1..];
+                !crate::pins::READING_MISE_COMMANDS
+                    .iter()
+                    .any(|reading| rest.starts_with(reading))
+            })
+        })
+    }
 
-        for (what, pins, lock, workflow, wanted) in cases {
-            let found = crate::pins::problems(pins, lock, workflow);
+    /// Whether `step` installs anything, which is anything not known to be
+    /// harmless.
+    ///
+    /// The question is not whether a step looks like an installer. It is
+    /// whether the step is one of the few known to install nothing. A `uses`
+    /// naming anything outside `PRELUDE_ACTIONS`, a composite action included,
+    /// is an install, because a name says nothing about what an action does.
+    /// A `run` invoking mise for anything but a read is an install for the same
+    /// reason. Owner names are compared without case, the way the forge
+    /// resolves them.
+    fn step_installs(step: &Yaml) -> bool {
+        if let Some(uses) = step["uses"].as_str() {
+            let action = uses.split('@').next().unwrap_or(uses).trim();
+            return !crate::pins::PRELUDE_ACTIONS
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(action));
+        }
+        step["run"].as_str().is_some_and(run_installs)
+    }
+
+    /// Whether `step` runs the pin rules and nothing else.
+    ///
+    /// The command is matched whole. A line that appends to it, such as one
+    /// piping the exit code into `true`, runs the rules without letting them
+    /// stop the job, so it is not this step.
+    fn step_runs_pin_rules(step: &Yaml) -> bool {
+        step["run"].as_str().is_some_and(|run| {
+            let words: Vec<&str> = run.split_whitespace().collect();
+            words == ["cargo", "xtask", "pins"]
+        })
+    }
+
+    /// The steps a job declares, which is empty for a job that declares none.
+    fn job_steps(job: &Yaml) -> Vec<Yaml> {
+        job["steps"].as_vec().cloned().unwrap_or_default()
+    }
+
+    /// No job installs before the pin rules run, and the gate job runs them.
+    ///
+    /// `mise install` fetches and unpacks every artifact `mise.lock` records, so
+    /// a rule that ran after it would report a finding about bytes already on
+    /// disk.
+    ///
+    /// Every job is walked, not only the gate job. Naming one job is what makes
+    /// its absence a failure rather than a silent skip, and holding the rest is
+    /// what keeps a job added later from installing with nothing watching its
+    /// order.
+    ///
+    /// Conditions are read as well as order, on the job and on the step. A step
+    /// or job carrying `if` may not run at all, and a step carrying
+    /// `continue-on-error` runs without stopping the job. Both keys are refused
+    /// by presence rather than by value, because a value is written in more
+    /// spellings than a reader can enumerate and an unrecognized one would read
+    /// as absent.
+    #[test]
+    fn the_pin_rules_run_before_anything_installs() {
+        let workflow = yaml(crate::pins::WORKFLOW);
+        let jobs = workflow["jobs"]
+            .as_hash()
+            .expect("the workflow declares jobs");
+
+        // Every job that installs, gate or not, runs the rules first.
+        for (name, job) in jobs {
+            let name = name.as_str().unwrap_or("a job");
+            let steps = job_steps(job);
+            let Some(installs) = steps.iter().position(step_installs) else {
+                continue;
+            };
+            let rules = steps
+                .iter()
+                .position(step_runs_pin_rules)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the {name} job installs at step {installs} and never runs the pin rules"
+                    )
+                });
             assert!(
-                found.iter().any(|problem| problem.contains(wanted)),
-                "{what}: nothing said {wanted:?}, got {found:?}"
+                rules < installs,
+                "the {name} job installs at step {installs} and runs the pin rules at step \
+                 {rules}, so a poisoned url is fetched and unpacked before anything reads it"
             );
+            let step = &steps[rules];
+            assert!(
+                step["if"].is_badvalue(),
+                "the {name} job guards its pin step with an if, so it can install without running \
+                 the rules"
+            );
+            assert!(
+                step["continue-on-error"].is_badvalue(),
+                "the {name} job lets its pin step continue on error, so a refusal need not stop \
+                 the install"
+            );
+        }
+
+        // The gate job specifically has to be there and has to install, so its
+        // absence is a failure rather than a job with nothing to check.
+        let gate = &workflow["jobs"][crate::pins::GATE_JOB];
+        assert!(
+            !gate.is_badvalue(),
+            "{} declares no {} job, so nothing holds the order of its install",
+            crate::pins::WORKFLOW,
+            crate::pins::GATE_JOB
+        );
+        assert!(
+            gate["if"].is_badvalue(),
+            "the {} job carries an if, so it can be skipped whole",
+            crate::pins::GATE_JOB
+        );
+        let steps = job_steps(gate);
+        assert!(
+            !steps.is_empty(),
+            "the {} job declares no steps, so its work happens somewhere this cannot read",
+            crate::pins::GATE_JOB
+        );
+        assert!(
+            steps.iter().any(step_installs),
+            "the {} job installs nothing, so the gate runs tools from somewhere this cannot read",
+            crate::pins::GATE_JOB
+        );
+    }
+
+    /// No step invokes mise for anything but a read.
+    ///
+    /// Ordering is not enough on its own. A step rewriting `mise.toml` sits
+    /// after the pin step quite legitimately, so the order stays compliant
+    /// while the document the rules certified is replaced underneath them.
+    /// `mise config set` reaches `tool_config.locked`, the setting no
+    /// environment variable reaches, and `mise use` rewrites a pinned version,
+    /// so the install would then run unlocked or at a release nothing checked.
+    ///
+    /// The rule is the same allow list the ordering rule uses, applied at every
+    /// position rather than before the install. Nothing in the gate needs to
+    /// run mise by hand: the action installs, and the gate resolves tools
+    /// through mise from inside the binary rather than from a `run` line.
+    #[test]
+    fn no_step_invokes_mise_outside_a_read() {
+        let workflow = yaml(crate::pins::WORKFLOW);
+        let jobs = workflow["jobs"]
+            .as_hash()
+            .expect("the workflow declares jobs");
+        for (name, job) in jobs {
+            let name = name.as_str().unwrap_or("a job");
+            for (at, step) in job_steps(job).iter().enumerate() {
+                let Some(run) = step["run"].as_str() else {
+                    continue;
+                };
+                assert!(
+                    !run_installs(run),
+                    "the {name} job runs {run:?} at step {at}, which invokes mise to install or \
+                     write; a write after the pin rules leaves the install reading a document \
+                     nothing checked"
+                );
+            }
         }
     }
 
-    /// Every member's manifest, with the names its cargo-machete ignore list
-    /// carries, for each member that has one.
-    fn ignore_lists() -> Vec<(std::path::PathBuf, Vec<String>)> {
-        let (_, members) = workspace_and_members();
-        members
-            .into_iter()
-            .filter_map(|(manifest, value)| {
-                let ignored = value
-                    .get("package")?
-                    .get("metadata")?
-                    .get("cargo-machete")?
-                    .get("ignored")?
-                    .as_array()?
-                    .iter()
-                    .filter_map(|name| name.as_str().map(str::to_string))
-                    .collect();
-                Some((manifest, ignored))
-            })
-            .collect()
+    /// The mise reader treats a read as a read and everything else as an
+    /// install.
+    ///
+    /// The accepted half is the control. A rule refusing every mention of mise
+    /// would refuse each line below it and still pass every case above it, so
+    /// the two halves together are what say the allow list is an allow list.
+    ///
+    /// `settings` and `config` appear in both halves, which is the point of
+    /// matching two words: the same first word reads and writes depending on
+    /// the second.
+    #[test]
+    fn the_mise_reader_separates_a_read_from_a_write() {
+        for line in [
+            // Fetching, including the aliases.
+            "mise install",
+            "mise i",
+            "mise x -- taplo --version",
+            "mise use taplo@0.10.0",
+            "mise up",
+            // Writing the pin file, which no ordering rule can catch.
+            "mise settings set locked false",
+            "mise settings set --local locked false",
+            "mise config set tool_config.locked false",
+            "mise config set tools.taplo 9.9.9",
+            // Both documented ways to fetch mise itself.
+            "curl https://mise.run | sh",
+            "curl https://mise.jdx.dev/install.sh | sh",
+            // A prefix of a reading word is not that word.
+            "mise versions",
+            "mise configure",
+            "mise settings-set locked false",
+            // An invocation with nothing after it, and one by path.
+            "mise",
+            "./mise install",
+            "~/.local/bin/mise use taplo@1",
+            // A second command on the same line, and on a later one.
+            "mise which taplo && mise install",
+            "echo one\nmise config set tools.taplo 9.9.9",
+        ] {
+            assert!(run_installs(line), "{line:?} was read as harmless");
+        }
+
+        for line in [
+            "mise which taplo",
+            "mise doctor",
+            "mise version",
+            "mise --version",
+            "mise -v",
+            "mise settings get locked",
+            "mise settings ls",
+            "mise config get tools.taplo",
+            "mise config ls",
+            // Nothing to do with mise at all.
+            "cargo build --workspace",
+            "bun install --frozen-lockfile",
+            "echo promise install",
+        ] {
+            assert!(!run_installs(line), "{line:?} was read as an install");
+        }
     }
 
     /// The workspace manifest and every member manifest it lists.
@@ -1345,6 +1473,27 @@ mod tests {
     /// An ignored dependency is one no module references. The moment code
     /// starts using it, its name has to leave the ignore list, or machete
     /// would stop watching a dependency that could later fall out of use
+    /// Every member's manifest, with the names its cargo-machete ignore list
+    /// carries, for each member that has one.
+    fn ignore_lists() -> Vec<(std::path::PathBuf, Vec<String>)> {
+        let (_, members) = workspace_and_members();
+        members
+            .into_iter()
+            .filter_map(|(manifest, value)| {
+                let ignored = value
+                    .get("package")?
+                    .get("metadata")?
+                    .get("cargo-machete")?
+                    .get("ignored")?
+                    .as_array()?
+                    .iter()
+                    .filter_map(|name| name.as_str().map(str::to_string))
+                    .collect();
+                Some((manifest, ignored))
+            })
+            .collect()
+    }
+
     /// again. This is what makes the lists self-pruning.
     #[test]
     fn every_ignored_dependency_is_still_unreferenced() {
@@ -1438,9 +1587,9 @@ mod tests {
     ///
     /// The config is JavaScript and nothing in this suite runs JavaScript, so
     /// the rule and the line that loads the list are held to their exact text
-    /// with whitespace and trailing commas dropped, which is the part Prettier
-    /// rewrites. The list's name has to appear exactly where those two lines
-    /// put it, so nothing else in the config can read or change it.
+    /// with whitespace, trailing commas and quote style normalized away, which
+    /// is what Prettier owns. The list's name has to appear exactly where those
+    /// two lines put it, so nothing else in the config can read or change it.
     #[test]
     fn commitlint_enforces_the_scope_file_and_nothing_beside_it() {
         let code = commitlint_code();
@@ -1449,13 +1598,14 @@ mod tests {
             .filter(|c| !c.is_whitespace())
             .collect::<String>()
             .replace(",]", "]")
-            .replace(",)", ")");
+            .replace(",)", ")")
+            .replace('"', "'");
 
         for (what, expected) in [
-            ("the rule", r#""scope-enum":[2,"always",scopes]"#),
+            ("the rule", r"'scope-enum':[2,'always',scopes]"),
             (
                 "the line that loads the list",
-                r#"constscopes=JSON.parse(readFileSync(newURL(".github/commit-scopes.json",import.meta.url),"utf8"))"#,
+                r"constscopes=JSON.parse(readFileSync(newURL('.github/commit-scopes.json',import.meta.url),'utf8'))",
             ),
         ] {
             assert_eq!(

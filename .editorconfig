@@ -8,8 +8,9 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-# The extensions prettier owns here. Prettier reads this file, so the gate and
-# an editor agree on the width without it being written down twice.
+# The extensions prettier owns here. Prettier reads this file for the options
+# .prettierrc leaves unset, so this list has to match the gate's prettier glob.
+# A file outside it takes the indent width the [*] section sets.
 [*.{md,json,yml,yaml,js,mjs,cjs,ts}]
 indent_size = 2
 

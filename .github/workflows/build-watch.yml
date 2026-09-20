@@ -15,7 +15,7 @@ name: build-watch
 # Actions tab resets it too.
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 # No pull_request trigger, and no archive credential anywhere in ci.yml. GitHub
@@ -65,9 +65,9 @@ permissions:
 # workflow_dispatch on a branch cannot cancel a pending scheduled run.
 
 env:
-  APP_SERVER: "2278520"
-  APP_CLIENT: "1203620"
-  DEPOT_SERVER: "2278521"
+  APP_SERVER: '2278520'
+  APP_CLIENT: '1203620'
+  DEPOT_SERVER: '2278521'
   # SteamCMD updates itself from Valve on every run, so this digest pins the
   # wrapper rather than the client. No bot reads a `docker run` line, so it is
   # bumped by hand. Taken from the ubuntu-24 tag on 2026-09-18.
@@ -84,7 +84,7 @@ env:
   # Narrows the download plan rather than the extraction, so the fetch costs
   # megabytes rather than the multi-gigabyte depot. The names have to agree with
   # ARCHIVE_FILES in tools/records.ts, which a case asserts.
-  STEAMCMD_FILE_FILTER: "enshrouded_server.exe;enshrouded_server.kfc"
+  STEAMCMD_FILE_FILTER: 'enshrouded_server.exe;enshrouded_server.kfc'
   # Bun is fetched and checked rather than installed by an action. The archive
   # job runs it with both halves of the write token in its environment, and
   # setup-bun's only hash call is a cache key over the URL. The release is the
@@ -183,8 +183,7 @@ jobs:
             "$APP_CLIENT" ".watch/appinfo-$APP_CLIENT.txt"
 
       - name: Commit the record
-        if:
-          steps.server.outputs.changed == 'true' || steps.client.outputs.changed
+        if: steps.server.outputs.changed == 'true' || steps.client.outputs.changed
           == 'true'
         run: |
           git config user.name 'github-actions[bot]'
@@ -252,8 +251,7 @@ jobs:
       # Last, so the server's row and its issue survive a client failure. The
       # run still goes red, which is what makes a repeated one visible.
       - name: Fail if the client could not be read
-        if:
-          steps.client_read.outcome == 'failure' || steps.client.outcome ==
+        if: steps.client_read.outcome == 'failure' || steps.client.outcome ==
           'failure'
         run: |
           echo "reading app $APP_CLIENT failed. The server's row was recorded." >&2
@@ -316,10 +314,8 @@ jobs:
         name: Ask the archive whether the build is there
         env:
           MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
-          R2_ARCHIVE_READ_ACCESS_KEY_ID:
-            ${{ secrets.R2_ARCHIVE_READ_ACCESS_KEY_ID }}
-          R2_ARCHIVE_READ_SECRET_ACCESS_KEY:
-            ${{ secrets.R2_ARCHIVE_READ_SECRET_ACCESS_KEY }}
+          R2_ARCHIVE_READ_ACCESS_KEY_ID: ${{ secrets.R2_ARCHIVE_READ_ACCESS_KEY_ID }}
+          R2_ARCHIVE_READ_SECRET_ACCESS_KEY: ${{ secrets.R2_ARCHIVE_READ_SECRET_ACCESS_KEY }}
         run: bun run tools/archive.ts status --manifest "$MANIFEST_ID"
 
   # The only job that holds the write token. The environment restricts it to
@@ -453,10 +449,8 @@ jobs:
         env:
           MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
           ROW: ${{ steps.row.outputs.row }}
-          R2_ARCHIVE_WRITE_ACCESS_KEY_ID:
-            ${{ secrets.R2_ARCHIVE_WRITE_ACCESS_KEY_ID }}
-          R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY:
-            ${{ secrets.R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY }}
+          R2_ARCHIVE_WRITE_ACCESS_KEY_ID: ${{ secrets.R2_ARCHIVE_WRITE_ACCESS_KEY_ID }}
+          R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY: ${{ secrets.R2_ARCHIVE_WRITE_SECRET_ACCESS_KEY }}
         run: |
           # The committed record may not hold this row yet, so push is pointed
           # at the one this job handed on.

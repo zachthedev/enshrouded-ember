@@ -1,7 +1,7 @@
 name: New Keen build
 description: A dedicated server build no signature row covers.
-title: "build: server buildid "
-labels: ["build"]
+title: 'build: server buildid '
+labels: ['build']
 body:
   - type: markdown
     attributes:
@@ -27,7 +27,7 @@ body:
         The `buildid` line in `steamapps/appmanifest_2278520.acf` beside your
         server. `cargo xtask server fetch` names its output directory the same
         thing.
-      placeholder: "23178631"
+      placeholder: '23178631'
     validations:
       required: true
   - type: dropdown
@@ -54,8 +54,8 @@ body:
         A no means every operator is forced onto this build today. Pick "Not
         checked" rather than guessing.
       options:
-        - "Yes"
-        - "No"
+        - 'Yes'
+        - 'No'
         - Not checked
     validations:
       required: true
@@ -81,7 +81,7 @@ body:
       description: The maintainer's sequence. A reporter leaves these unticked.
       options:
         - label: The build is archived, or its manifest already rolled
-        - label: "`cargo xtask schema extract` ran against it"
-        - label: "`cargo xtask schema diff <old> <new>` is in a comment below"
+        - label: '`cargo xtask schema extract` ran against it'
+        - label: '`cargo xtask schema diff <old> <new>` is in a comment below'
         - label: Every signature row resolves against the real binary
         - label: The support window moved, so its oldest build left it

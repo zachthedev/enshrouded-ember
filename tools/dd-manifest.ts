@@ -31,8 +31,8 @@
  * ```
  */
 
-import { Buffer } from "node:buffer";
-import { join } from "node:path";
+import { Buffer } from 'node:buffer';
+import { join } from 'node:path';
 
 /**
  * ///////////////////////////////////////////////
@@ -59,7 +59,7 @@ const STEAM3_MAGIC = 0x16349781;
 const SHA1_BYTES = 20;
 
 /** The extension DepotDownloader gives the checksum beside a cached manifest. */
-const CHECKSUM_EXTENSION = ".sha";
+const CHECKSUM_EXTENSION = '.sha';
 
 /**
  * ///////////////////////////////////////////////
@@ -112,7 +112,7 @@ export class DdManifestError extends Error {
 
   constructor(source: string, detail: string) {
     super(`${source} ${detail}`);
-    this.name = "DdManifestError";
+    this.name = 'DdManifestError';
     this.source = source;
   }
 }
@@ -137,12 +137,7 @@ class Cursor {
   readonly #source: string;
   #at: number;
 
-  constructor(
-    bytes: Uint8Array,
-    source: string,
-    at = 0,
-    end = bytes.byteLength,
-  ) {
+  constructor(bytes: Uint8Array, source: string, at = 0, end = bytes.byteLength) {
     this.#bytes = bytes.subarray(0, end);
     this.#view = new DataView(bytes.buffer, bytes.byteOffset, end);
     this.#source = source;
@@ -167,9 +162,7 @@ class Cursor {
   /** Take `length` bytes, or refuse when the file is shorter than it claims. */
   take(length: number): Uint8Array {
     if (length < 0 || length > this.remaining) {
-      throw this.fail(
-        `claims ${length} bytes at offset ${this.#at} and holds ${this.remaining}`,
-      );
+      throw this.fail(`claims ${length} bytes at offset ${this.#at} and holds ${this.remaining}`);
     }
     const slice = this.#bytes.subarray(this.#at, this.#at + length);
     this.#at += length;
@@ -245,16 +238,14 @@ function* fields(cursor: Cursor): Generator<Field> {
       cursor.take(4);
       yield { number, value: 0n, bytes: null };
     } else {
-      throw cursor.fail(
-        `carries wire type ${wire} at offset ${cursor.at}, which protobuf removed`,
-      );
+      throw cursor.fail(`carries wire type ${wire} at offset ${cursor.at}, which protobuf removed`);
     }
   }
 }
 
 /** Lowercase hex, as `sha1sum` and `Bun.CryptoHasher` write it. */
 function hex(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("hex");
+  return Buffer.from(bytes).toString('hex');
 }
 
 /**
@@ -274,15 +265,13 @@ function fileMapping(cursor: Cursor): DdManifestFile {
       bytes = field.value;
     } else if (field.number === 5 && field.bytes !== null) {
       if (field.bytes.byteLength !== SHA1_BYTES) {
-        throw cursor.fail(
-          `states a ${field.bytes.byteLength} byte content digest, and a SHA-1 is ${SHA1_BYTES}`,
-        );
+        throw cursor.fail(`states a ${field.bytes.byteLength} byte content digest, and a SHA-1 is ${SHA1_BYTES}`);
       }
       sha1 = hex(field.bytes);
     }
   }
   if (name === null || name.length === 0) {
-    throw cursor.fail("carries a file mapping with no name");
+    throw cursor.fail('carries a file mapping with no name');
   }
   if (bytes === null || bytes > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw cursor.fail(`states no readable size for ${name}`);
@@ -315,18 +304,10 @@ export function parseDdManifest(bytes: Uint8Array, source: string): DdManifest {
       break;
     }
     if (magic === STEAM3_MAGIC) {
-      throw cursor.fail(
-        "is a Steam3 binary manifest, which this does not read",
-      );
+      throw cursor.fail('is a Steam3 binary manifest, which this does not read');
     }
-    if (
-      magic !== PAYLOAD_MAGIC &&
-      magic !== METADATA_MAGIC &&
-      magic !== SIGNATURE_MAGIC
-    ) {
-      throw cursor.fail(
-        `opens a section with magic 0x${magic.toString(16)} at offset ${cursor.at - 4}`,
-      );
+    if (magic !== PAYLOAD_MAGIC && magic !== METADATA_MAGIC && magic !== SIGNATURE_MAGIC) {
+      throw cursor.fail(`opens a section with magic 0x${magic.toString(16)} at offset ${cursor.at - 4}`);
     }
     const section = cursor.section(cursor.uint32());
     if (magic === PAYLOAD_MAGIC) {
@@ -343,16 +324,16 @@ export function parseDdManifest(bytes: Uint8Array, source: string): DdManifest {
   }
 
   if (!closed) {
-    throw cursor.fail("does not end with the closing magic word");
+    throw cursor.fail('does not end with the closing magic word');
   }
   if (cursor.remaining > 0) {
     throw cursor.fail(`carries ${cursor.remaining} bytes after it ends`);
   }
   if (!payloadSeen) {
-    throw cursor.fail("carries no payload section, so it names no file");
+    throw cursor.fail('carries no payload section, so it names no file');
   }
   if (metadata === null) {
-    throw cursor.fail("carries no metadata section, so it names no manifest");
+    throw cursor.fail('carries no metadata section, so it names no manifest');
   }
 
   let depotId: number | null = null;
@@ -368,7 +349,7 @@ export function parseDdManifest(bytes: Uint8Array, source: string): DdManifest {
     }
   }
   if (depotId === null || manifestId === null) {
-    throw cursor.fail("states no depot id and manifest gid of its own");
+    throw cursor.fail('states no depot id and manifest gid of its own');
   }
   return { source, depotId, manifestId, filenamesEncrypted, files };
 }
@@ -390,30 +371,21 @@ export function parseDdManifest(bytes: Uint8Array, source: string): DdManifest {
 export async function readDdManifest(path: string): Promise<DdManifest> {
   const file = Bun.file(path);
   if (!(await file.exists())) {
-    throw new DdManifestError(path, "is not there");
+    throw new DdManifestError(path, 'is not there');
   }
   const checksumPath = `${path}${CHECKSUM_EXTENSION}`;
   const checksum = Bun.file(checksumPath);
   if (!(await checksum.exists())) {
-    throw new DdManifestError(
-      checksumPath,
-      "is not there, and it is what says the manifest beside it arrived whole",
-    );
+    throw new DdManifestError(checksumPath, 'is not there, and it is what says the manifest beside it arrived whole');
   }
   const declared = new Uint8Array(await checksum.arrayBuffer());
   if (declared.byteLength !== SHA1_BYTES) {
-    throw new DdManifestError(
-      checksumPath,
-      `holds ${declared.byteLength} bytes, and a raw SHA-1 is ${SHA1_BYTES}`,
-    );
+    throw new DdManifestError(checksumPath, `holds ${declared.byteLength} bytes, and a raw SHA-1 is ${SHA1_BYTES}`);
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const actual = new Bun.CryptoHasher("sha1").update(bytes).digest("hex");
+  const actual = new Bun.CryptoHasher('sha1').update(bytes).digest('hex');
   if (actual !== hex(declared)) {
-    throw new DdManifestError(
-      path,
-      `hashes to ${actual}, and ${checksumPath} says ${hex(declared)}`,
-    );
+    throw new DdManifestError(path, `hashes to ${actual}, and ${checksumPath} says ${hex(declared)}`);
   }
   return parseDdManifest(bytes, path);
 }
@@ -452,13 +424,13 @@ export interface Sha1Digest {
  * @returns Its size and its SHA-1, both from the one pass.
  */
 export async function sha1File(path: string): Promise<Sha1Digest> {
-  const hasher = new Bun.CryptoHasher("sha1");
+  const hasher = new Bun.CryptoHasher('sha1');
   let bytes = 0;
   for await (const chunk of Bun.file(path).stream()) {
     hasher.update(chunk);
     bytes += chunk.byteLength;
   }
-  return { bytes, sha1: hasher.digest("hex") };
+  return { bytes, sha1: hasher.digest('hex') };
 }
 
 /**

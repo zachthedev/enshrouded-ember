@@ -30,10 +30,25 @@ shellcheck = "0.11.0"
 taplo = "0.10.0"
 zizmor = "1.30.1"
 
-[settings]
-# mise refuses to install a version mise.lock does not record, so an edit to
-# [tools] with no relock is refused rather than fetched. It requires an entry
-# rather than a checksum, which is why the gate reads the lockfile itself. With
-# this line gone, `mise which` also answers out of a developer's global config
-# for a tool this repository pins nowhere.
+[tool_config]
+# The locked mode no environment variable reaches. mise refuses to install a
+# version mise.lock does not record, so an edit to [tools] with no relock is
+# refused rather than fetched. It requires an entry rather than a checksum,
+# which is why the gate reads the lockfile itself.
 locked = true
+
+[settings]
+# The same refusal at the settings level, which is what `mise which` answers
+# for: with this line gone, `mise which` resolves a tool this repository pins
+# nowhere out of a developer's global configuration. `MISE_LOCKED=false` and a
+# `locked_scopes` that drops `project` each turn this line off, and neither
+# reaches the [tool_config] line above.
+locked = true
+
+# Re-verify an attested artifact against its attestation at install time. With
+# this off, an install trusts the provenance mise.lock records and checks only
+# that the matching setting is still on, so an entry claiming an attestation it
+# does not have installs without one. A tool whose entry carries no provenance
+# line installs on its checksum either way, so this needs no allow list: the
+# per-tool provenance line in mise.lock is what makes verification required.
+locked_verify_provenance = true
