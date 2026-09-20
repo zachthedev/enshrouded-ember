@@ -971,41 +971,209 @@ mod tests {
         std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()))
     }
 
-    /// The pinned tools, as `(name, version)`.
+    /// Every tool the pin file names, as the key and its version.
     fn pinned_tools() -> Vec<(String, String)> {
-        read(".github/cargo-tools")
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(|line| {
-                let (name, version) = line
-                    .split_once('@')
-                    .unwrap_or_else(|| panic!("{line:?} is not name@version"));
-                assert!(!version.is_empty(), "{line:?} has no version");
-                (name.to_string(), version.to_string())
-            })
-            .collect()
+        crate::pins::pinned_tools(&read(crate::pins::PINS))
+            .unwrap_or_else(|problem| panic!("{problem}"))
     }
 
-    /// The pinned Go tools, each as the whole `module/path@version` entry.
+    /// The pin files, as the three texts the rules read.
+    fn pin_texts() -> (String, String, String) {
+        (
+            read(crate::pins::PINS),
+            read(crate::pins::LOCK),
+            read(crate::pins::WORKFLOW),
+        )
+    }
+
+    /// The pin files meet every rule the gate holds them to.
     ///
-    /// The path is kept whole because that is what `go install` takes and what
-    /// the gate's install command carries, so comparing the two needs no
-    /// reassembly.
-    fn pinned_go_tools() -> Vec<String> {
-        read(".github/go-tools")
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(|line| {
-                let (path, version) = line
-                    .split_once('@')
-                    .unwrap_or_else(|| panic!("{line:?} is not module@version"));
-                assert!(!version.is_empty(), "{line:?} has no version");
-                assert!(!path.is_empty(), "{line:?} has no module path");
-                line.to_string()
-            })
-            .collect()
+    /// The gate runs these same rules as its first step, before any tool, so
+    /// this is the same code rather than a second copy of it. What it covers:
+    /// locked mode is on, every version is one exact release, every coordinate
+    /// names a binary, every tool carries a checksum on every platform the
+    /// matrix installs on, the two files agree on each version, and no lockfile
+    /// entry survives a tool the pin file dropped.
+    #[test]
+    fn the_pin_files_meet_every_rule() {
+        let (pins, lock, workflow) = pin_texts();
+        let problems = crate::pins::problems(&pins, &lock, &workflow);
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// The pin file turns mise's locked mode on.
+    ///
+    /// This has a case of its own because it is the whole guarantee and it is
+    /// one line. Without it `mise install` accepts a tool the lockfile does not
+    /// name, and `mise which` answers for a tool this repository pins nowhere
+    /// out of a developer's global configuration, which the gate would then
+    /// run. The action that installs on a runner passes `--locked` itself when
+    /// it sees a lockfile, so continuous integration keeps most of the
+    /// guarantee while a developer's machine loses all of it, and that split is
+    /// what makes the loss quiet.
+    #[test]
+    fn the_pin_file_turns_locked_mode_on() {
+        assert!(
+            crate::pins::locked(&read(crate::pins::PINS)),
+            "{} does not set locked = true",
+            crate::pins::PINS
+        );
+    }
+
+    /// Every binary the gate resolves is one the pin file names, and every tool
+    /// the pin file names is one the gate resolves.
+    ///
+    /// Set equality rather than a count. A rename on one side and a rename on
+    /// the other leave the count intact while the gate resolves a name nothing
+    /// pins. A pin key is a bare registry name or a backend coordinate, and a
+    /// coordinate names an owner and a repository rather than the binary
+    /// inside, so `pins::COORDINATE_BINARIES` carries that mapping and a rename
+    /// has to touch it.
+    #[test]
+    fn the_pin_file_and_the_gate_name_the_same_binaries() {
+        // The tests step prefers cargo-nextest at run time rather than
+        // declaring it, and an analyzer is resolved without any step naming it
+        // as what it requires, so both reach the set from here.
+        let mut resolved: BTreeSet<String> = BTreeSet::new();
+        resolved.insert(PREFERRED_TEST_RUNNER.to_string());
+        for step in &STEPS {
+            if step.mise {
+                resolved.insert(step.requires.to_string());
+            }
+            if let Some(analyzer) = &step.analyzer {
+                resolved.insert(analyzer.program.to_string());
+            }
+        }
+        assert!(!resolved.is_empty(), "no gate step resolves through mise");
+
+        let pinned = crate::pins::pinned_binaries(&read(crate::pins::PINS))
+            .unwrap_or_else(|problem| panic!("{problem}"));
+        assert_eq!(
+            resolved,
+            pinned,
+            "the gate resolves {resolved:?} and {} names {pinned:?}",
+            crate::pins::PINS
+        );
+    }
+
+    // The workflow-facing rules live in tools/workflows.test.ts, which parses
+    // every job of every workflow. One rule per suite is what keeps a failure
+    // naming the thing that broke.
+
+    /// A pin file every rule accepts, for the cases below to change one thing in.
+    const SOUND_PINS: &str = concat!(
+        "[tools]\n",
+        "taplo = \"0.10.0\"\n",
+        "\"github:nextest-rs/nextest\" = { version = \"0.9.145\" }\n",
+        "\"github:bnjbvr/cargo-machete\" = \"0.9.2\"\n",
+        "\"github:rustsec/rustsec\" = \"0.22.2\"\n",
+        "\n[settings]\nlocked = true\n",
+    );
+    const SOUND_LOCK: &str = concat!(
+        "[[tools.taplo]]\nversion = \"0.10.0\"\n",
+        "[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:aa\"\n",
+        "[tools.taplo.\"platforms.windows-x64\"]\nchecksum = \"sha256:bb\"\n",
+        "[[tools.\"github:nextest-rs/nextest\"]]\nversion = \"0.9.145\"\n",
+        "[tools.\"github:nextest-rs/nextest\".\"platforms.linux-x64\"]\nchecksum = \"sha256:cc\"\n",
+        "[tools.\"github:nextest-rs/nextest\".\"platforms.windows-x64\"]\nchecksum = \"sha256:dd\"\n",
+        "[[tools.\"github:bnjbvr/cargo-machete\"]]\nversion = \"0.9.2\"\n",
+        "[tools.\"github:bnjbvr/cargo-machete\".\"platforms.linux-x64\"]\nchecksum = \"sha256:ee\"\n",
+        "[tools.\"github:bnjbvr/cargo-machete\".\"platforms.windows-x64\"]\nchecksum = \"sha256:ff\"\n",
+        "[[tools.\"github:rustsec/rustsec\"]]\nversion = \"0.22.2\"\n",
+        "[tools.\"github:rustsec/rustsec\".\"platforms.linux-x64\"]\nchecksum = \"sha256:01\"\n",
+        "[tools.\"github:rustsec/rustsec\".\"platforms.windows-x64\"]\nchecksum = \"sha256:02\"\n",
+    );
+    const SOUND_WORKFLOW: &str = "        os: [windows-latest, ubuntu-latest]\n";
+
+    /// The rules refuse each shape they name, against documents written here.
+    ///
+    /// A rule nothing can break is a rule that proves nothing, so every case is
+    /// the sound trio with one thing changed, and the sound trio sits beside
+    /// them as the control.
+    #[test]
+    fn the_pin_rules_refuse_the_shapes_they_name() {
+        assert_eq!(
+            crate::pins::problems(SOUND_PINS, SOUND_LOCK, SOUND_WORKFLOW),
+            Vec::<String>::new(),
+            "the sound documents are refused, so every case below proves nothing"
+        );
+
+        let cases: &[(&str, String, String, String, &str)] = &[
+            (
+                "locked mode off",
+                SOUND_PINS.replace("locked = true", "locked = false"),
+                SOUND_LOCK.to_string(),
+                SOUND_WORKFLOW.to_string(),
+                "does not set locked = true",
+            ),
+            (
+                "the locked line deleted",
+                SOUND_PINS.replace("\n[settings]\nlocked = true\n", ""),
+                SOUND_LOCK.to_string(),
+                SOUND_WORKFLOW.to_string(),
+                "does not set locked = true",
+            ),
+            (
+                "a checksum dropped, the platform block kept",
+                SOUND_PINS.to_string(),
+                SOUND_LOCK.replace("checksum = \"sha256:bb\"\n", ""),
+                SOUND_WORKFLOW.to_string(),
+                "taplo on windows-x64 carries no checksum",
+            ),
+            (
+                "a platform block dropped",
+                SOUND_PINS.to_string(),
+                SOUND_LOCK.replace(
+                    "[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:aa\"\n",
+                    "",
+                ),
+                SOUND_WORKFLOW.to_string(),
+                "taplo records no linux-x64 entry",
+            ),
+            (
+                "the two files disagreeing on a version",
+                SOUND_PINS.replace("taplo = \"0.10.0\"", "taplo = \"0.10.1\""),
+                SOUND_LOCK.to_string(),
+                SOUND_WORKFLOW.to_string(),
+                "pins taplo 0.10.1 and mise.lock records 0.10.0",
+            ),
+            (
+                "a range in place of an exact release",
+                SOUND_PINS.replace("taplo = \"0.10.0\"", "taplo = \"0.10\""),
+                SOUND_LOCK.to_string(),
+                SOUND_WORKFLOW.to_string(),
+                "which is not one exact release",
+            ),
+            (
+                "a lockfile entry the pin file no longer names",
+                SOUND_PINS.replace("taplo = \"0.10.0\"\n", ""),
+                SOUND_LOCK.to_string(),
+                SOUND_WORKFLOW.to_string(),
+                "locks taplo, which mise.toml no longer pins",
+            ),
+            (
+                "a runner leg with no platform",
+                SOUND_PINS.to_string(),
+                SOUND_LOCK.to_string(),
+                SOUND_WORKFLOW.replace("ubuntu-latest", "macos-latest"),
+                "macos-latest has no mise platform",
+            ),
+            (
+                "a coordinate naming no binary",
+                SOUND_PINS.replace("github:rustsec/rustsec", "github:rustsec/elsewhere"),
+                SOUND_LOCK.replace("github:rustsec/rustsec", "github:rustsec/elsewhere"),
+                SOUND_WORKFLOW.to_string(),
+                "is a coordinate no entry names a binary for",
+            ),
+        ];
+
+        for (what, pins, lock, workflow, wanted) in cases {
+            let found = crate::pins::problems(pins, lock, workflow);
+            assert!(
+                found.iter().any(|problem| problem.contains(wanted)),
+                "{what}: nothing said {wanted:?}, got {found:?}"
+            );
+        }
     }
 
     /// Every member's manifest, with the names its cargo-machete ignore list
@@ -1346,8 +1514,8 @@ mod tests {
 
     /// A count of gate steps or pinned tools in prose goes stale the next time
     /// a step or a tool is added, and nothing else notices. The authoritative
-    /// lists are `cargo xtask check`, `.github/cargo-tools` and
-    /// `.github/go-tools`, and prose names those rather than counting them.
+    /// lists are `cargo xtask check` and `mise.toml`, and prose names those
+    /// rather than counting them.
     ///
     /// Markdown and the issue forms are read whole, code blocks included, and
     /// code, configuration and the workflows contribute their comments, and a
@@ -1517,85 +1685,6 @@ mod tests {
         );
     }
 
-    /// Every tool the gate installs with `cargo install` carries a version, in
-    /// one file. A second copy of a version is a copy that drifts.
-    ///
-    /// The check runs both ways. A step whose tool is unpinned installs
-    /// whatever the registry serves today, and a pinned entry no step installs
-    /// is a version continuous integration fetches for nothing.
-    #[test]
-    fn the_pinned_tool_file_and_the_gate_name_the_same_tools() {
-        let pinned = pinned_tools();
-        assert!(!pinned.is_empty(), "the pinned tool file names nothing");
-
-        // The tests step prefers cargo-nextest at run time rather than
-        // declaring it, so its name reaches the pinned file from here.
-        assert_eq!(
-            pinned
-                .iter()
-                .filter(|(name, _)| name == PREFERRED_TEST_RUNNER)
-                .count(),
-            1,
-            "{PREFERRED_TEST_RUNNER} is not pinned once in .github/cargo-tools"
-        );
-        let mut installed: Vec<String> = vec![PREFERRED_TEST_RUNNER.to_string()];
-        for step in &STEPS {
-            let Some(package) = cargo_install_package(step.install) else {
-                continue;
-            };
-            let found = pinned.iter().filter(|(name, _)| name == package).count();
-            assert_eq!(
-                found, 1,
-                "{package} appears {found} times in .github/cargo-tools"
-            );
-            installed.push(package.to_string());
-        }
-
-        let unused: Vec<&String> = pinned
-            .iter()
-            .map(|(name, _)| name)
-            .filter(|name| !installed.contains(name))
-            .collect();
-        assert!(
-            unused.is_empty(),
-            "no gate step installs {unused:?} from .github/cargo-tools"
-        );
-    }
-
-    /// The gate names the tool it needs and the workflow installs it, so the
-    /// version has to be the same one in both places. A gate asking for one
-    /// actionlint while continuous integration installs another is a gate whose
-    /// findings nobody can reproduce.
-    ///
-    /// `cargo_install_package` reads the crates.io half of this. It returns
-    /// nothing for a `go install`, which is why this is a check of its own.
-    #[test]
-    fn the_pinned_go_tool_file_and_the_gate_name_the_same_versions() {
-        let pinned = pinned_go_tools();
-        assert!(!pinned.is_empty(), "the pinned Go tool file names nothing");
-
-        let installs: Vec<&str> = STEPS
-            .iter()
-            .map(|step| step.install)
-            .filter(|install| install.starts_with("go install "))
-            .collect();
-
-        for entry in &pinned {
-            let wanted = format!("go install {entry}");
-            assert!(
-                installs.contains(&wanted.as_str()),
-                "no gate step installs {entry}, and the steps that use `go install` are {installs:?}"
-            );
-        }
-        assert_eq!(
-            installs.len(),
-            pinned.len(),
-            "the gate has {} `go install` steps and the pinned file names {}",
-            installs.len(),
-            pinned.len()
-        );
-    }
-
     /// Ember's manifests are formatted by `taplo`, which reads `.taplo.toml`.
     /// A gate step whose configuration is absent formats whatever the tool
     /// defaults to.
@@ -1749,27 +1838,13 @@ mod tests {
         pins.push(("rust-toolchain.toml", minor));
 
         for (_, version) in pinned_tools() {
-            pins.push((".github/cargo-tools", version));
-        }
-        for entry in pinned_go_tools() {
-            let (_, version) = entry.split_once('@').expect("module@version");
-            pins.push((
-                ".github/go-tools",
-                version.trim_start_matches('v').to_string(),
-            ));
+            pins.push((crate::check::PINS, version));
         }
         pins.push((".bun-version", read(".bun-version").trim().to_string()));
-        pins.push((
-            crate::check::SHELLCHECK_PIN,
-            read(crate::check::SHELLCHECK_PIN)
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty() && !line.starts_with('#'))
-                .expect("the shellcheck pin names a release")
-                .to_string(),
-        ));
+        // mise's own release is pinned where the action that installs it is
+        // named, because mise cannot install itself.
         for line in read(".github/workflows/ci.yml").lines() {
-            if let Some(value) = line.trim().strip_prefix("go-version:") {
+            if let Some(value) = line.trim().strip_prefix("version:") {
                 pins.push((
                     ".github/workflows/ci.yml",
                     value.trim().trim_matches(['"', '\'']).to_string(),
@@ -1781,12 +1856,11 @@ mod tests {
 
     /// A version restated outside the file that pins it is a copy the next
     /// bump leaves behind. Every pin is read from its file: the toolchain
-    /// channel and its minor release, each `.github/cargo-tools` and
-    /// `.github/go-tools` entry, `.github/shellcheck-version`, `.bun-version`,
-    /// and the Go release the gate job's setup-go step takes. None of them may
-    /// appear in prose, which is
-    /// what the count check reads: every Markdown file and issue form whole,
-    /// and the comments of code, configuration and workflows.
+    /// channel and its minor release, each `mise.toml` entry, `.bun-version`,
+    /// and the mise release the gate job's install step takes. None of them
+    /// may appear in prose, which is what the count check reads: every Markdown
+    /// file and issue form whole, and the comments of code, configuration and
+    /// workflows.
     ///
     /// What passes: a version in a value, such as the pins themselves,
     /// `rust-version` in `Cargo.toml` and every lockfile; an action's version
@@ -1798,9 +1872,7 @@ mod tests {
         let pins = pinned_versions();
         for source in [
             "rust-toolchain.toml",
-            ".github/cargo-tools",
-            ".github/go-tools",
-            ".github/shellcheck-version",
+            crate::check::PINS,
             ".bun-version",
             ".github/workflows/ci.yml",
         ] {

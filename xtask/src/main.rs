@@ -16,6 +16,7 @@ mod hooks;
 mod image;
 mod kfc;
 mod loca;
+mod pins;
 #[cfg(test)]
 mod policy;
 mod proc;
@@ -76,6 +77,8 @@ enum Command {
     Scopes,
     /// Run every gate step in order and stop at the first failure.
     Check,
+    /// Hold mise.toml and mise.lock to their rules, which the gate does first.
+    Pins,
     /// Manage the repository's git hooks.
     #[command(subcommand)]
     Hooks(HooksCommand),
@@ -254,6 +257,13 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
             Ok(true)
         }
         Command::Check => check::run(ui),
+        Command::Pins => {
+            let problems = check::pin_problems(&workspace_root());
+            for problem in &problems {
+                ui.line(problem);
+            }
+            Ok(problems.is_empty())
+        }
         Command::Hooks(HooksCommand::Install) => hooks::install(ui).map(|()| true),
         Command::Server(command) => {
             let root = root::DevRoot::resolve(cli.global.root.as_deref())?;

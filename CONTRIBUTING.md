@@ -1,5 +1,13 @@
 # Contributing
 
+The gate opens by holding `mise.toml` and `mise.lock` to their rules, before it
+runs any tool. `cargo xtask pins` runs that on its own. A lockfile entry with a
+url and no checksum installs whatever the url serves, so a rule that ran later
+would report a finding about a binary that had already executed. The steps after
+it:
+
+| Step | What it checks
+
 ## Toolchain
 
 `rust-toolchain.toml` pins the Rust release, and rustup installs it on the first
@@ -7,41 +15,32 @@ cargo command. A C toolchain is needed for MinHook, the hook engine.
 [Bun](https://bun.sh) runs the repository's own tooling, at the release
 `.bun-version` pins. Continuous integration reads the same file.
 
-The gate calls tools that rustup does not install. `.github/cargo-tools` pins
-the crates.io packages among them, and `.github/go-tools` pins the Go programs,
-which need [Go](https://go.dev) to install. The versions live in those files and
-nowhere else, so this installs what continuous integration installs:
-
-```powershell
-cargo install --locked @(Get-Content .github/cargo-tools | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })
-Get-Content .github/go-tools | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() } | ForEach-Object { go install $_ }
-```
-
-On a shell without PowerShell:
+The gate calls tools that rustup, cargo and bun do not provide.
+[mise](https://mise.jdx.dev) installs every one of them. `mise.toml` pins a
+version per tool and `mise.lock` records a checksum per platform, so an install
+takes the recorded artifact or fails. Install mise, then:
 
 ```sh
-cargo install --locked $(grep -v '^#' .github/cargo-tools | grep .)
-grep -v '^#' .github/go-tools | grep . | xargs -n 1 go install
+mise install
 ```
 
-The gate needs ShellCheck too, which actionlint shells out to. Its release is in
-`.github/shellcheck-version`, and the gate refuses the `actionlint` step unless
-the binary on `PATH` reports that one:
+Nothing from that lands on `PATH`. The gate asks `mise which` for each binary
+and runs the path it gives back, so the binary it checked is the binary it ran.
+Turning on `mise activate` in a shell puts the same binaries on `PATH` under
+their own names, which is what makes `cargo nextest run` and its siblings work
+at a prompt. The split is deliberate: a check runs the binary it resolved, and a
+person gets the convenience.
 
-```powershell
-$release = @(Get-Content .github/shellcheck-version | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() })[0]
-winget install --id koalaman.shellcheck --version $release
-```
-
-No single command installs ShellCheck on every host. winget names the package
-`koalaman.shellcheck`, while apt and brew name it `shellcheck`, and each serves
-a release of its own. Continuous integration sidesteps that with an installer
-that takes one coordinate everywhere, which a contributor has no equivalent of.
-
-On another host, take the pinned release from
-[the ShellCheck releases](https://github.com/koalaman/shellcheck/releases) and
-put it on `PATH`. A release the pin file does not name is refused by name, so a
-wrong install fails at the gate rather than reading a script under other rules.
+`taplo` is the one tool whose checksum does not come from its publisher. GitHub
+began recording a digest for release assets after the taplo release `mise.toml`
+pins was published, so its hashes were computed here and committed. They say the
+bytes came from that release URL and that every install since has to match them,
+which is narrower than a digest the publisher recorded and is not provenance.
+Bumping taplo writes a lockfile entry with no checksum at all, which the gate's
+own tests refuse, so whoever bumps it computes and commits the new hashes. A
+relock at the same version keeps them, so only a bump drops them. put it on
+`PATH`. A release the pin file does not name is refused by name, so a wrong
+install fails at the gate rather than reading a script under other rules.
 
 ## The gate
 
@@ -80,13 +79,13 @@ including whether a `needs.<job>.outputs.<name>` names an output that job
 declares. `build-watch.yml` hands every decision between its jobs through those
 outputs, and a misspelled one reads as an empty string rather than an error.
 
-Its shellcheck pass is on, and `.github/shellcheck-version` holds the release
-every host installs. actionlint shells out to an analyzer it finds on `PATH` and
-says nothing at all when it does not, so the gate refuses the `actionlint` step
-unless the binary reports that release. Both matrix legs then read the shell in
-a `run:` block the same way. pyflakes stays off, because no Windows package
-manager ships it and leaving it on would have the quiet leg report a pass for an
-analysis it never ran.
+Its shellcheck pass is on, and `mise.toml` holds the version every host
+installs. actionlint shells out to an analyzer it finds on `PATH` and says
+nothing at all when it does not, so the gate hands it the path mise resolved and
+refuses the step unless that binary reports the pinned version. Both matrix legs
+then read the shell in a `run:` block the same way. pyflakes stays off, because
+no Windows package manager ships it and leaving it on would have the quiet leg
+report a pass for an analysis it never ran.
 
 `zizmor` audits the same files for supply chain and credential problems: an
 action not pinned to a commit, a checkout that leaves a credential behind, a
