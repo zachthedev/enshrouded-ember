@@ -171,15 +171,31 @@ overrides it. `cargo xtask --help` lists every command, and each one takes
 ## The build watcher and the archive
 
 `tools/` holds the Bun scripts behind the build watcher and the archive.
-`build-watch.yml` runs the watcher on the schedule its `cron` line sets, then
-has the archive client ask the bucket whether the build the public branch names
-is archived, and archives it when it is not.
+`build-watch.yml` watches the dedicated server on the schedule its `cron` line
+sets, then has the archive client ask the bucket whether the build the public
+branch names is archived, and archives it when it is not.
 
 `watch-builds.ts` reads the output of SteamCMD `app_info_print` and appends a
 row to `data/steam-builds.jsonl` when a branch build id or a depot manifest gid
 moves. Valve serves that output directly, so the record depends on no scraper.
 The project owns its build history from the first run, because none of the
 keyless routes to Steam carries any history at all.
+
+`client-build-watch.yml` runs the same script against the Enshrouded client on
+a schedule of its own and appends to the same record. It is a workflow rather
+than another job because GitHub titles a failed run after the workflow and
+names nothing inside it, so a client read that fails says which application it
+was in the title. Nothing downstream reads the client rows: no depot of the
+client's is archived, and `loca extract` takes the client build id from an
+installed client rather than from the record.
+
+Both watchers push that one file, and a rebase replays an append onto a last
+line the other just wrote, which conflicts. The two jobs therefore share one
+concurrency group, named for the record rather than for either workflow, and a
+group name is repository-scoped so one name serializes jobs across workflows.
+The two schedules also sit a stated distance apart, which keeps them from
+contending for the group at all, because a run held for a group can be
+cancelled by the next one arriving. Cases hold both.
 
 `archive.ts` moves a build in and out of the R2 archive. Steam serves a depot
 manifest only while it is current, so a build that is not archived inside the

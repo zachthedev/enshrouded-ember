@@ -1,0 +1,115 @@
+name: client-build-watch
+
+# Reads what Steam advertises for the Enshrouded client, app 1203620, and
+# appends a row to the same record the dedicated server's rows live in.
+#
+# The name above is load-bearing. GitHub titles the notification for a failed
+# run after the workflow and names nothing inside it, so a client read that
+# fails reads as "client-build-watch workflow run failed for main branch". The
+# server pipeline produces a different sentence, and a reader tells the two
+# apart without opening either run.
+#
+# The client is a separate Steam application with its own buildid series.
+# Nothing downstream reads its row: no depot of its is archived, and
+# `cargo xtask loca extract` takes the client build id from an installed
+# client's own app manifest rather than from this record.
+#
+# Both workflows append to data/steam-builds.jsonl and both push, so two runs
+# overlapping would rebase one onto a last line the other just wrote. The
+# shared concurrency group on the job below is what stops that. The minute
+# below keeps the two from contending for the group in the first place, which
+# is worth having because a run held for the group can be cancelled by the
+# next one. A case holds the minutes a stated distance apart.
+#
+# The note in build-watch.yml about GitHub disabling a schedule in a quiet
+# repository applies to this file the same way.
+on:
+  schedule:
+    - cron: '47 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  APP_CLIENT: '1203620'
+  # The same image and the same Bun archive the server pipeline pins. A case
+  # holds every value named in more than one workflow to one spelling.
+  STEAMCMD_IMAGE: steamcmd/steamcmd@sha256:bf25fdfcfd8245a7f7b3dccfa0fe42004621aa99eb80166fc26f9d75083e8356
+  BUN_SHA256: 36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913
+
+jobs:
+  # Reads one application and records it. It holds the deploy key because it
+  # pushes, and no archive credential reaches it: nothing here fetches a build
+  # or writes to the bucket.
+  client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: digest-push
+    # The same name the server watcher holds. Both jobs append to the end
+    # of data/steam-builds.jsonl and push it, and a group name is
+    # repository-scoped, so this one name is what serializes the two
+    # across workflows. A case holds them to the same name.
+    concurrency:
+      group: steam-builds-record-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      # Checked out over SSH with the ember-ci deploy key, because main
+      # requires a pull request and a deploy key is the only actor that
+      # bypasses that rule. This job's own GITHUB_TOKEN has no bypass, so a
+      # push over HTTPS is refused.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # This job pushes, so the key stays in the checkout for the push.
+        with: # zizmor: ignore[artipacked]
+          ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
+
+      - name: Install Bun, pinned and checked
+        run: |
+          version="$(tr -d '[:space:]' < .bun-version)"
+          curl --fail --silent --show-error --location --output bun.zip \
+            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
+          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
+          unzip -q bun.zip
+          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+
+      # --ignore-scripts because the root `prepare` sets core.hooksPath to
+      # .githooks, whose pre-push runs the whole gate. The runner has no tool
+      # belt, so the gate exits non-zero and the push below is refused.
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # app_info_update 1 forces a fresh fetch. Without it a cold SteamCMD
+      # prints an empty block, which the watcher refuses rather than recording.
+      #
+      # The container gets no environment, no volume and no token, so its only
+      # channel out is the stdout redirect. The step timeout bounds a container
+      # that never returns, which would otherwise hold this workflow's whole
+      # budget.
+      - name: Read what Steam advertises for the client
+        timeout-minutes: 5
+        run: |
+          mkdir -p .watch
+          docker run --rm "$STEAMCMD_IMAGE" \
+            +login anonymous \
+            +app_info_update 1 \
+            +app_info_print "$APP_CLIENT" \
+            +quit > ".watch/appinfo-$APP_CLIENT.txt"
+
+      # No --depot. A depot gid names a build to fetch and archive, and no
+      # depot of the client's is archived.
+      - id: client
+        name: Record the client's build state
+        run: |
+          bun run tools/watch-builds.ts \
+            "$APP_CLIENT" ".watch/appinfo-$APP_CLIENT.txt"
+
+      - name: Commit the record
+        if: steps.client.outputs.changed == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/steam-builds.jsonl
+          git diff --cached --quiet || git commit -m 'chore(ci): record what Steam advertises for the client'
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push

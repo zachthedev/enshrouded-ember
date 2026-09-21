@@ -75,6 +75,18 @@ const PUSH_KEY_SECRET = 'EMBER_CI_SSH_KEY';
 const UNGATED_ENVIRONMENTS = ['archive-read', 'digest-push'];
 
 /**
+ * How far apart two scheduled workflows come due, in minutes.
+ *
+ * @remarks
+ * Two hourly crons can be at most thirty apart, so this is a floor rather than
+ * a target. What it has to clear is the longest a job can run, because a job
+ * still running when the other comes due is the case the spacing exists to
+ * avoid. The case below asserts that, so raising a job's timeout past this
+ * number turns the suite red rather than quietly shortening the margin.
+ */
+const MINUTES_APART = 20;
+
+/**
  * Triggers that carry repository secrets on an event a fork can influence.
  *
  * @remarks
@@ -157,7 +169,10 @@ describe('the workflows', () => {
         ).toBe(pushes);
       }
     }
-    expect(pushing, 'no job pushes, so this case checked nothing').toBe(2);
+    // Held to an exact number in both directions. Zero means the rule above
+    // read nothing, and any other change means a pusher was added or lost
+    // without anybody weighing what it does to main.
+    expect(pushing, 'the jobs that push are not the ones this rule was written against').toBe(3);
   });
 
   /**
@@ -384,16 +399,17 @@ describe('the workflows', () => {
    * clicks, and a build that moves in the meantime is past its manifest by the
    * time the fetch runs.
    *
-   * Every group therefore sits on the job that needs it. A job that pushes
-   * needs one, because two pushers racing the same record is the other way
-   * this file loses work.
+   * The group therefore sits on the job that waits rather than on the
+   * workflow. A job whose environment is on `UNGATED_ENVIRONMENTS` starts
+   * immediately, so it holds no group for a wait and needs none on this
+   * account. Reading the bare presence of an environment instead would demand
+   * a group of the hourly bucket check, which serializes a job that races
+   * nothing.
    *
-   * A job whose environment is on `UNGATED_ENVIRONMENTS` starts immediately,
-   * so it holds no group for a wait and needs none on this account. Reading
-   * the bare presence of an environment instead would demand a group of the
-   * hourly bucket check, which serializes a job that races nothing.
+   * What a pushing job needs is the case below, which covers every workflow
+   * rather than only one with an approval gate.
    */
-  test('a workflow with an approval gate keeps concurrency on the jobs', () => {
+  test('a workflow with an approval gate keeps concurrency off the workflow', () => {
     let checked = 0;
     for (const workflow of loaded) {
       const jobs = Object.entries(workflow.parsed.jobs ?? {});
@@ -406,17 +422,12 @@ describe('the workflows', () => {
         `${workflow.name} holds a workflow-level concurrency group while one ` + 'of its jobs waits for an approval',
       ).toBeUndefined();
       for (const [jobName, job] of jobs) {
-        const steps = Array.isArray(job['steps']) ? job['steps'] : [];
-        const pushes = steps.some((step) => {
-          const script = (step as Record<string, unknown>)['run'];
-          return typeof script === 'string' && /\bgit push\b/.test(script);
-        });
-        if (!pushes && !waitsForApproval(job)) {
+        if (!waitsForApproval(job)) {
           continue;
         }
         expect(
           (job['concurrency'] as { group?: string } | undefined)?.group,
-          `${workflow.name} job ${jobName} pushes or waits for an approval ` + 'with no concurrency group of its own',
+          `${workflow.name} job ${jobName} waits for an approval with no ` + 'concurrency group of its own',
         ).toEqual(expect.any(String));
       }
     }
@@ -424,12 +435,67 @@ describe('the workflows', () => {
   });
 
   /**
+   * Every job that pushes holds a concurrency group, and the jobs committing
+   * one file hold the same group.
+   *
+   * Two runs appending to the end of one record and pushing it is the race.
+   * The loser's `git pull --rebase` hits a content conflict rather than
+   * replaying, and a `run:` block is `bash -e`, so the step dies before the
+   * push. A group per job serializes each against itself and neither against
+   * the other, which is no help when the two sit in different workflows.
+   *
+   * A group name is repository-scoped, so one name is the whole mechanism.
+   * That is GitHub's documented behavior rather than something measured here.
+   *
+   * Read from `git add`, because the path a job stages is what says which
+   * record it writes. Jobs committing different files rebase past each other
+   * cleanly and need no shared name.
+   */
+  test('jobs that commit one record hold one concurrency group', () => {
+    const byPath = new Map<string, Map<string, string>>();
+    let checked = 0;
+    for (const workflow of loaded) {
+      for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
+        const scripts = (Array.isArray(job['steps']) ? job['steps'] : [])
+          .map((step) => (step as Record<string, unknown>)['run'])
+          .filter((script): script is string => typeof script === 'string');
+        if (!scripts.some((script) => /\bgit push\b/.test(script))) {
+          continue;
+        }
+        checked += 1;
+        const group = (job['concurrency'] as { group?: string } | undefined)?.group;
+        expect(
+          group,
+          `${workflow.name} job ${jobName} pushes with no concurrency group, ` +
+            'so nothing holds it apart from another run',
+        ).toEqual(expect.any(String));
+        for (const script of scripts) {
+          for (const staged of script.matchAll(/\bgit add\s+(\S+)/g)) {
+            const path = staged[1] as string;
+            const holders = byPath.get(path) ?? new Map<string, string>();
+            holders.set(String(group), `${workflow.name} job ${jobName}`);
+            byPath.set(path, holders);
+          }
+        }
+      }
+    }
+    for (const [path, holders] of byPath) {
+      expect(
+        [...holders.keys()],
+        `the jobs committing ${path} hold different concurrency groups, so ` +
+          `neither is held apart from the other: ` +
+          [...holders].map(([group, job]) => `${job} under ${group}`).join(', '),
+      ).toHaveLength(1);
+    }
+    expect(checked, 'no job pushes, so this case checked nothing').toBeGreaterThan(0);
+  });
+
+  /**
    * A job gated on another job's outputs is skipped when that job goes red,
    * because GitHub applies `success()` where no status function is written.
-   * The watch job reads the client application, which steers nothing and is
-   * allowed to fail the run, so the archive path has to say `!cancelled()` or
-   * a client-side failure stops the archive while the message names only the
-   * client.
+   * The watch job can fail after it has written the manifest id, and a build
+   * detected and then dropped is one the bucket never gets: the archiving
+   * window closes when Keen's next build rolls the manifest.
    */
   test("every job gated on another job's outputs says !cancelled()", () => {
     let checked = 0;
@@ -448,6 +514,209 @@ describe('the workflows', () => {
       }
     }
     expect(checked, 'no job is gated on another job, so this case checked nothing').toBeGreaterThan(0);
+  });
+
+  /**
+   * Each Steam application is read by one workflow, and that workflow reads no
+   * other.
+   *
+   * GitHub titles the notification for a failed run after the workflow and
+   * names nothing inside it, so a workflow covering two applications sends one
+   * sentence for two problems with unrelated causes. Keeping them apart is
+   * what makes the title say which one.
+   *
+   * Read from the SteamCMD command that names an application rather than from
+   * the environment. An id written straight into a `docker run` line carries
+   * no environment key at all, and reading keys alone passes exactly the edit
+   * this rule exists to refuse: a second read put back into the server
+   * pipeline with the number inline.
+   *
+   * So the argument has to be an environment reference, which is also what
+   * keeps one workflow's id in one place.
+   */
+  test('each Steam application is read by one workflow, which reads no other', () => {
+    const seen = new Map<string, string>();
+    let checked = 0;
+    for (const workflow of loaded) {
+      const env = (workflow.parsed.env ?? {}) as Record<string, unknown>;
+      const read = new Map<string, string>();
+      for (const { job, step } of jobSteps(workflow.parsed)) {
+        const script = String(step['run'] ?? '');
+        for (const call of script.matchAll(/\+app_(?:info_print|update)\s+(\S+)/g)) {
+          const argument = call[1] as string;
+          const reference = /^"?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?$/.exec(argument);
+          expect(
+            reference?.[1],
+            `${workflow.name} job ${job} names application ${argument} in the ` +
+              'command itself, so no environment key holds it and nothing can ' +
+              'tell which application this workflow reads',
+          ).toBeDefined();
+          const value = env[reference?.[1] ?? ''];
+          expect(
+            value,
+            `${workflow.name} job ${job} reads $${String(reference?.[1])}, ` + 'which its environment does not set',
+          ).toBeDefined();
+          read.set(String(value), `${job} reads $${String(reference?.[1])}`);
+        }
+      }
+      if (read.size === 0) {
+        continue;
+      }
+      checked += 1;
+      expect(
+        [...read.keys()],
+        `${workflow.name} reads more than one Steam application, so one run ` +
+          `covers two with unrelated causes of failure: ` +
+          [...read].map(([id, where]) => `${id} where ${where}`).join(', '),
+      ).toHaveLength(1);
+      const id = [...read.keys()][0] as string;
+      const already = seen.get(id);
+      expect(already, `${workflow.name} reads application ${id}, and so does ${String(already)}`).toBeUndefined();
+      seen.set(id, workflow.name);
+    }
+    expect(checked, 'no workflow reads a Steam application, so this case checked nothing').toBeGreaterThan(0);
+  });
+
+  /**
+   * Two scheduled workflows come due far enough apart to stay out of each
+   * other's way.
+   *
+   * The shared concurrency group is what actually serializes the two record
+   * writers, so this is the second line: two runs spaced further apart than a
+   * job can occupy never contend for the group, and a run held for a group can
+   * be cancelled by the next one arriving.
+   *
+   * `MINUTES_APART` is the spacing, and it is the longest budget either
+   * record-writing job declares. Closer than its own timeout and a job can
+   * still be running when the other comes due.
+   *
+   * A minute that is not one number comes due more than once an hour and can
+   * land on any other, so it is refused rather than measured.
+   */
+  test('scheduled workflows come due a stated distance apart', () => {
+    // The spacing has to clear the longest a job can run, or the two can
+    // overlap while both crons are punctual.
+    for (const workflow of loaded) {
+      for (const [jobName, job] of Object.entries(workflow.parsed.jobs ?? {})) {
+        const budget = job['timeout-minutes'];
+        if (typeof budget !== 'number') {
+          continue;
+        }
+        const pushes = (Array.isArray(job['steps']) ? job['steps'] : []).some((step) => {
+          const script = (step as Record<string, unknown>)['run'];
+          return typeof script === 'string' && /\bgit push\b/.test(script);
+        });
+        if (!pushes) {
+          continue;
+        }
+        expect(
+          budget,
+          `${workflow.name} job ${jobName} may run for ${budget} minutes, ` +
+            'which is longer than the spacing between two schedules',
+        ).toBeLessThanOrEqual(MINUTES_APART);
+      }
+    }
+
+    const minutes = new Map<number, string>();
+    let checked = 0;
+    for (const workflow of loaded) {
+      const schedule = (workflow.parsed.on ?? {})['schedule'];
+      if (!Array.isArray(schedule)) {
+        continue;
+      }
+      for (const entry of schedule) {
+        const cron = String(field(entry, 'cron') ?? '');
+        const minute = cron.split(/\s+/)[0] ?? '';
+        checked += 1;
+        expect(minute, `${workflow.name} schedules on "${cron}", whose minute is not one number`).toMatch(/^\d{1,2}$/);
+        const due = Number(minute);
+        for (const [taken, other] of minutes) {
+          // Around the hour rather than along it, so minute 5 and minute 58
+          // read as seven apart.
+          const gap = Math.abs(due - taken);
+          expect(
+            Math.min(gap, 60 - gap),
+            `${workflow.name} comes due at minute ${due} and ${other} at ` +
+              `minute ${taken}, which is closer than a job can run`,
+          ).toBeGreaterThanOrEqual(MINUTES_APART);
+        }
+        minutes.set(due, workflow.name);
+      }
+    }
+    expect(checked, 'no workflow runs on a schedule, so this case checked nothing').toBeGreaterThan(0);
+  });
+
+  /**
+   * A pinned digest is spelled one way everywhere it appears.
+   *
+   * The container image and the Bun archive are both bumped by hand and both
+   * appear in more than one workflow. A bump reaching one file and not the
+   * other leaves a workflow running an image, or unpacking an archive, the
+   * repository no longer claims.
+   *
+   * Matched on the shape of the value rather than the name above it. A key
+   * comparison passes a drifted digest under a renamed key, and reading
+   * workflow-level `env` alone passes one moved into a job's own block. The
+   * text of the file has neither escape.
+   *
+   * This repository pins one image and one archive, so more than one spelling
+   * of either is drift by construction. A second image added on purpose turns
+   * this red, which is the point at which somebody decides rather than drifts.
+   */
+  test('a pinned digest is spelled one way in every workflow', () => {
+    const found = new Map<string, Map<string, string>>([
+      ['container image', new Map()],
+      ['archive digest', new Map()],
+    ]);
+    for (const workflow of loaded) {
+      for (const image of workflow.text.matchAll(/[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}/g)) {
+        (found.get('container image') as Map<string, string>).set(image[0], workflow.name);
+      }
+      // The digest inside a container reference is already covered above, and
+      // a commit pin is forty characters rather than sixty-four.
+      for (const digest of workflow.text.matchAll(/(?<![0-9a-f:@])[0-9a-f]{64}(?![0-9a-f])/g)) {
+        (found.get('archive digest') as Map<string, string>).set(digest[0], workflow.name);
+      }
+    }
+    for (const [kind, spellings] of found) {
+      expect(spellings.size, `the workflows pin no ${kind}, so this case checked nothing`).toBeGreaterThan(0);
+      expect(
+        [...spellings],
+        `the workflows pin more than one ${kind}: ` + [...spellings].map(([v, w]) => `${v} in ${w}`).join(', '),
+      ).toHaveLength(1);
+    }
+  });
+
+  /**
+   * A variable a script reads is set in the workflow that runs it.
+   *
+   * The digest check and the container run both take their value from the
+   * environment, and an undefined one leaves `sha256sum` reading a malformed
+   * line or `docker run` reaching for an empty image. The rule above holds
+   * every spelling of a digest equal, which says nothing when a workflow stops
+   * naming one at all, so this is what notices a value going missing from one
+   * file rather than from all of them.
+   */
+  test('a script that checks a digest or runs a container names a variable its workflow sets', () => {
+    let checked = 0;
+    for (const workflow of loaded) {
+      const env = (workflow.parsed.env ?? {}) as Record<string, unknown>;
+      for (const { job, step } of jobSteps(workflow.parsed)) {
+        const script = String(step['run'] ?? '');
+        const wanted = [
+          ...[...script.matchAll(/echo "\$([A-Z0-9_]+) .*sha256sum --check/g)].map((m) => m[1] as string),
+          ...[...script.matchAll(/\bdocker\s+run\b[^\n]*\$\{?([A-Z0-9_]*_IMAGE)\}?/g)].map((m) => m[1] as string),
+        ];
+        for (const name of wanted) {
+          checked += 1;
+          expect(
+            env[name],
+            `${workflow.name} job ${job} reads $${name}, which its environment does not set`,
+          ).toBeDefined();
+        }
+      }
+    }
+    expect(checked, 'no script checks a digest or runs a container, so this case checked nothing').toBeGreaterThan(0);
   });
 
   /**
@@ -764,10 +1033,14 @@ function field(value: unknown, key: string): unknown {
 
 /**
  * The inline zizmor ignore comments this repository has decided on, as
- * `file:audit`. Both answer `artipacked` on a checkout whose job pushes over
- * SSH, which needs the key to stay in the checkout.
+ * `file:audit`. Every one answers `artipacked` on a checkout whose job pushes
+ * over SSH, which needs the key to stay in the checkout.
  */
-const ALLOWED_ZIZMOR_IGNORES = ['build-watch.yml:artipacked', 'build-watch.yml:artipacked'];
+const ALLOWED_ZIZMOR_IGNORES = [
+  'build-watch.yml:artipacked',
+  'build-watch.yml:artipacked',
+  'client-build-watch.yml:artipacked',
+];
 
 describe('the GitHub configuration', () => {
   /**
