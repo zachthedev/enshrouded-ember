@@ -23,6 +23,7 @@ mod proc;
 mod root;
 mod schema;
 mod server;
+mod sig;
 mod steam;
 #[cfg(test)]
 mod testutil;
@@ -88,6 +89,9 @@ enum Command {
     /// Recover the reflection schema from a build, and diff two recoveries.
     #[command(subcommand)]
     Schema(SchemaCommand),
+    /// Follow a hooked address from one build into the next.
+    #[command(subcommand)]
+    Sig(SigCommand),
     /// Write a client build's localization tables out, for looking up tag ids.
     #[command(subcommand)]
     Loca(LocaCommand),
@@ -189,6 +193,89 @@ enum SchemaCommand {
     },
 }
 
+/// The Java heap a headless Ghidra run gets when none is named.
+///
+/// Ghidra's own wrapper pins it at 2G, which the 22 MB server image outgrows
+/// during analysis.
+const DEFAULT_HEAP: &str = "4G";
+
+/// Seconds an analysis may take before it is stopped.
+///
+/// Analysis of this image costs a quarter of an hour of its own, and reaches
+/// half an hour of wall time when the machine is busy.
+const ANALYZE_TIMEOUT: u64 = 3600;
+
+/// Seconds an export may take before it is stopped.
+const EXPORT_TIMEOUT: u64 = 1800;
+
+/// Seconds a diff may take before it is stopped.
+const DIFF_TIMEOUT: u64 = 900;
+
+#[derive(Subcommand)]
+enum SigCommand {
+    /// Import a build into a Ghidra project and seed its program entries.
+    Analyze {
+        #[arg(long, value_name = "BUILDID")]
+        build: Option<String>,
+        /// Server executable to read instead of a fetched or archived build's.
+        #[arg(long, value_name = "EXE")]
+        server: Option<PathBuf>,
+        /// An address to create a function at, beyond the program entries.
+        /// Repeatable.
+        #[arg(long, value_name = "HEX")]
+        address: Vec<String>,
+        /// Java heap ceiling for the run.
+        #[arg(long, value_name = "SIZE", default_value = DEFAULT_HEAP)]
+        heap: String,
+        /// Seconds the run may take before it is stopped.
+        #[arg(long, value_name = "SECONDS", default_value_t = ANALYZE_TIMEOUT)]
+        timeout: u64,
+        /// Replace a program the project already holds, discarding its
+        /// analysis.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Write an analyzed project out as a `BinExport` file.
+    Export {
+        #[arg(long, value_name = "BUILDID")]
+        build: Option<String>,
+        /// Server executable naming the program, when it is not the fetched
+        /// or archived build's.
+        #[arg(long, value_name = "EXE")]
+        server: Option<PathBuf>,
+        #[arg(long, value_name = "SIZE", default_value = DEFAULT_HEAP)]
+        heap: String,
+        #[arg(long, value_name = "SECONDS", default_value_t = EXPORT_TIMEOUT)]
+        timeout: u64,
+    },
+    /// Diff a pair of exports, oldest first.
+    Diff {
+        /// Buildid of the build whose addresses are known.
+        old: String,
+        /// Buildid of the build whose addresses are wanted.
+        new: String,
+        #[arg(long, value_name = "SECONDS", default_value_t = DIFF_TIMEOUT)]
+        timeout: u64,
+    },
+    /// Print what the diff proposes for each address.
+    Read {
+        /// Buildid of the build whose addresses are known.
+        old: String,
+        /// Buildid of the build whose addresses are wanted.
+        new: String,
+        /// An address to look up. Repeatable.
+        #[arg(long, value_name = "HEX")]
+        address: Vec<String>,
+        /// Which build the addresses belong to.
+        #[arg(long, value_name = "SIDE", default_value = "primary",
+              value_parser = ["primary", "secondary"])]
+        side: String,
+        /// Also print this many of the largest matches that moved.
+        #[arg(long, value_name = "COUNT", default_value_t = 0)]
+        moved: u32,
+    },
+}
+
 #[derive(Subcommand)]
 enum LocaCommand {
     /// Write one table per language to `<root>/.cache/loca/<buildid>`.
@@ -272,6 +359,10 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
         Command::Schema(command) => {
             let root = root::DevRoot::resolve(cli.global.root.as_deref())?;
             schema::run(command, &root, ui)
+        }
+        Command::Sig(command) => {
+            let root = root::DevRoot::resolve(cli.global.root.as_deref())?;
+            sig::run(command, &root, ui)
         }
         Command::Loca(command) => {
             let root = root::DevRoot::resolve(cli.global.root.as_deref())?;

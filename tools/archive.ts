@@ -1100,31 +1100,113 @@ async function commandEmit(options: Options): Promise<never> {
 async function commandAppend(options: Options): Promise<never> {
   section('append');
   const recordPath = options.record ?? BUILD_DIGESTS_PATH;
-  const raw = required(options, 'row');
+  const checked = parseRowArgument(required(options, 'row'), 'nothing appended');
 
+  if ((await digestRow(checked.manifestId, recordPath)) !== null) {
+    row(true, `${checked.manifestId} already has a row`);
+    summary('nothing appended, and nothing is wrong: the row this job was handed ' + 'is already in the record', false);
+  }
+
+  await appendRecord(recordPath, BuildDigestRecord, checked);
+  for (const [fileName, digest] of Object.entries(checked.files)) {
+    row(true, `${fileName} ${digest.bytes} bytes ${dim(digest.sha256)}`);
+  }
+  summary(`one row appended to ${recordPath}`, false);
+}
+
+/**
+ * Read a digest row that arrived as a string from outside this process.
+ *
+ * @remarks
+ * A row crossing a job boundary is text until something checks it, so it is
+ * held to the same shape a read of the record enforces.
+ *
+ * @param raw - The row, as one JSON line.
+ * @param nothing - What the closing line says when the row is refused.
+ * @returns The row.
+ */
+function parseRowArgument(raw: string, nothing: string): BuildDigestRecord {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
     row(false, `--row is not JSON: ${(error as Error).message}`);
-    summary('nothing appended', true);
+    summary(nothing, true);
   }
   const checked = BuildDigestRecord.safeParse(parsed);
   if (!checked.success) {
     row(false, `--row is not a digest row: ${z.prettifyError(checked.error)}`);
-    summary('nothing appended', true);
+    summary(nothing, true);
+  }
+  return checked.data;
+}
+
+/**
+ * Name the archived build one patch before another.
+ *
+ * @remarks
+ * The schema diff compares a new build against the one it follows, and this is
+ * what decides which build that is. Builds are ordered by the revision in each
+ * one's own `enshrouded_server.kfc` header rather than by the order rows were
+ * recorded: the record is append-only and a backfill appends in whatever order
+ * the builds were recovered, so file order says when a row was written while
+ * the revision says which build Keen shipped first.
+ *
+ * The subject's own row may not be committed yet. The archive job builds the
+ * row and hands it on, and the job that commits it runs later, so `--row` names
+ * that row directly. The candidates come from the record either way, because a
+ * build worth diffing against is one the archive holds.
+ */
+async function commandPrevious(options: Options): Promise<never> {
+  section('previous');
+  const recordPath = options.record ?? BUILD_DIGESTS_PATH;
+  const manifestId = required(options, 'manifest');
+  const nothing = 'nothing says which build this one follows';
+  const subject =
+    options.row === undefined ? await digestRow(manifestId, recordPath) : parseRowArgument(options.row, nothing);
+
+  if (subject === null) {
+    row(false, `${manifestId} has no row in ${recordPath}`);
+    summary(nothing, true);
+  }
+  if (subject.manifestId !== manifestId) {
+    row(false, `--row is the row for ${subject.manifestId}, and --manifest names ${manifestId}`);
+    summary(nothing, true);
+  }
+  const revision = subject.revision;
+  if (revision === null) {
+    row(false, `${manifestId} has no revision, and the revision is what orders the builds`);
+    summary(nothing, true);
   }
 
-  if ((await digestRow(checked.data.manifestId, recordPath)) !== null) {
-    row(true, `${checked.data.manifestId} already has a row`);
-    summary('nothing appended, and nothing is wrong: the row this job was handed ' + 'is already in the record', false);
+  // A row with no revision is not a candidate. Its build cannot be placed in
+  // the order at all, so answering with it would mean naming a build that may
+  // not be the one before this.
+  const rows = await readRecords(recordPath, BuildDigestRecord);
+  const behind = rows.filter(
+    (other) => other.manifestId !== manifestId && other.revision !== null && other.revision < revision,
+  );
+  if (behind.length === 0) {
+    row(false, `${recordPath} records no build before revision ${revision}`);
+    summary(nothing, true);
   }
 
-  await appendRecord(recordPath, BuildDigestRecord, checked.data);
-  for (const [fileName, digest] of Object.entries(checked.data.files)) {
-    row(true, `${fileName} ${digest.bytes} bytes ${dim(digest.sha256)}`);
+  const newest = Math.max(...behind.map((other) => other.revision as number));
+  const winners = behind.filter((other) => other.revision === newest);
+  if (winners.length > 1) {
+    for (const other of winners) {
+      row(false, `${other.manifestId} is revision ${newest} as well`);
+    }
+    summary('more than one archived build carries the revision this one follows', true);
   }
-  summary(`one row appended to ${recordPath}`, false);
+
+  const chosen = winners[0] as BuildDigestRecord;
+  row(true, `${manifestId} is revision ${revision}`);
+  row(true, `${chosen.manifestId} is revision ${chosen.revision}, the one before it`);
+  await emitStepOutput(PREVIOUS_MANIFEST, chosen.manifestId);
+  console.log('');
+  console.log(chosen.manifestId);
+  summary(`build ${manifestId} follows build ${chosen.manifestId}`, false);
 }
 
 /** Hash a local build and compare it to its committed row. */
@@ -1163,6 +1245,9 @@ async function commandVerify(options: Options): Promise<never> {
 
 /** The step output the archive job's gate reads. */
 export const NEEDS_ARCHIVE = 'needs_archive';
+
+/** The step output the schema diff job reads to know what to compare against. */
+export const PREVIOUS_MANIFEST = 'previous_manifest_id';
 
 /** What one recorded build looks like in the bucket. */
 export interface ArchiveSweep {
@@ -1527,6 +1612,7 @@ const VERBS: Record<string, string> = {
   status: 'ask the bucket about a build, and sweep every other recorded one',
   push: 'verify a local build, then upload it to the archive',
   pull: 'download a build and verify it before it is named',
+  previous: 'name the archived build one patch before another',
 };
 
 if (import.meta.main) {
@@ -1568,6 +1654,7 @@ if (import.meta.main) {
     if (verb === 'status') await commandStatus(options);
     if (verb === 'push') await commandPush(options);
     if (verb === 'pull') await commandPull(options);
+    if (verb === 'previous') await commandPrevious(options);
   } catch (error) {
     // A refusal this tool raises on purpose prints as a result row. Anything
     // else is a defect and keeps its stack, because a stack is what a defect
