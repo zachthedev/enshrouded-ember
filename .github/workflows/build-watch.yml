@@ -66,7 +66,6 @@ permissions:
 
 env:
   APP_SERVER: '2278520'
-  APP_CLIENT: '1203620'
   DEPOT_SERVER: '2278521'
   # SteamCMD updates itself from Valve on every run, so this digest pins the
   # wrapper rather than the client. No bot reads a `docker run` line, so it is
@@ -99,9 +98,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: digest-push
-    # Two watchers pushing the same record is the race here.
+    # Shared with the client watcher, which appends to the same record.
+    # Two jobs appending to the end of one file and pushing it is the race,
+    # and the loser rebases into a content conflict rather than replaying,
+    # so its step dies under `bash -e` before the push. A group name is
+    # repository-scoped, so one name serializes jobs in different
+    # workflows and a name per job serializes neither against the other.
+    # The group is named for the file rather than for a workflow, because
+    # what it protects is the file.
+    #
+    # This rests on GitHub's documented grouping rather than on a run
+    # anybody watched. A third run arriving while one is pending cancels
+    # the pending one, which an hourly cadence does not reach.
     concurrency:
-      group: build-watch-watch-${{ github.ref }}
+      group: steam-builds-record-${{ github.ref }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -144,7 +154,10 @@ jobs:
 
       # app_info_update 1 forces a fresh fetch. Without it a cold SteamCMD
       # prints an empty block, which the watcher refuses rather than recording.
+      # A container that never returns would otherwise take the job's whole
+      # budget, and this is the read the archive window depends on.
       - name: Read what Steam advertises for the dedicated server
+        timeout-minutes: 5
         run: |
           mkdir -p .watch
           docker run --rm "$STEAMCMD_IMAGE" \
@@ -153,38 +166,14 @@ jobs:
             +app_info_print "$APP_SERVER" \
             +quit > ".watch/appinfo-$APP_SERVER.txt"
 
-      # The server is read and recorded before the client is touched, and the
-      # client's steps cannot abort the job. The server's row reaches the
-      # working tree the moment this step runs, so a failure reading the client
-      # would otherwise throw away a detected build and consume an archiving
-      # window while saying only that the run was red.
       - id: server
         name: Record the dedicated server's build state
         run: |
           bun run tools/watch-builds.ts \
             "$APP_SERVER" ".watch/appinfo-$APP_SERVER.txt" --depot "$DEPOT_SERVER"
 
-      - id: client_read
-        name: Read what Steam advertises for the client
-        continue-on-error: true
-        run: |
-          docker run --rm "$STEAMCMD_IMAGE" \
-            +login anonymous \
-            +app_info_update 1 \
-            +app_info_print "$APP_CLIENT" \
-            +quit > ".watch/appinfo-$APP_CLIENT.txt"
-
-      - id: client
-        name: Record the client's build state
-        if: steps.client_read.outcome == 'success'
-        continue-on-error: true
-        run: |
-          bun run tools/watch-builds.ts \
-            "$APP_CLIENT" ".watch/appinfo-$APP_CLIENT.txt"
-
       - name: Commit the record
-        if: steps.server.outputs.changed == 'true' || steps.client.outputs.changed
-          == 'true'
+        if: steps.server.outputs.changed == 'true'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -193,10 +182,10 @@ jobs:
           git pull --rebase origin "${GITHUB_REF_NAME}"
           git push
 
-      # Gated on the public branch alone. A client change must never claim a
-      # new server build, and neither must a beta branch: build_id and
-      # manifest_id both follow public, so an issue opened because some other
-      # branch moved would name the build that did not.
+      # Gated on the public branch alone. A beta branch moving is a real
+      # event that names neither of these: build_id and manifest_id both
+      # follow public, so an issue opened because some other branch moved
+      # would name the build that did not.
       #
       # Every value the body carries arrives through the environment rather
       # than pasted into the script, and reaches printf as an argument rather
@@ -248,15 +237,6 @@ jobs:
             --title "build: server buildid $BUILD_ID" \
             --body-file issue-body.md
 
-      # Last, so the server's row and its issue survive a client failure. The
-      # run still goes red, which is what makes a repeated one visible.
-      - name: Fail if the client could not be read
-        if: steps.client_read.outcome == 'failure' || steps.client.outcome ==
-          'failure'
-        run: |
-          echo "reading app $APP_CLIENT failed. The server's row was recorded." >&2
-          exit 1
-
   # Asks the bucket whether the build the public branch names is archived. It
   # holds the read token and nothing else: no deploy key and no write
   # credential. Its environment carries no reviewer, so it answers on every
@@ -271,11 +251,11 @@ jobs:
   # answering true and the next run tries again.
   #
   # !cancelled() rather than the implicit success(), so a red watch job does
-  # not stop the archive. The client application is read in that job and steers
-  # nothing, and its read failing is what would otherwise hold the server's
-  # build out of the bucket until somebody noticed a message naming only the
-  # client. The manifest id is the real gate: it is written only after the
-  # server's block parses, so an empty one means there is nothing to ask about.
+  # not stop the archive. A build detected and then lost to a failure later in
+  # that job is a build the bucket never gets, and the archiving window closes
+  # when Keen's next build rolls the manifest. The manifest id is the real
+  # gate: it is written only after the server's block parses, so an empty one
+  # means there is nothing to ask about.
   archive-status:
     needs: watch
     if: ${{ !cancelled() && needs.watch.outputs.server_manifest_id != '' }}
