@@ -744,9 +744,10 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        Analyzer, CRATE_ENV, DOCTEST_ARGS, MACHETE_DIRS, MISE_INSTALL, PINS, PYFLAKES_OFF, STEPS,
-        TOOLS_TEST_ARGS, TYPECHECK_ARGS, ZIZMOR_ARGS, actionlint_args, launcher, on_path,
-        pinned_version, prettier_args, release_problem, reported_release, resolve_analyzer,
+        Analyzer, CRATE_ENV, DOCTEST_ARGS, MACHETE_DIRS, PINS, PYFLAKES_OFF, STEPS,
+        TEST_TARGET_DIR, TOOLS_TEST_ARGS, TYPECHECK_ARGS, ZIZMOR_ARGS, actionlint_args, launcher,
+        on_path, pinned_version, prettier_args, release_problem, reported_release,
+        resolve_analyzer,
     };
     use crate::testutil::TestDir;
 
@@ -954,6 +955,9 @@ mod tests {
     /// An analyzer mise resolves nowhere refuses the step and says what to
     /// run, because actionlint would otherwise exit zero over shell nobody
     /// read.
+    ///
+    /// The installer is spelled out rather than taken from the constant, so the
+    /// command a contributor is told to run is held to what mise offers.
     #[test]
     fn an_absent_analyzer_refuses_the_step_and_says_what_to_run() {
         const ABSENT: &str = "ember-analyzer-that-does-not-exist";
@@ -962,7 +966,7 @@ mod tests {
         let analyzer = Analyzer { program: ABSENT };
         let problem = resolve_analyzer(dir.path(), &analyzer).expect_err("an absent analyzer");
         assert!(problem.contains(ABSENT), "{problem}");
-        assert!(problem.contains(MISE_INSTALL), "{problem}");
+        assert!(problem.contains("mise install"), "{problem}");
     }
 
     /// A bare `.` audits whatever a walk of the tree reaches, and the mods
@@ -1080,6 +1084,24 @@ mod tests {
         assert!(
             DOCTEST_ARGS.contains(&"--doc"),
             "the doctests step runs the whole suite again, got {DOCTEST_ARGS:?}"
+        );
+    }
+
+    /// The test step builds somewhere other than cargo's default target
+    /// directory.
+    ///
+    /// `cargo xtask check` runs from the `xtask` binary in the default
+    /// directory, and a test build with no `--target-dir` of its own writes
+    /// over that file. Windows refuses to replace a running executable, so the
+    /// step the rest of the gate is judged by is the one that cannot finish.
+    ///
+    /// The default is cargo's, not this crate's, so it is spelled out here.
+    #[test]
+    fn the_test_step_builds_outside_the_default_target_directory() {
+        assert_ne!(
+            Path::new(TEST_TARGET_DIR),
+            Path::new("target"),
+            "the test step builds into cargo's default directory, over the running xtask"
         );
     }
 
