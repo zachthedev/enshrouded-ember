@@ -666,11 +666,23 @@ fn continued_lines(text: &str) -> String {
         .join(" ")
 }
 
+/// Whether `word` opens a shell redirect, which sends the rest of the line to
+/// a file rather than to the command.
+///
+/// A file descriptor number may sit in front of the arrow. A word that opens
+/// with `<` and closes with `>` is the placeholder a reference writes for a
+/// value it does not spell, so it belongs to the command.
+fn opens_a_redirect(word: &str) -> bool {
+    let placeholder = word.starts_with('<') && word.ends_with('>');
+    let arrow = word.trim_start_matches(|c: char| c.is_ascii_digit());
+    !placeholder && (arrow.starts_with('<') || arrow.starts_with('>'))
+}
+
 /// The words of one command line, the way a shell splits them: a quoted word
-/// is one word, a `#` opening a word starts a comment, and a separator ends
-/// the command. A word closed by `:*`, the permission wildcard, ends it too.
-/// Sentence punctuation closing a word is dropped, so a reference at the end
-/// of a sentence reads as the command.
+/// is one word, a `#` opening a word starts a comment, and a separator or a
+/// redirect ends the command. A word closed by `:*`, the permission wildcard,
+/// ends it too. Sentence punctuation closing a word is dropped, so a reference
+/// at the end of a sentence reads as the command.
 fn command_words(command: &str) -> Vec<String> {
     let mut words: Vec<String> = Vec::new();
     let mut chars = command.chars().peekable();
@@ -693,6 +705,9 @@ fn command_words(command: &str) -> Vec<String> {
             !c.is_whitespace() && !COMMAND_ENDS.contains(*c) && *c != '"' && *c != '\''
         }) {
             word.push(c);
+        }
+        if opens_a_redirect(&word) {
+            break;
         }
         if let Some(stem) = word.strip_suffix(":*") {
             words.push(stem.to_string());
@@ -2207,6 +2222,13 @@ mod tests {
 
     /// Each shape a reference is written in reads as the words of the
     /// command.
+    ///
+    /// A redirect ends the command. The `<name>` placeholder does not, so the
+    /// flags and arguments a reference writes after one stay under the command
+    /// tree's check.
+    ///
+    /// A reference inside a span it does not open reads as a plain line, so the
+    /// span's closing backtick is what ends it.
     #[test]
     fn xtask_references_read_each_shape_a_reference_takes() {
         let cases: Vec<(String, Vec<Vec<&str>>)> = vec![
@@ -2225,6 +2247,30 @@ mod tests {
             (
                 format!("{XTASK} schema diff old new   # compare"),
                 vec![vec!["schema", "diff", "old", "new"]],
+            ),
+            (
+                format!("{XTASK} schema diff old new > diff.txt"),
+                vec![vec!["schema", "diff", "old", "new"]],
+            ),
+            (format!("{XTASK} check 2> errors.txt"), vec![vec!["check"]]),
+            (format!("{XTASK} check < input.txt"), vec![vec!["check"]]),
+            (format!("{XTASK} check; other"), vec![vec!["check"]]),
+            (format!("{XTASK} check | tee log"), vec![vec!["check"]]),
+            (format!("{XTASK} check && other"), vec![vec!["check"]]),
+            (
+                format!("Run `cd enshrouded-ember && {XTASK} check` first."),
+                vec![vec!["check"]],
+            ),
+            (
+                format!("{XTASK} sig read <old> <new> --address 0x1401aba90"),
+                vec![vec![
+                    "sig",
+                    "read",
+                    "<old>",
+                    "<new>",
+                    "--address",
+                    "0x1401aba90",
+                ]],
             ),
             (
                 format!("{XTASK} loca extract --client \"<steam library>\\enshrouded.exe\""),
