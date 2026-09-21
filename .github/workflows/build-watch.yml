@@ -1,10 +1,25 @@
 name: build-watch
 
 # Steam serves a depot manifest only while it is current, so a build that is
-# not archived within the polling window cannot be fetched again without a
-# Steam credential. The interval is set by that risk, not by how fast anyone
-# needs to know. Keen's server cadence is months, so an hour of latency costs
-# nothing and a day would not.
+# not archived before its manifest rolls cannot be fetched again without a
+# Steam credential. The schedule is set by that risk, not by how fast anyone
+# needs to know.
+#
+# What the cron asks for and what GitHub delivers are different things. A
+# scheduled workflow is a best-effort trigger with no guarantee about when it
+# runs, and GitHub drops a tick under load. Measured over this workflow's life
+# to 2026-09-21, the gap between consecutive runs reached 6 hours 1 minute, and
+# no run started within 7 minutes of the minute it asks for. Minute 17 is
+# already the documented mitigation, which is to sit away from the top of the
+# hour. What the archive needs is a run at least once a day, and the worst gap
+# measured clears that. A cycle re-reads what Steam advertises and appends only
+# on a change, so a tick that never arrives costs nothing by itself.
+#
+# A manifest that does roll is recoverable. An anonymous session is refused a
+# historical manifest and an authenticated one is granted it, which is how the
+# older builds reached the archive. The worst case therefore costs a pull by
+# hand, with DepotDownloader under a maintainer's own Steam login, rather than
+# the build.
 #
 # One operational caveat no line in this file can fix. GitHub disables a
 # schedule in a public repository after 60 days with no repository activity,
@@ -499,3 +514,133 @@ jobs:
           git diff --cached --quiet || git commit -m 'chore(ci): record an archived build digest'
           git pull --rebase origin "${GITHUB_REF_NAME}"
           git push
+
+  # Diffs the new build's reflection schema against the build it follows, and
+  # posts the answer to the build issue with watchlist hits first. The point is
+  # one hour rather than one afternoon: a Keen build that ships container
+  # permissions natively changes what this project should build, and the
+  # watchlist is where that shows up.
+  #
+  # Gated on the archive job rather than on the digest commit, because what it
+  # needs is the row that job hands on and the objects it uploaded. The archive
+  # job runs once per build, so this runs once per build. A failure here is not
+  # retried on the next scheduled run: the build is archived by then, so rerun
+  # this job from the Actions tab.
+  #
+  # It holds the read token and nothing else. It pushes nothing, commits
+  # nothing, and its only write is a comment on the issue the watcher opened.
+  schema-diff:
+    needs: [watch, archive]
+    if: >-
+      ${{ !cancelled() && needs.archive.result == 'success'
+      && needs.watch.outputs.server_manifest_id != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: archive-read
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # This job pushes nothing, so the job token does not stay in the
+      # checkout for the steps that follow it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install Bun, pinned and checked
+        run: |
+          version="$(tr -d '[:space:]' < .bun-version)"
+          curl --fail --silent --show-error --location --output bun.zip \
+            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
+          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
+          unzip -q bun.zip
+          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      # The row for this build is not committed yet: the job that commits it
+      # runs beside this one. It is handed over as a string instead, and the
+      # record supplies the candidates.
+      - id: previous
+        name: Name the build this one follows
+        env:
+          MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+          ROW: ${{ needs.archive.outputs.row }}
+        run: bun run tools/archive.ts previous --manifest "$MANIFEST_ID" --row "$ROW"
+
+      # Both builds come out of the archive rather than from Steam. Steam
+      # serves only the current manifest, so the older build cannot be fetched
+      # at all, and the new one is already in the bucket by now.
+      - name: Pull both builds out of the archive
+        env:
+          MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+          PREVIOUS_ID: ${{ steps.previous.outputs.previous_manifest_id }}
+          ROW: ${{ needs.archive.outputs.row }}
+          R2_ARCHIVE_READ_ACCESS_KEY_ID: ${{ secrets.R2_ARCHIVE_READ_ACCESS_KEY_ID }}
+          R2_ARCHIVE_READ_SECRET_ACCESS_KEY: ${{ secrets.R2_ARCHIVE_READ_SECRET_ACCESS_KEY }}
+        run: |
+          printf '%s\n' "$ROW" > row.jsonl
+          bun run tools/archive.ts pull --manifest "$PREVIOUS_ID" --out ".cache/archive/$PREVIOUS_ID"
+          bun run tools/archive.ts pull --manifest "$MANIFEST_ID" --out ".cache/archive/$MANIFEST_ID" \
+            --record row.jsonl
+
+      # An archived build carries the executable and the container header and
+      # nothing else, so a command needing the resource container refuses on
+      # one. Schema recovery reads the executable, which is what is here.
+      - name: Recover both schemas
+        env:
+          MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+          PREVIOUS_ID: ${{ steps.previous.outputs.previous_manifest_id }}
+        run: |
+          for id in "$PREVIOUS_ID" "$MANIFEST_ID"; do
+            cargo xtask schema extract --build "$id" --server ".cache/archive/$id/enshrouded_server.exe" --force
+          done
+
+      # Watchlist hits come first in this output, which is the whole reason it
+      # is posted rather than filed.
+      - name: Diff the two recoveries
+        env:
+          MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+          PREVIOUS_ID: ${{ steps.previous.outputs.previous_manifest_id }}
+        run: |
+          # tee rather than a redirect, so the recovery's output is in the log
+          # as well as in the file, and pipefail so its own exit code is what
+          # decides the step.
+          set -o pipefail
+          cargo xtask schema diff "$PREVIOUS_ID" "$MANIFEST_ID" | tee diff.txt
+
+      # A comment is capped at 65,536 characters, and a Keen build that rewrote
+      # the schema would pass that. The body is cut to fit and says so, and the
+      # run's own summary carries the same text.
+      - name: Post the diff to the build issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_ID: ${{ needs.watch.outputs.server_build_id }}
+          MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
+          PREVIOUS_ID: ${{ steps.previous.outputs.previous_manifest_id }}
+        run: |
+          # Every backtick below opens a markdown code span in the comment, so
+          # these formats are single quoted on purpose.
+          # shellcheck disable=SC2016
+          {
+            printf '### `cargo xtask schema diff %s %s`\n\n' "$PREVIOUS_ID" "$MANIFEST_ID"
+            printf 'Recovered from the archived builds. Watchlist hits come first.\n\n'
+            printf '```text\n'
+            head -c 50000 diff.txt
+            printf '\n```\n'
+            if [ "$(wc -c < diff.txt)" -gt 50000 ]; then
+              printf '\nCut to fit a comment, from %s lines. The rest is in the run log.\n' \
+                "$(wc -l < diff.txt)"
+            fi
+          } > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+
+          number="$(gh issue list --label build --state open \
+            --search "buildid $BUILD_ID in:title" --json number --jq '.[0].number // empty')"
+          if [ -z "$number" ]; then
+            echo "No open build issue names buildid $BUILD_ID, so the diff is in this run's summary only."
+            exit 0
+          fi
+          gh issue comment "$number" --body-file comment.md

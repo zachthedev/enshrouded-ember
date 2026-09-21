@@ -168,6 +168,52 @@ how a mod repository keeps its fetched server under its own tree.
 overrides it. `cargo xtask --help` lists every command, and each one takes
 `--help` for its own flags.
 
+## The signature diff
+
+Keen ships no symbols, so every address Ember hooks has to be found again in
+each new build. `cargo xtask sig` drives Ghidra, BinExport and BinDiff over a
+pair of builds and prints where a known address landed in the newer one.
+
+```sh
+cargo xtask sig analyze --build <id>   # import, analyze and seed a build
+cargo xtask sig export --build <id>    # write the BinExport file
+cargo xtask sig diff <old> <new>       # diff a pair of exports
+cargo xtask sig read <old> <new> --address 0x1401aba90
+```
+
+Neither tool is pinned here and no runner carries one, so each stage reads its
+installation out of the environment. `EMBER_GHIDRA_HOME` names a Ghidra
+installation and `EMBER_BINDIFF_HOME` names a BinDiff one, and a stage that
+finds neither names the variable it wanted. BinExport's Ghidra extension is
+built against one Ghidra release and Ghidra refuses any other, so those versions
+have to agree, and BinExport's protobuf runtime has to win on Ghidra's
+classpath.
+
+`analyze` seeds functions before it saves, and that is what makes the rest work
+on an engine entry. A program record's entry function is referenced only from
+the record in `.rdata`, nothing calls it, and auto-analysis never reaches it, so
+the address is absent from the export and the differ can never match it. The
+entries come from the same walk `schema extract` prints, and `--address` adds
+one no record names.
+
+`old` names the build whose addresses are known and `new` the build whose
+addresses are wanted, so a proposal for the new build is the second address in
+each row `read` prints. An address with no proposal prints as a miss and fails
+the command, because an address the export never carried looks exactly like one
+the differ could not place.
+
+**Every proposal is a candidate.** The differ matches call graphs, and a row
+earns a place in a signature table only once the binary itself agrees: the same
+call graph shape around it, and a string anchor where one exists. Similarity
+and confidence describe the match and the algorithm behind it, and neither is
+that confirmation.
+
+The cost is why this runs on a developer's machine rather than on a runner.
+Analysis of the server image takes a quarter of an hour, the export takes
+minutes, and a project, its export and a pair's result database take hundreds of
+megabytes. Every stage takes `--timeout <seconds>` and stops the tool at it.
+Everything lands under `.cache` and is regenerated.
+
 ## The build watcher and the archive
 
 `tools/` holds the Bun scripts behind the build watcher and the archive.
@@ -207,6 +253,7 @@ bun run archive status --manifest <gid>
 bun run archive verify --dir <path> --manifest <gid>
 bun run archive pull --manifest <gid> --out <path>
 bun run archive push --dir <path> --manifest <gid>
+bun run archive previous --manifest <gid>
 ```
 
 `data/build-digests.jsonl` is what each recorded build's files hash to, and
@@ -281,6 +328,21 @@ checking where a request would still have gone.
 Every command that reaches R2 reads its credential from the environment and
 names the variables that are missing when it is absent: `status` and `pull` the
 read token, `push` the write token. A pull without one creates nothing.
+
+`schema-diff` is the job that answers the question a new build raises. It pulls
+the new build and the build it follows out of the archive, recovers a schema
+from each, and posts `cargo xtask schema diff` to the build issue with watchlist
+hits first. `archive previous` names the build it follows. Builds are ordered by
+the revision in each one's own container header rather than by the order rows
+were recorded, because the record is append-only and a backfill appends in
+whatever order the builds were recovered. The new build's row is not committed
+while this job runs, so the row is handed over as a string and the record
+supplies the candidates.
+
+That job holds the read token and nothing else, and its only write is a comment
+on the issue the watcher opened. It is gated on the archive job, which runs once
+per build, so a failure in it is not retried by the next scheduled run. Rerun it
+from the Actions tab instead.
 
 ## Tests that need a real server
 

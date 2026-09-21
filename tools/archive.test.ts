@@ -1380,3 +1380,186 @@ describe('the status command, against a loopback bucket', () => {
     expect(await Bun.file(outputs).text()).toBe('needs_archive=false\n');
   });
 });
+
+describe('the previous verb', () => {
+  /**
+   * The real command in a process of its own, with `GITHUB_OUTPUT` empty
+   * unless a case names a file.
+   */
+  const run = (args: string[], outputs = ''): { stdout: string; exitCode: number } => {
+    const spawned = Bun.spawnSync({
+      cmd: [process.execPath, 'run', fileURLToPath(new URL('archive.ts', import.meta.url)), 'previous', ...args],
+      env: { ...process.env, GITHUB_OUTPUT: outputs },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    return { stdout: `${spawned.stdout.toString()}${spawned.stderr.toString()}`, exitCode: spawned.exitCode ?? -1 };
+  };
+
+  /** A record holding one row per manifest and revision given. */
+  const recordOf = async (builds: [string, number | null][]): Promise<string> => {
+    const path = join(await sandbox(), 'build-digests.jsonl');
+    for (const [manifestId, revision] of builds) {
+      await appendRecord(path, BuildDigestRecord, { ...row, manifestId, buildId: null, revision });
+    }
+    return path;
+  };
+
+  test('names the archived build with the revision just below this one', async () => {
+    const recordPath = await recordOf([
+      ['1', 1002673],
+      ['2', 1018982],
+      ['3', 1024233],
+    ]);
+
+    const asked = run(['--manifest', '3', '--record', recordPath]);
+
+    expect(asked.exitCode).toBe(0);
+    expect(asked.stdout).toContain('build 3 follows build 2');
+  });
+
+  /**
+   * The record is append-only and a backfill appends in whatever order the
+   * builds were recovered, so the last row before this one is not the build
+   * before this one. The revision is.
+   *
+   * The rows are written newest first on purpose. Reading the file's last row
+   * would answer with the oldest build here, and reading the row above the
+   * subject's would answer with nothing, so neither reading survives this
+   * record while the revision rule does.
+   */
+  test('the order rows were written in does not decide it', async () => {
+    const recordPath = await recordOf([
+      ['3', 1024233],
+      ['2', 1018982],
+      ['1', 1002673],
+    ]);
+
+    const asked = run(['--manifest', '3', '--record', recordPath]);
+
+    expect(asked.exitCode).toBe(0);
+    expect(asked.stdout).toContain('build 3 follows build 2');
+  });
+
+  /**
+   * The archive job builds the new build's row and hands it on, and the job
+   * that commits it runs later. The diff job runs in between, so the subject
+   * arrives as a string rather than out of the record.
+   */
+  test('the subject can arrive as a row that is not recorded yet', async () => {
+    const recordPath = await recordOf([
+      ['1', 1002673],
+      ['2', 1018982],
+    ]);
+    const fresh = JSON.stringify({ ...row, manifestId: '3', buildId: null, revision: 1024233 });
+
+    const asked = run(['--manifest', '3', '--row', fresh, '--record', recordPath]);
+
+    expect(asked.exitCode).toBe(0);
+    expect(asked.stdout).toContain('build 3 follows build 2');
+  });
+
+  /**
+   * The gid names the objects a later step pulls, so a row for another build
+   * would have the diff compare a build nobody asked about.
+   */
+  test('a row for another build is refused rather than used', async () => {
+    const recordPath = await recordOf([
+      ['1', 1002673],
+      ['2', 1018982],
+    ]);
+    const other = JSON.stringify({ ...row, manifestId: '9', buildId: null, revision: 1024233 });
+
+    const asked = run(['--manifest', '3', '--row', other, '--record', recordPath]);
+
+    expect(asked.exitCode).toBe(1);
+    expect(asked.stdout).toContain('--row is the row for 9');
+  });
+
+  test('a build with no row of its own is refused by name', async () => {
+    const recordPath = await recordOf([['1', 1002673]]);
+
+    const asked = run(['--manifest', '3', '--record', recordPath]);
+
+    expect(asked.exitCode).toBe(1);
+    expect(asked.stdout).toContain('3 has no row');
+  });
+
+  /**
+   * A build pulled from a historical manifest can have no revision, and a
+   * build that cannot be placed in the order is not something to guess at.
+   */
+  test('a subject with no revision is refused, because nothing orders it', async () => {
+    const recordPath = await recordOf([
+      ['1', 1002673],
+      ['3', null],
+    ]);
+
+    const asked = run(['--manifest', '3', '--record', recordPath]);
+
+    expect(asked.exitCode).toBe(1);
+    expect(asked.stdout).toContain('no revision');
+  });
+
+  /** The same reason, on the other side: an unplaceable build is no answer. */
+  test('a candidate with no revision is never the answer', async () => {
+    const recordPath = await recordOf([
+      ['1', 1002673],
+      ['2', null],
+      ['3', 1024233],
+    ]);
+
+    const asked = run(['--manifest', '3', '--record', recordPath]);
+
+    expect(asked.exitCode).toBe(0);
+    expect(asked.stdout).toContain('build 3 follows build 1');
+  });
+
+  test('the oldest build in the archive follows nothing, and says so', async () => {
+    const recordPath = await recordOf([
+      ['1', 1002673],
+      ['2', 1018982],
+    ]);
+
+    const asked = run(['--manifest', '1', '--record', recordPath]);
+
+    expect(asked.exitCode).toBe(1);
+    expect(asked.stdout).toContain('records no build before revision 1002673');
+  });
+
+  /**
+   * Two builds at one revision cannot both be the one before this, and
+   * picking either would name a build the diff was never meant to compare.
+   */
+  test('two candidates at one revision are refused rather than picked between', async () => {
+    const recordPath = await recordOf([
+      ['1', 1018982],
+      ['2', 1018982],
+      ['3', 1024233],
+    ]);
+
+    const asked = run(['--manifest', '3', '--record', recordPath]);
+
+    expect(asked.exitCode).toBe(1);
+    expect(asked.stdout).toContain('more than one archived build carries the revision');
+  });
+
+  /**
+   * The diff job reads this output to decide what to pull. A rename or a
+   * different spelling leaves it pulling nothing, and every other case here
+   * would stay green through it.
+   */
+  test('the chosen build reaches the next step as previous_manifest_id', async () => {
+    const outputs = join(await sandbox(), 'github-output');
+    const recordPath = await recordOf([
+      ['1', 1002673],
+      ['2', 1018982],
+      ['3', 1024233],
+    ]);
+
+    const asked = run(['--manifest', '3', '--record', recordPath], outputs);
+
+    expect(asked.exitCode).toBe(0);
+    expect(await Bun.file(outputs).text()).toBe('previous_manifest_id=2\n');
+  });
+});

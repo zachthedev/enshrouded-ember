@@ -87,6 +87,22 @@ impl DevRoot {
         self.cache().join("loca")
     }
 
+    /// Where builds pulled out of the archive live, one directory per depot
+    /// manifest gid.
+    pub fn archive_dir(&self) -> PathBuf {
+        self.cache().join("archive")
+    }
+
+    /// Where Ghidra projects live, one directory per build.
+    pub fn ghidra_dir(&self) -> PathBuf {
+        self.cache().join("ghidra")
+    }
+
+    /// Where a pair's diff result lives, one directory per pair.
+    pub fn bindiff_dir(&self) -> PathBuf {
+        self.cache().join("bindiff")
+    }
+
     /// Where `SteamCMD` lives.
     pub fn steamcmd(&self) -> PathBuf {
         self.cache().join("steamcmd").join("steamcmd.exe")
@@ -145,6 +161,49 @@ impl DevRoot {
         check_build_id(build)?;
         let path = self.loca_dir().join(build);
         crate::steam::ensure_outside_library(&path, "a localization directory")?;
+        Ok(path)
+    }
+
+    /// The directory holding one build as the archive served it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the buildid is not a single path segment, or when
+    /// the directory resolves inside a Steam library.
+    pub fn archive_build_dir(&self, build: &str) -> Result<PathBuf> {
+        check_build_id(build)?;
+        let path = self.archive_dir().join(build);
+        crate::steam::ensure_outside_library(&path, "an archive directory")?;
+        Ok(path)
+    }
+
+    /// The directory holding one build's Ghidra project and its export.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the buildid is not a single path segment, or when
+    /// the directory resolves inside a Steam library.
+    pub fn ghidra_build_dir(&self, build: &str) -> Result<PathBuf> {
+        check_build_id(build)?;
+        let path = self.ghidra_dir().join(build);
+        crate::steam::ensure_outside_library(&path, "a Ghidra project directory")?;
+        Ok(path)
+    }
+
+    /// The directory holding one pair's diff result.
+    ///
+    /// Both halves of the name are checked, because the directory is named for
+    /// the pair and either half would otherwise carry a join out of the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either buildid is not a single path segment, or
+    /// when the directory resolves inside a Steam library.
+    pub fn bindiff_pair_dir(&self, old: &str, new: &str) -> Result<PathBuf> {
+        check_build_id(old)?;
+        check_build_id(new)?;
+        let path = self.bindiff_dir().join(format!("{old}-{new}"));
+        crate::steam::ensure_outside_library(&path, "a diff result directory")?;
         Ok(path)
     }
 
@@ -389,11 +448,14 @@ mod tests {
         dir.write("fake/SteamLibrary/steamapps/common/keep", b"");
         let library = dir.path().join("fake").join("SteamLibrary");
         let root = DevRoot { path: library };
-        let cases: [(&str, anyhow::Result<std::path::PathBuf>); 4] = [
+        let cases: [(&str, anyhow::Result<std::path::PathBuf>); 7] = [
             ("build", root.build_dir("23178631")),
             ("run", root.run_dir("23178631")),
             ("schema", root.schema_build_dir("23178631")),
             ("loca", root.loca_build_dir("23178631")),
+            ("archive", root.archive_build_dir("23178631")),
+            ("ghidra", root.ghidra_build_dir("23178631")),
+            ("bindiff", root.bindiff_pair_dir("23178631", "23178632")),
         ];
         for (label, outcome) in cases {
             let err = outcome.expect_err(label);
@@ -417,6 +479,24 @@ mod tests {
                 "schema_build_dir {name}"
             );
             assert!(root.loca_build_dir(name).is_err(), "loca_build_dir {name}");
+            assert!(
+                root.archive_build_dir(name).is_err(),
+                "archive_build_dir {name}"
+            );
+            assert!(
+                root.ghidra_build_dir(name).is_err(),
+                "ghidra_build_dir {name}"
+            );
+            // A pair is named for both halves, so each one is refused in the
+            // position the other one is fine in.
+            assert!(
+                root.bindiff_pair_dir(name, "23178631").is_err(),
+                "bindiff_pair_dir old {name}"
+            );
+            assert!(
+                root.bindiff_pair_dir("23178631", name).is_err(),
+                "bindiff_pair_dir new {name}"
+            );
             assert!(root.build_id(Some(name)).is_err(), "build_id {name}");
         }
     }

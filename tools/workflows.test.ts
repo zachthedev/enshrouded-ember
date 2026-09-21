@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readdir } from 'node:fs/promises';
-import { DESTINATION, NEEDS_ARCHIVE } from './archive.ts';
+import { DESTINATION, NEEDS_ARCHIVE, PREVIOUS_MANIFEST } from './archive.ts';
 import { ARCHIVE_FILES } from './records.ts';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -311,6 +311,40 @@ describe('the workflows', () => {
       }
     }
     expect(checked, 'no job holds a write secret, so this case checked nothing').toBeGreaterThan(0);
+  });
+
+  /**
+   * The schema diff compares a new build against the one it follows, and
+   * `archive previous` is what names that build. The name of its output is a
+   * string in two files, and a rename reaching only one of them leaves the job
+   * pulling nothing under an empty manifest id. Every other case here stays
+   * green through that.
+   */
+  test('the job that diffs a schema reads the previous build from the step that names it', () => {
+    let checked = 0;
+    for (const workflow of loaded) {
+      const steps = jobSteps(workflow.parsed);
+      const producers = steps.filter(({ step }) => String(step['run'] ?? '').includes('archive.ts previous'));
+      for (const { job, step } of producers) {
+        checked += 1;
+        const id = String(step['id'] ?? '');
+        expect(id, `${workflow.name} job ${job} runs archive previous in a step with no id to read`).not.toBe('');
+        const readers = steps.filter(({ step: other }) =>
+          JSON.stringify(other).includes(`steps.${id}.outputs.${PREVIOUS_MANIFEST}`),
+        );
+        expect(
+          readers.length,
+          `${workflow.name} job ${job} names ${PREVIOUS_MANIFEST} nowhere after the step that answers it`,
+        ).toBeGreaterThan(0);
+        for (const reader of readers) {
+          expect(reader.job, 'a step output is readable only inside the job that produced it').toBe(job);
+        }
+      }
+    }
+    expect(
+      checked,
+      'no workflow asks which build a diff compares against, so this case checked nothing',
+    ).toBeGreaterThan(0);
   });
 
   /**
