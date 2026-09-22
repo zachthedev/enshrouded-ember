@@ -1,0 +1,39 @@
+name: deps
+
+# What every repository carries. Renovate itself runs in the shared workflow.
+# This file says when, and hands over the environment's credentials.
+on:
+  # At least once a day. The preset opens new pull requests inside its Monday
+  # window alone, and this hour is inside it. Every other run keeps open
+  # branches current and raises security fixes, which ignore the schedule.
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      log-level:
+        description: Renovate log level. debug shows why a version is held.
+        type: choice
+        options: [info, debug]
+        default: info
+      dry-run:
+        description: Renovate dryRun value. none runs for real.
+        type: choice
+        options: [none, extract, lookup, full]
+        default: none
+
+permissions: {}
+
+jobs:
+  deps:
+    # A full SHA, as every action is pinned. Renovate reads the version comment
+    # beside it to move the pair.
+    uses: zachthedev/.github/.github/workflows/deps.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+    with:
+      log-level: ${{ inputs.log-level || 'info' }}
+      # none maps to an empty value, which Renovate reads as no dry run.
+      dry-run: ${{ inputs.dry-run != 'none' && inputs.dry-run || '' }}
+    # The called job names the deps environment, so its variable and secret
+    # resolve from this repository's environment of that name. This job runs
+    # in no environment, so it cannot pass an environment secret by name.
+    # inherit is the one form that reaches it.
+    secrets: inherit # zizmor: ignore[secrets-inherit]
