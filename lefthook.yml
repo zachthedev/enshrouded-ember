@@ -1,0 +1,12 @@
+# Git hooks. `bun install` runs the `prepare` script, which installs these.
+# Each command resolves through `bunx --no-install`, so the release bun.lock
+# pins is what runs and nothing is fetched at commit time.
+commit-msg:
+  jobs:
+    - name: commitlint
+      run: bunx --no-install --bun commitlint --edit {1}
+
+pre-push:
+  jobs:
+    - name: check
+      run: cargo xtask check

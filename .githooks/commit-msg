@@ -1,4 +1,0 @@
-#!/bin/sh
-# Conventional Commits check. Installed by `bun install`, which points
-# core.hooksPath at this directory.
-exec bunx --no-install --bun commitlint --edit "$1"

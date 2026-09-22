@@ -12,7 +12,6 @@
 //! caller fetched.
 
 mod check;
-mod hooks;
 mod image;
 mod kfc;
 mod loca;
@@ -40,12 +39,20 @@ use clap::{Args, Parser, Subcommand};
 /// prints and the scopes the commit hook accepts are one list.
 const SCOPES_JSON: &str = include_str!("../../.github/commit-scopes.json");
 
+/// One commit scope and the one sentence saying what it covers.
+#[derive(serde::Deserialize)]
+struct Scope {
+    scope: String,
+    covers: String,
+}
+
 /// The commit scopes, in the order the scope file lists them.
 ///
 /// # Errors
 ///
-/// Returns an error when the scope file is not a JSON array of strings.
-fn scopes() -> anyhow::Result<Vec<String>> {
+/// Returns an error when the scope file is not a JSON array of
+/// `{ scope, covers }` objects.
+fn scopes() -> anyhow::Result<Vec<Scope>> {
     serde_json::from_str(SCOPES_JSON).context("reading .github/commit-scopes.json")
 }
 
@@ -78,9 +85,6 @@ enum Command {
     Check,
     /// Hold mise.toml and mise.lock to their rules, which the gate does first.
     Pins,
-    /// Manage the repository's git hooks.
-    #[command(subcommand)]
-    Hooks(HooksCommand),
     /// Fetch, seed, launch, tail and stop a dedicated server build.
     #[command(subcommand)]
     Server(ServerCommand),
@@ -93,12 +97,6 @@ enum Command {
     /// Write a client build's localization tables out, for looking up tag ids.
     #[command(subcommand)]
     Loca(LocaCommand),
-}
-
-#[derive(Subcommand)]
-enum HooksCommand {
-    /// Point `core.hooksPath` at `.githooks`.
-    Install,
 }
 
 #[derive(Subcommand)]
@@ -336,8 +334,8 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
     }
     match &cli.command {
         Command::Scopes => {
-            for scope in scopes()? {
-                println!("{scope}");
+            for Scope { scope, covers } in scopes()? {
+                println!("{scope}  {covers}");
             }
             Ok(true)
         }
@@ -349,7 +347,6 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
             }
             Ok(problems.is_empty())
         }
-        Command::Hooks(HooksCommand::Install) => hooks::install(ui).map(|()| true),
         Command::Server(command) => {
             let root = root::DevRoot::resolve(cli.global.root.as_deref())?;
             server::run(command, &root, ui)
@@ -377,9 +374,10 @@ mod tests {
     /// would accept a commit nobody meant to allow.
     #[test]
     fn scopes_are_distinct_and_named() {
-        let scopes = scopes().expect("the scope file is a JSON array of strings");
-        assert!(!scopes.is_empty(), "the scope file names no scope");
+        let entries = scopes().expect("the scope file is a JSON array of scope objects");
+        assert!(!entries.is_empty(), "the scope file names no scope");
 
+        let scopes: Vec<&str> = entries.iter().map(|entry| entry.scope.as_str()).collect();
         let mut seen = scopes.clone();
         seen.sort_unstable();
         seen.dedup();
@@ -388,9 +386,13 @@ mod tests {
             scopes.len(),
             "a scope appears twice: {scopes:?}"
         );
-        assert!(
-            scopes.iter().all(|scope| !scope.is_empty()),
-            "a scope is empty: {scopes:?}"
-        );
+        for entry in &entries {
+            assert!(!entry.scope.is_empty(), "a scope is empty");
+            assert!(
+                !entry.covers.is_empty(),
+                "{} says nothing about what it covers",
+                entry.scope
+            );
+        }
     }
 }

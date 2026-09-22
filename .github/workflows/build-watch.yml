@@ -159,10 +159,9 @@ jobs:
           unzip -q bun.zip
           echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
 
-      # --ignore-scripts because the root `prepare` sets core.hooksPath to
-      # .githooks, whose pre-push runs the whole gate. The runner has no tool
-      # belt, so the gate exits non-zero and every push this workflow makes is
-      # refused. It also keeps any dependency lifecycle script away from the
+      # --ignore-scripts because the root `prepare` installs lefthook, whose
+      # pre-push runs the whole gate. The runner has no tool belt, so the gate
+      # exits non-zero and every push this workflow makes is refused. It also keeps any dependency lifecycle script away from the
       # job that holds the write credential.
       - run: bun install --frozen-lockfile --ignore-scripts
 
@@ -365,10 +364,9 @@ jobs:
           unzip -q bun.zip
           echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
 
-      # --ignore-scripts because the root `prepare` sets core.hooksPath to
-      # .githooks, whose pre-push runs the whole gate. The runner has no tool
-      # belt, so the gate exits non-zero and every push this workflow makes is
-      # refused. It also keeps any dependency lifecycle script away from the
+      # --ignore-scripts because the root `prepare` installs lefthook, whose
+      # pre-push runs the whole gate. The runner has no tool belt, so the gate
+      # exits non-zero and every push this workflow makes is refused. It also keeps any dependency lifecycle script away from the
       # job that holds the write credential.
       - run: bun install --frozen-lockfile --ignore-scripts
 

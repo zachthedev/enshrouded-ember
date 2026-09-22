@@ -1,5 +1,0 @@
-#!/bin/sh
-# The gate, run before anything leaves this machine. Installed by `bun install`
-# or by `cargo xtask hooks install`, either of which points core.hooksPath at
-# this directory.
-exec cargo xtask check

@@ -74,9 +74,9 @@ jobs:
           unzip -q bun.zip
           echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
 
-      # --ignore-scripts because the root `prepare` sets core.hooksPath to
-      # .githooks, whose pre-push runs the whole gate. The runner has no tool
-      # belt, so the gate exits non-zero and the push below is refused.
+      # --ignore-scripts because the root `prepare` installs lefthook, whose
+      # pre-push runs the whole gate. The runner has no tool belt, so the gate
+      # exits non-zero and the push below is refused.
       - run: bun install --frozen-lockfile --ignore-scripts
 
       # app_info_update 1 forces a fresh fetch. Without it a cold SteamCMD
