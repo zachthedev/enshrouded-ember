@@ -1,1 +1,20 @@
-["loader", "sdk", "holistic", "kfc", "enshrouded", "sigs", "platform", "testkit", "xtask", "deps", "ci", "release"]
+[
+  { "scope": "loader", "covers": "The library the server loads: build resolution, mod discovery and startup." },
+  { "scope": "sdk", "covers": "The surface a mod author writes against: the Mod trait, hooks, config and logging." },
+  {
+    "scope": "holistic",
+    "covers": "Bindings to Keen's Holistic engine: reflection registry, entity components and systems."
+  },
+  { "scope": "kfc", "covers": "The reader for Keen's KFC3 resource containers." },
+  {
+    "scope": "enshrouded",
+    "covers": "Bindings to the Enshrouded server itself: sessions, chat, saves, items and recipes."
+  },
+  { "scope": "sigs", "covers": "The per-build signature and layout tables, and the tooling that recovers them." },
+  { "scope": "platform", "covers": "The operating system seam: image access, inline hooks and library loading." },
+  { "scope": "testkit", "covers": "The development-only library that drives a test server." },
+  { "scope": "xtask", "covers": "Repository automation: the gate, the dev server loop and the extractors." },
+  { "scope": "deps", "covers": "A dependency bump with no code change of its own." },
+  { "scope": "ci", "covers": "The workflows and what they call." },
+  { "scope": "release", "covers": "Versioning, changelogs and the release pipeline." }
+]

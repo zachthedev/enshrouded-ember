@@ -132,29 +132,24 @@ toolchain, so the leg installs nothing for it.
 
 ## Hooks
 
-`.githooks` holds the hooks: `commit-msg` runs commitlint, and `pre-push` runs
-the gate. Install them once per clone:
+`lefthook.yml` holds the hooks: `commit-msg` runs commitlint, and `pre-push`
+runs the gate. [lefthook](https://lefthook.dev) installs them into `.git/hooks`
+when `bun install` runs the `prepare` script, once per clone:
 
 ```sh
 bun install
 ```
 
-Without Bun:
-
-```sh
-cargo xtask hooks install
-```
-
-Either one points `core.hooksPath` at `.githooks`.
+A clone that ran an earlier `prepare` still points `core.hooksPath` at a
+directory that no longer exists, so run `git config --unset core.hooksPath`
+once before installing.
 
 ## Commit messages
 
 [Conventional Commits](https://www.conventionalcommits.org), enforced by the
-`commit-msg` hook. `.github/commit-scopes.json` holds the scope list.
-`cargo xtask scopes` prints it, and `commitlint.config.js` enforces it:
-
-`loader`, `sdk`, `holistic`, `kfc`, `enshrouded`, `sigs`, `platform`, `testkit`,
-`xtask`, `deps`, `ci`, `release`.
+`commit-msg` hook. `.github/commit-scopes.json` holds the scope list, one
+sentence per scope saying what it covers. `cargo xtask scopes` prints it, and
+`commitlint.config.js` enforces it.
 
 Scopes are the workspace crate names past the `ember-` prefix, plus
 cross-cutting names no crate owns. A new top-level crate earns a scope. Omit the
