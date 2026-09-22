@@ -258,7 +258,7 @@ pub fn run(ui: &Ui) -> Result<bool> {
         rows.push(
             Row::new(Mark::Fail, PINS_STEP, "did not pass").note(format!(
                 "rewrite the lockfile with: {}",
-                crate::pins::relock()
+                crate::pins::RELOCK
             )),
         );
         return Ok(report(ui, &rows, Some(PINS_STEP), None));

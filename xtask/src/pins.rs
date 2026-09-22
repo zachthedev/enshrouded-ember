@@ -26,16 +26,16 @@ pub const LOCK: &str = "mise.lock";
 
 /// The mise platforms every tool has to record an entry for.
 ///
-/// These are the platforms the gate runs on, and [`relock`] writes exactly
+/// These are the platforms the gate runs on, and [`RELOCK`] writes exactly
 /// these, so a platform block naming any other is an anomaly rather than a
 /// spare.
 pub const PLATFORMS: &[&str] = &["linux-x64", "windows-x64"];
 
 /// The command that rewrites [`LOCK`] after an edit to [`PINS`].
-#[must_use]
-pub fn relock() -> String {
-    format!("mise lock --platform {}", PLATFORMS.join(","))
-}
+///
+/// A test holds its platform list to [`PLATFORMS`], because a `const` cannot
+/// join one.
+pub const RELOCK: &str = "mise lock --platform linux-x64,windows-x64";
 
 /// The host every release artifact [`LOCK`] records is served from.
 pub const RELEASE_HOST: &str = "github.com";
@@ -789,7 +789,7 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
     found.extend(array_problems(lock));
 
     // Every platform block is read, not only the ones `PLATFORMS` names. A block
-    // nothing reads is a url and a checksum nobody checked, and `relock` writes
+    // nothing reads is a url and a checksum nobody checked, and `RELOCK` writes
     // exactly those platforms, so any other is an anomaly.
     for entry in &locked_entries {
         if pinned.contains(entry.tool.as_str()) && !PLATFORMS.contains(&entry.platform.as_str()) {
@@ -834,7 +834,9 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, TOOLS, absolute, locked, problems, tool_config_locked};
+    use super::{
+        Backend, PLATFORMS, RELOCK, TOOLS, absolute, locked, problems, tool_config_locked,
+    };
     use std::collections::BTreeSet;
 
     /// A pin file every rule accepts, for the cases below to change one thing
@@ -1295,6 +1297,15 @@ mod tests {
                 tool.key
             );
         }
+    }
+
+    /// The relock command writes exactly the platforms the rules read.
+    #[test]
+    fn the_relock_command_names_every_platform() {
+        let listed = RELOCK
+            .strip_prefix("mise lock --platform ")
+            .expect("the relock command names its platforms");
+        assert_eq!(listed.split(',').collect::<Vec<_>>(), PLATFORMS);
     }
 
     /// The two locked spellings are read from their own tables.
