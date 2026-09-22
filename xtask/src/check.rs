@@ -241,12 +241,17 @@ pub fn run(ui: &Ui) -> Result<bool> {
         for problem in &problems {
             ui.line(problem);
         }
-        rows.push(
-            Row::new(Mark::Fail, PINS_STEP, "did not pass").note(format!(
-                "rewrite the lockfile with: {}",
-                crate::pins::RELOCK
-            )),
-        );
+        // The relock is the remedy only when a problem is about the lockfile; an
+        // unreadable or malformed mise.toml needs an edit, not a relock.
+        let remedy = if problems
+            .iter()
+            .any(|problem| problem.contains(crate::pins::LOCK))
+        {
+            format!("rewrite the lockfile with: {}", crate::pins::RELOCK)
+        } else {
+            format!("fix {}", crate::pins::PINS)
+        };
+        rows.push(Row::new(Mark::Fail, PINS_STEP, "did not pass").note(remedy));
         return Ok(report(ui, &rows, Some(PINS_STEP), None));
     }
     rows.push(Row::new(Mark::Ok, PINS_STEP, "ok"));
