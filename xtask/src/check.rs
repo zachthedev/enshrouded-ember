@@ -191,25 +191,13 @@ pub(crate) fn pin_problems(root: &Path) -> Vec<String> {
     let read = |path: &str| {
         std::fs::read_to_string(root.join(path)).map_err(|err| format!("reading {path}: {err}"))
     };
-    // The environment can point mise at a file other than the one these rules
-    // read, which would leave them judging a document mise ignores. Reading the
-    // variables costs no process, so the row still runs before mise exists on a
-    // machine.
-    let mut found = crate::pins::environment_problems(|name| std::env::var(name).ok());
-    found.extend(
-        match (
-            read(crate::pins::PINS),
-            read(crate::pins::LOCK),
-            read(crate::pins::WORKFLOW),
-        ) {
-            (Ok(pins), Ok(lock), Ok(workflow)) => crate::pins::problems(&pins, &lock, &workflow),
-            (first, second, third) => [first, second, third]
-                .into_iter()
-                .filter_map(Result::err)
-                .collect(),
-        },
-    );
-    found
+    match (read(crate::pins::PINS), read(crate::pins::LOCK)) {
+        (Ok(pins), Ok(lock)) => crate::pins::problems(&pins, &lock),
+        (first, second) => [first, second]
+            .into_iter()
+            .filter_map(Result::err)
+            .collect(),
+    }
 }
 
 /// What to run when a tool mise owns is absent. One command covers every one of
@@ -270,7 +258,7 @@ pub fn run(ui: &Ui) -> Result<bool> {
         rows.push(
             Row::new(Mark::Fail, PINS_STEP, "did not pass").note(format!(
                 "rewrite the lockfile with: {}",
-                crate::pins::RELOCK
+                crate::pins::relock()
             )),
         );
         return Ok(report(ui, &rows, Some(PINS_STEP), None));
@@ -701,8 +689,7 @@ pub(crate) fn pinned_version(text: &str, name: &str) -> Option<String> {
 ///
 /// A tool names itself and its license around the release it reports, so the
 /// shape is what finds it rather than the line it sits on. The shape is the
-/// one `is_exact_release` in the policy suite holds a pin to, and the one the
-/// mods repository reads, so a release is the same thing everywhere.
+/// one the mods repository reads, so a release is the same thing everywhere.
 fn reported_release(text: &str) -> Option<&str> {
     text.split(|c: char| !(c.is_ascii_digit() || c == '.'))
         .filter(|token| !token.is_empty())

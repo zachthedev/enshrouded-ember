@@ -40,8 +40,8 @@ jobs:
       # The pin rules, ahead of the step that installs from them. mise-action
       # runs `mise install`, which fetches and unpacks every artifact mise.lock
       # records, so a rule that ran after it would report a finding about bytes
-      # already on disk. This command reads mise.toml, mise.lock and this file
-      # and runs nothing, so it needs neither mise nor any pinned tool.
+      # already on disk. This command reads mise.toml and mise.lock and runs
+      # nothing, so it needs neither mise nor any pinned tool.
       - run: cargo xtask pins
         shell: bash
       # mise reads mise.toml for every tool the gate runs and mise.lock for the
