@@ -1,6 +1,14 @@
-# The threshold this repository sets. Every other audit runs at zizmor's
-# defaults.
+# The thresholds this repository sets. Every other audit runs at zizmor's
+# defaults. The gate's zizmor row reads this file, and so does the reusable
+# workflows job in continuous integration.
 rules:
+  # Every action is pinned to a commit. A tag can be retargeted by its owner
+  # with no pull request and no cooldown; a commit cannot. zizmor's default
+  # accepts a tag, so the policy names the hash.
+  unpinned-uses:
+    config:
+      policies:
+        '*': hash-pin
   # zizmor asks for seven days by default. The project standard is three, which
   # is the window that catches almost every package published and then pulled
   # while still letting a legitimate release land in the same week. A shorter

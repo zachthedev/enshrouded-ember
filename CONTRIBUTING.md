@@ -67,9 +67,10 @@ workflow with no `permissions` block, and expression injection through untrusted
 context. `--strict-collection` makes a file it cannot parse fail the step rather
 than drop out of the audit. It runs online when `gh auth token` answers, so the
 audits that read the GitHub API run, and `--offline` otherwise; the row's note
-says which. `--config` names `.github/zizmor.yml`, which holds the Dependabot
-cooldown threshold, so the environment cannot swap it for another. The inline
-markers in the workflows answer the findings this repository accepts.
+says which. `--config` names `.github/zizmor.yml`, which holds the hash-pin
+policy and the Dependabot cooldown threshold, so the environment cannot swap it
+for another. The inline markers in the workflows answer the findings this
+repository accepts.
 
 `doctests` runs beside `tests`, because `cargo nextest` runs none of them and a
 doctest that stops compiling would otherwise pass the gate in silence. `doc`
@@ -162,9 +163,13 @@ preset `.github/renovate.json` extends holds the cooldown. `renovate.json` adds
 what is true of this repository alone, and says why beside each entry.
 
 The gate's `deny` row runs `cargo deny check licenses bans sources`.
-Advisories are not a row: Dependabot alerts read RustSec for every pushed
-lockfile, and `cargo deny check advisories` runs by hand, reading the
-`[advisories]` table in `deny.toml`.
+Advisories are not a row, because an advisory published overnight would turn
+a change red that touched nothing. Two legs read the lockfile for them, and
+they fail in opposite directions: Dependabot alerts read GitHub's database on
+every push, which lacks part of RustSec, and `.github/workflows/audit.yml`
+runs `cargo deny check advisories` against RustSec weekly, reading the
+`[advisories]` table in `deny.toml`. A red audit run is a report, never a
+check, and no ruleset requires it.
 
 An advisory is fixed by the tool that sees the crate. A crate `Cargo.toml`
 names gets Renovate's security pull request, which skips the schedule and the
