@@ -129,4 +129,4 @@ MIT. See `LICENSE`.
 
 `LICENSE` carries the legal name, because that line is the legally operative
 one. Every manifest field a reader sees carries the brand, so `Cargo.toml`
-`authors` reads `ZachTheDev <me@zachthe.dev>`.
+`authors` reads `ZachTheDev <hey@zachthe.dev>`.

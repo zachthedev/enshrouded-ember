@@ -10,6 +10,9 @@ report one without publishing it first.
 Open a private advisory:
 <https://github.com/zachthedev/enshrouded-ember/security/advisories/new>
 
+Or write to <hey@zachthe.dev>. The advisory is the better channel, because
+the fix and the credit land beside the report.
+
 Never open a public issue for a vulnerability. Everything else belongs in the
 issue tracker.
 
