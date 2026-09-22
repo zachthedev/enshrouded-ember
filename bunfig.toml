@@ -10,8 +10,8 @@
 # editing package.json, on any machine. A user-level bunfig governs one laptop;
 # this one travels with the clone.
 #
-# Dependabot carries the same three days for every ecosystem it updates, in
-# .github/dependabot.yml.
+# Renovate's lock file maintenance runs `bun install` in a container with no
+# user-level bunfig, so this file is the only gate that run sees.
 
 [install]
 minimumReleaseAge = 259200
