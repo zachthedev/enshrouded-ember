@@ -1,64 +1,36 @@
-version: 2
-
-# Stable cargo has no publish-age gate of its own, so the cooldown below is the
-# only thing between this repository and a version published minutes ago.
+# Dependabot here opens one kind of pull request: a security fix for a crate that Cargo.toml does not
+# name. Renovate opens every version bump and every security fix for a crate it does name. Those come
+# from the kind preset this repository extends in .github/renovate.json.
 #
-# Patch and minor updates arrive grouped, one pull request per ecosystem per
-# week, so the gate runs once per group. A major arrives on its own, because it
-# is a decision rather than a bump.
+# The repository setting "Dependabot security updates" turns the security half on.
+# open-pull-requests-limit: 0 keeps the version half off. Security pull requests take no cooldown and
+# no schedule, so the schedule key below is inert. The file format requires it.
+#
+# allow with dependency-type: indirect alone refuses every crate that has a manifest requirement. A
+# direct advisory therefore records "all versions were ignored" on the alert, and Renovate's fix is the
+# only pull request. A transitive crate has no manifest requirement, so it passes. Dependabot then runs
+# cargo update -p <crate> --precise <fix> inside the parent's range.
+version: 2
 updates:
   - package-ecosystem: cargo
-    directory: '/'
+    directory: /
     schedule:
       interval: weekly
-    cooldown:
-      default-days: 3
-    groups:
-      # The crates that run inside a live dedicated server: they read the
-      # process image, install inline detours, and load libraries into a
-      # running game. A bump here can crash somebody's server, so it arrives
-      # separately from the rest and is read on its own.
-      runtime:
-        patterns:
-          - 'minhook'
-          - 'pelite'
-          - 'goblin'
-          - 'windows-link'
-        update-types: ['patch', 'minor']
-      workspace:
-        patterns: ['*']
-        update-types: ['patch', 'minor']
-    labels: ['dependencies', 'cargo']
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
+    allow:
+      - dependency-type: indirect
+    labels:
+      - dependencies
+      - security
     commit-message:
-      prefix: 'chore(deps)'
+      prefix: fix(deps)
 
+  # Actions have no transitive dependencies, and Renovate fixes an action advisory. The wildcard
+  # ignore is what silences security pull requests here. The limit alone leaves them on.
   - package-ecosystem: github-actions
-    directory: '/'
+    directory: /
     schedule:
       interval: weekly
-    cooldown:
-      default-days: 3
-    groups:
-      actions:
-        patterns: ['*']
-        update-types: ['patch', 'minor']
-    labels: ['dependencies', 'ci']
-    open-pull-requests-limit: 3
-    commit-message:
-      prefix: 'chore(ci)'
-
-  - package-ecosystem: bun
-    directory: '/'
-    schedule:
-      interval: weekly
-    cooldown:
-      default-days: 3
-    groups:
-      bun:
-        patterns: ['*']
-        update-types: ['patch', 'minor']
-    labels: ['dependencies', 'bun']
-    open-pull-requests-limit: 3
-    commit-message:
-      prefix: 'chore(deps)'
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: '*'

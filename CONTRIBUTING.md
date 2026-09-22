@@ -157,17 +157,21 @@ crate's own manifest.
 
 `bunfig.toml` sets the install cooldown for Bun and travels with the clone, so
 a container run with no user-level configuration sees the same gate. Cargo has
-no cooldown file of its own; the `cooldown` in `.github/dependabot.yml` is the
-gate on a crate bump.
+no cooldown file of its own: every version bump comes through Renovate, and the
+preset `.github/renovate.json` extends holds the cooldown. `renovate.json` adds
+what is true of this repository alone, and says why beside each entry.
 
 The gate's `deny` row runs `cargo deny check licenses bans sources`.
 Advisories are not a row: Dependabot alerts read RustSec for every pushed
 lockfile, and `cargo deny check advisories` runs by hand, reading the
 `[advisories]` table in `deny.toml`.
 
-A transitive advisory is fixed in the lockfile alone: `cargo update --package
-<crate>` to the fixed release, and commit `Cargo.lock`. When no fixed release
-satisfies the requirement, bump the direct dependency that pulls it in.
+An advisory is fixed by the tool that sees the crate. A crate `Cargo.toml`
+names gets Renovate's security pull request, which skips the schedule and the
+cooldown. A transitive crate gets Dependabot's, a lockfile-only bump inside the
+parent's range; `.github/dependabot.yml` opens that kind of pull request and no
+other. When no fixed release satisfies the requirement, bump the direct
+dependency that pulls it in.
 
 ## Releases
 

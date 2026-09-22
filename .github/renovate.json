@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>zachthedev/.github//renovate/rust-crates"],
+  "packageRules": [
+    {
+      "description": "Crates only xtask, ember-testkit and the dev-dependencies use never reach a published crate or the shipped library, so a bump of one is a chore.",
+      "matchManagers": ["cargo"],
+      "matchDepNames": [
+        "anyhow",
+        "clap",
+        "comfy-table",
+        "getrandom",
+        "goblin",
+        "owo-colors",
+        "tempfile",
+        "time",
+        "which"
+      ],
+      "semanticCommitType": "chore"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "STEAMCMD_IMAGE is the tag and digest the watcher runs, which no built-in manager reads out of an env block. The docker datasource moves the digest under the Docker Hub timestamp.",
+      "managerFilePatterns": ["/^\\.github/workflows/(client-)?build-watch\\.ya?ml$/"],
+      "matchStrings": [
+        "STEAMCMD_IMAGE: (?<depName>steamcmd/steamcmd):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}
