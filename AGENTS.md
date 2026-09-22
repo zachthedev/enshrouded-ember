@@ -1,18 +1,42 @@
-# Agents in this repository
+# enshrouded-ember
 
-Everything a contributor needs is in the human-facing files. This one only
-points at them.
+The Ember modding SDK for the Enshrouded dedicated server, a `rust-crates`
+repository. [README.md](README.md) says what it is.
+
+## Read first
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/dev.md](docs/dev.md) before
-changing anything. The rules that do not bend are CONTRIBUTING's
-[What never happens](CONTRIBUTING.md#what-never-happens) and
-[Commit messages](CONTRIBUTING.md#commit-messages).
+changing anything. They bind an agent as they bind a person.
 
-## Where a change belongs
+## Verify
 
-[CONTRIBUTING.md](CONTRIBUTING.md#where-code-goes) says which crate, and which
-repository, a change belongs in.
+```sh
+cargo xtask check          # the gate: every row in order, stopping at the first failure
+cargo xtask check --rows   # print the rows and what each covers, and run nothing
+cargo xtask pins           # the opening row alone: mise.toml and mise.lock against their rules
+```
 
-## The documentation
+[CONTRIBUTING.md#the-gate](CONTRIBUTING.md#the-gate) says what the rows cover
+and what the gate does when a tool is missing.
 
-[README.md](README.md#documentation) lists every document and what it holds.
+## Never
+
+- Never write to, launch or inject into a path under a Steam library.
+  ([What never happens](CONTRIBUTING.md#what-never-happens))
+- Never commit anything recovered from a Keen binary.
+  ([What never happens](CONTRIBUTING.md#what-never-happens))
+- Never commit an address without the pattern that recovers it.
+  ([What never happens](CONTRIBUTING.md#what-never-happens))
+- Never hand-edit what the release flow owns.
+  ([Releases](CONTRIBUTING.md#releases))
+- Never write a commit message outside the convention.
+  ([Commit messages](CONTRIBUTING.md#commit-messages))
+
+## Deviations
+
+A comment beside a line that names the handbook records a deliberate
+deviation. It is a decision, not a defect.
+
+## Where the rest is
+
+[README.md#documentation](README.md#documentation)

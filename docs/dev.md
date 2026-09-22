@@ -1,22 +1,18 @@
-# The first development run
+# Developing Ember
 
-End to end, from a fresh clone to a green gate.
+## Prerequisites
 
-## 1. Clone and install the toolchain
+- Rust, at the release `rust-toolchain.toml` pins. rustup installs it on the
+  first cargo command.
+- A C toolchain, for MinHook, the hook engine. On Windows that is Visual Studio
+  Build Tools.
+- [Bun](https://bun.sh), for the repository's own tooling, at the release
+  `.bun-version` pins. Continuous integration reads the same file.
+- [mise](https://mise.jdx.dev), for every gate tool that rustup, cargo and bun
+  do not provide. `mise.toml` pins a version per tool and `mise.lock` records
+  a checksum per platform, so an install takes the recorded artifact or fails.
 
-```sh
-git clone https://github.com/zachthedev/enshrouded-ember.git
-cd enshrouded-ember
-```
-
-`rust-toolchain.toml` pins the Rust release, and rustup installs it on the first
-cargo command. A C toolchain is needed for MinHook, the hook engine; on Windows
-that is Visual Studio Build Tools.
-
-The gate calls tools that rustup, cargo and bun do not provide.
-[mise](https://mise.jdx.dev) installs every one of them. `mise.toml` pins a
-version per tool and `mise.lock` records a checksum per platform, so an install
-takes the recorded artifact or fails. Install mise, then:
+Install mise, then:
 
 ```sh
 mise install
@@ -50,29 +46,58 @@ bytes came from that release URL and that every install since has to match them,
 which is narrower than a digest the publisher recorded and is not provenance.
 Bumping taplo writes a lockfile entry with no checksum at all, which the gate's
 own tests refuse, so whoever bumps it computes and commits the new hashes. A
-relock at the same version keeps them, so only a bump drops them.
+relock at the same version keeps them, so only a bump drops them. A release the
+pin file does not name is refused by name, so a wrong install fails at the gate
+rather than reading a script under other rules.
 
-[Bun](https://bun.sh) runs the repository's own tooling, at the release
-`.bun-version` pins. Install the hooks and the markup formatter with one
-command:
+## First run
 
-```sh
-bun install
-```
-
-To build a mod in another checkout against this one, put a `[patch.crates-io]`
-block in a `.cargo/config.toml` in a directory **above** both. Cargo merges
-config from every parent directory, so nothing in either repository has to
-change.
-
-## 2. Fetch a dedicated server
+From a fresh clone to a green gate:
 
 ```sh
-cargo xtask server fetch
+git clone https://github.com/zachthedev/enshrouded-ember.git
+cd enshrouded-ember
+mise install                  # the gate's tools, at the releases mise.lock records
+bun install                   # the hooks and the markup formatter
+cargo xtask server fetch      # a dedicated server, into .cache
+cargo xtask schema extract    # the reflection schema, out of that server
+cargo xtask check             # the gate
 ```
 
-This pulls a dedicated server from SteamCMD into `.cache`, which is gitignored.
-Anonymous login works for app 2278520, so no credentials are involved.
+The fetch pulls a dedicated server from SteamCMD into `.cache`, which is
+gitignored. Anonymous login works for app 2278520, so no credentials are
+involved. The server runs to gigabytes. Fetch it once.
+
+The extraction reads the fetched server's executable and writes every dump
+`OUTPUTS` in `xtask/src/schema/mod.rs` names, plus `build.json`, into
+`.cache/schema/<buildid>/`. The build id names the directory. It is not what the
+loader matches at run time: Ember identifies a build by the CodeView fingerprint
+in the image itself, because the build id is not readable from the running
+process.
+
+**The extraction is required.** Nothing recovered from a Keen binary is
+committed to this repository: no schema dump, no string table, no protocol
+registry, no game data. The extractors are committed and every contributor runs
+them against a server they fetched themselves. Anything the extractor produces
+is derived data, lives under `.cache`, and is regenerated rather than shared.
+The loop is fetch, extract, check.
+
+`cargo xtask check --rows` prints the gate's rows and what each covers.
+[CONTRIBUTING.md#the-gate](../CONTRIBUTING.md#the-gate) says what the gate does
+when a tool is missing. `pre-push` runs the same command, and so does
+continuous integration.
+
+## Running it
+
+The fetched dedicated server is what Ember runs against, never an installed
+copy of the game:
+
+```sh
+cargo xtask server seed --fixture <path>   # lay a fixture world into a run directory
+cargo xtask server run --inject <dll>      # start it, with the loader injected
+cargo xtask server logs --follow           # tail it
+cargo xtask server stop                    # ask it to shut down, and wait
+```
 
 A build lands in a directory named for its Steam build id, which is the key
 Steam, SteamCMD and the depot manifest all speak:
@@ -82,6 +107,7 @@ Steam, SteamCMD and the depot manifest all speak:
   steamcmd/            SteamCMD itself
   server/<buildid>/    The fetched server
   schema/<buildid>/    What the extractor reads out of it
+  loca/<buildid>/      A client's localization tables
 ```
 
 Every byte under `.cache` is regenerated by a fetch or an extract, which is why
@@ -91,31 +117,41 @@ none of it is committed.
 is refused. Your installed copy of the game is not a server, Steam overwrites
 its own files, and nothing here ever writes to, launches, or injects into one.
 
-The server runs to gigabytes. Fetch it once.
+A command that acts on one build takes `--build <buildid>` and otherwise picks
+the only one there is. `--root <path>` moves `.cache` somewhere else, which is
+how a mod repository keeps its fetched server under its own tree.
+`EMBER_DEV_ROOT` sets the same directory for every command, and `--root`
+overrides it. `cargo xtask --help` lists every command, and each one takes
+`--help` for its own flags.
 
-## 3. Extract the schema
+## Generated files
 
-```sh
-cargo xtask schema extract
-```
+| File                       | Regenerated by                                                |
+| -------------------------- | ------------------------------------------------------------- |
+| `Cargo.lock`               | any cargo build after a manifest edit; the gate runs locked   |
+| `bun.lock`                 | `bun install` after a `package.json` edit                     |
+| `mise.lock`                | `mise lock` after a `mise.toml` edit                          |
+| `data/steam-builds.jsonl`  | the build watcher workflows, one appended row per change      |
+| `data/build-digests.jsonl` | `bun run archive emit` or `archive record`, one row per build |
 
-This reads the fetched server's executable and writes every dump `OUTPUTS` in
-`xtask/src/schema/mod.rs` names, plus `build.json`, into
-`.cache/schema/<buildid>/`.
+Nobody hand-edits a row of either record. `mise.lock` keeps the hand-computed
+taplo hashes across a relock at the same version, as Prerequisites says.
 
-The build id names the directory. It is not what the loader matches at run time:
-Ember identifies a build by the CodeView fingerprint in the image itself,
-because the build id is not readable from the running process.
+## Tests that need a real thing
 
-**This step is required.** Nothing recovered from a Keen binary is committed to
-this repository: no schema dump, no string table, no protocol registry, no game
-data. The extractors are committed and every contributor runs them against a
-server they fetched themselves. Anything the extractor produces is derived data,
-lives under `.cache`, and is regenerated rather than shared.
+Tests that need a real build are `#[ignore]` and find it through the
+environment. `EMBER_SERVER_EXE` names a server executable, `EMBER_CLIENT_EXE` a
+client executable, and `EMBER_SCHEMA` a directory of dumps to compare against.
+Each test skips cleanly when its variable is unset, and
+`cargo test -- --ignored` runs them. Every other test stands on a synthetic
+image built in memory, so the whole suite runs on a machine with no server at
+all.
 
-The loop is fetch, extract, check.
+A test that drives a real detour runs under unwinding rules the shipped library
+does not have, because cargo ignores `panic = "abort"` for the test profile.
+Never rely on catching a panic from a hook body.
 
-## 3a. Extract the localization tables, when a mod displays text
+## The localization tables
 
 ```sh
 cargo xtask loca extract --client "<steam library>\steamapps\common\Enshrouded\enshrouded.exe"
@@ -129,22 +165,11 @@ commits the id alone.
 Only a client ships a localization table. The dedicated server carries none, so
 this step needs an installed client rather than a fetched server. The build id
 naming the directory is the client's, read from its own Steam app manifest, and
-it is a different series from the dedicated server's.
+it is a different series from the dedicated server's. Reading the client's
+bytes is the one thing done with an installed copy of the game.
 
 The same rule applies as to every other extraction: Keen's written text is
 derived data, stays under `.cache`, and is never committed.
-
-## 4. Run the gate
-
-```sh
-cargo xtask check
-```
-
-`cargo xtask check --rows` prints its rows and what each covers.
-[CONTRIBUTING.md](../CONTRIBUTING.md#the-gate) says what the gate does when a
-tool is missing.
-
-`pre-push` runs the same command, and so does continuous integration.
 
 ## The server and schema commands
 
@@ -159,13 +184,6 @@ cargo xtask schema list           # list the extractions under .cache/schema
 cargo xtask schema diff old new   # compare two extractions by buildid
 cargo xtask loca extract          # write a client build's localization tables
 ```
-
-A command that acts on one build takes `--build <buildid>` and otherwise picks
-the only one there is. `--root <path>` moves `.cache` somewhere else, which is
-how a mod repository keeps its fetched server under its own tree.
-`EMBER_DEV_ROOT` sets the same directory for every command, and `--root`
-overrides it. `cargo xtask --help` lists every command, and each one takes
-`--help` for its own flags.
 
 ## The signature diff
 
@@ -343,21 +361,9 @@ on the issue the watcher opened. It is gated on the archive job, which runs once
 per build, so a failure in it is not retried by the next scheduled run. Rerun it
 from the Actions tab instead.
 
-## Tests that need a real server
+## Building a mod against this checkout
 
-Tests that need a real build are `#[ignore]` and find it through the
-environment. `EMBER_SERVER_EXE` names a server executable, `EMBER_CLIENT_EXE` a
-client executable, and `EMBER_SCHEMA` a directory of dumps to compare against.
-Each test skips cleanly when its variable is unset, and
-`cargo test -- --ignored` runs them. Every other test stands on a synthetic
-image built in memory, so the whole suite runs on a machine with no server at
-all.
-
-A test that drives a real detour runs under unwinding rules the shipped library
-does not have, because cargo ignores `panic = "abort"` for the test profile.
-Never rely on catching a panic from a hook body.
-
-## Where code goes
-
-[CONTRIBUTING.md](../CONTRIBUTING.md#where-code-goes) says which crate a change
-belongs in.
+To build a mod in another checkout against this one, put a `[patch.crates-io]`
+block in a `.cargo/config.toml` in a directory **above** both. Cargo merges
+config from every parent directory, so nothing in either repository has to
+change.

@@ -1,58 +1,23 @@
 # Contributing
 
-The gate opens by holding `mise.toml` and `mise.lock` to their rules, before it
-runs any tool. `cargo xtask pins` runs that on its own. A lockfile entry the
-rules reject installs whatever its url serves, so a rule that ran later would
-report a finding about a binary that had already executed.
-[The gate](#the-gate) names every step in order.
+## Setup
 
-## Toolchain
-
-`rust-toolchain.toml` pins the Rust release, and rustup installs it on the first
-cargo command. A C toolchain is needed for MinHook, the hook engine.
-[Bun](https://bun.sh) runs the repository's own tooling, at the release
-`.bun-version` pins. Continuous integration reads the same file.
-
-The gate calls tools that rustup, cargo and bun do not provide.
-[mise](https://mise.jdx.dev) installs every one of them. `mise.toml` pins a
-version per tool and `mise.lock` records a checksum per platform, so an install
-takes the recorded artifact or fails. Install mise, then:
+Install the hooks before the first commit:
 
 ```sh
-mise install
+bun install
 ```
 
-Nothing from that lands on `PATH`. The gate asks `mise which` for each binary
-and runs the path it gives back, so the binary it checked is the binary it ran.
-Turning on `mise activate` in a shell puts the same binaries on `PATH` under
-their own names, which is what makes `cargo nextest run` and its siblings work
-at a prompt. The split is deliberate: a check runs the binary it resolved, and a
-person gets the convenience.
+`lefthook.yml` holds them: `commit-msg` runs commitlint, and `pre-push` runs
+the gate. [lefthook](https://lefthook.dev) installs them into `.git/hooks` when
+`bun install` runs the `prepare` script. Each hook resolves its tool through
+`bunx --no-install`, so a tool that is not installed fails the commit or the
+push rather than letting it through. If `git config core.hooksPath` prints a
+path, unset it first: git ignores `.git/hooks` while that setting names another
+directory.
 
-`mise.lock` is generated, so the gate holds it to something that is not in it.
-`xtask/src/pins.rs` carries the owner and the repository every tool's artifacts
-come from, and the rules refuse a lockfile entry whose `url` or `backend` names
-anything else. A bare registry key in `mise.toml` names no owner, so for those
-tools that table is the only record of the account outside the generated file.
-Moving a tool to another account takes an edit there, in the same diff as the
-lockfile it explains.
-
-`mise.toml` sets `locked` twice, under `[settings]` and under `[tool_config]`,
-because they are not the same setting. `MISE_LOCKED=false` and a `locked_scopes`
-that drops `project` each turn the `[settings]` one off. The `[tool_config]` one
-holds regardless of the environment, and mise reads it from the file alone, so
-the gate asserts it from the file.
-
-`taplo` is the one tool whose checksum does not come from its publisher. GitHub
-began recording a digest for release assets after the taplo release `mise.toml`
-pins was published, so its hashes were computed here and committed. They say the
-bytes came from that release URL and that every install since has to match them,
-which is narrower than a digest the publisher recorded and is not provenance.
-Bumping taplo writes a lockfile entry with no checksum at all, which the gate's
-own tests refuse, so whoever bumps it computes and commits the new hashes. A
-relock at the same version keeps them, so only a bump drops them. A release the
-pin file does not name is refused by name, so a wrong install fails at the gate
-rather than reading a script under other rules.
+[docs/dev.md#prerequisites](docs/dev.md#prerequisites) lists what to install
+and the file that pins each version.
 
 ## The gate
 
@@ -69,10 +34,14 @@ each one covers, are printed by the same table the gate runs:
 cargo xtask check --rows
 ```
 
+The opening row holds `mise.toml` and `mise.lock` to their rules before any
+tool runs, and `cargo xtask pins` runs that row on its own. A lockfile entry
+the rules reject installs whatever its url serves, so a rule that ran later
+would report a finding about a binary that had already executed.
+
 `cargo xtask` runs `--locked`, and so does every cargo row, so a manifest edit
 with no relock is refused before the gate starts rather than rewriting
-`Cargo.lock`. `taplo` reads
-`.taplo.toml` for the files it covers.
+`Cargo.lock`. `taplo` reads `.taplo.toml` for the files it covers.
 
 `typecheck` and `tools` cover `tools/`, the repository's own TypeScript. Bun
 strips types rather than checking them, so without `typecheck` the gate would
@@ -98,10 +67,9 @@ workflow with no `permissions` block, and expression injection through untrusted
 context. `--strict-collection` makes a file it cannot parse fail the step rather
 than drop out of the audit. It runs online when `gh auth token` answers, so the
 audits that read the GitHub API run, and `--offline` otherwise; the row's note
-says which. `--config` names
-`.github/zizmor.yml`, which holds the Dependabot cooldown threshold, so the
-environment cannot swap it for another. The inline markers in the workflows
-answer the findings this repository accepts.
+says which. `--config` names `.github/zizmor.yml`, which holds the Dependabot
+cooldown threshold, so the environment cannot swap it for another. The inline
+markers in the workflows answer the findings this repository accepts.
 
 `doctests` runs beside `tests`, because `cargo nextest` runs none of them and a
 doctest that stops compiling would otherwise pass the gate in silence. `doc`
@@ -109,46 +77,39 @@ builds every crate's documentation with warnings denied, so a broken link is a
 failure.
 
 A missing tool stops the gate and names itself, because a check that did not
-run is not a check that passed. Advisories are not a row: Dependabot alerts read
-RustSec for every pushed lockfile.
+run is not a check that passed.
 
 The pre-push hook and continuous integration call the same command, so neither
-can run a different gate.
+can run a different gate. Continuous integration adds what one machine cannot
+check:
 
-Continuous integration runs the same gate on Windows and on Linux, because the
-pre-push hook runs it on whichever host a contributor uses. Code behind
-`cfg(windows)` builds only on the first host, and code behind its inverse only
-on the second. The resolution path carries no `cfg(windows)`. Every Linux
-backend is a stub that returns `Unsupported`. Both have to hold on a host with
-no Windows API.
-
-The Linux leg compiles `zstd-sys`, which is C. The ubuntu runner image ships a C
-toolchain, so the leg installs nothing for it.
-
-## Hooks
-
-`lefthook.yml` holds the hooks: `commit-msg` runs commitlint, and `pre-push`
-runs the gate. [lefthook](https://lefthook.dev) installs them into `.git/hooks`
-when `bun install` runs the `prepare` script, once per clone:
-
-```sh
-bun install
-```
-
-A clone that ran an earlier `prepare` still points `core.hooksPath` at a
-directory that no longer exists, so run `git config --unset core.hooksPath`
-once before installing.
+- It runs the gate on Windows and on Linux, because the pre-push hook runs it
+  on whichever host a contributor uses. Code behind `cfg(windows)` builds only
+  on the first host, and code behind its inverse only on the second, so both
+  have to hold. The Linux leg compiles `zstd-sys`, which is C, and the ubuntu
+  runner image ships a C toolchain for it.
+- `commits` runs commitlint over every commit in a pull request, because the
+  `commit-msg` hook checks one commit on one machine and a rebase or a
+  `--no-verify` reaches the branch unchecked.
 
 ## Commit messages
 
 [Conventional Commits](https://www.conventionalcommits.org), enforced by the
-`commit-msg` hook. `.github/commit-scopes.json` holds the scope list, one
-sentence per scope saying what it covers. `cargo xtask scopes` prints it, and
-`commitlint.config.js` enforces it.
+`commit-msg` hook and by the `commits` job. `.github/commit-scopes.json` holds
+the scope list, one sentence per scope saying what it covers.
+`cargo xtask scopes` prints it, and `commitlint.config.js` enforces it.
 
 Scopes are the workspace crate names past the `ember-` prefix, plus
 cross-cutting names no crate owns. A new top-level crate earns a scope. Omit the
 scope rather than invent one.
+
+The header and every body line stop at 72 columns; commitlint refuses longer.
+The subject is imperative and lowercase with no trailing period.
+
+A body says what was wrong, what the change does now, and what a reader needs
+that the diff cannot show, such as what was deliberately not done. Past tense
+belongs here and nowhere else: a code comment describes the code as it is, and
+the commit message carries the history.
 
 ## Where code goes
 
@@ -160,22 +121,57 @@ Ask what the code describes:
 - A mod's own idea: not this repository, but the mod's own, such as
   [enshrouded-mods](https://github.com/zachthedev/enshrouded-mods)
 
-## Recovered addresses
+`cargo xtask crates` prints every crate and what it holds, read from each
+crate's own manifest.
 
-Never commit a hardcoded address without the pattern that recovers it. A table
-row is a lock on a scan result, not a substitute for the scan.
+## Tests
 
-Addresses resolve in tiers at run time: a cross-reference from a format string,
-a wildcard byte pattern, then the recorded offset. Every tier that runs has to
-agree with the recorded offset, because a recorded offset the scan contradicts
-means the build moved.
+- A test that needs a real build is `#[ignore]` and reads the build's path from
+  the environment, skipping cleanly when the variable is unset. Every other test
+  stands on a synthetic image built in memory, so the suite runs on a machine
+  with no server at all.
+  [docs/dev.md#tests-that-need-a-real-thing](docs/dev.md#tests-that-need-a-real-thing)
+  names the variables and says how to run them.
+- A test never relies on catching a panic from a hook body. Cargo ignores
+  `panic = "abort"` for the test profile, so a hook that unwinds under test
+  aborts the shipped library.
+- A case states its expectation as a literal, never as a value computed from
+  the subject under test. An expectation derived from the subject can only
+  restate it.
 
-## The first run
+## Code
 
-[docs/dev.md](docs/dev.md) has it end to end. In short: fetch a dedicated server
-into `.cache`, extract the schema from it, then run the gate. The extract step
-is required, because nothing recovered from a Keen binary is committed to this
-repository.
+- Code behind `cfg(windows)` builds on Windows alone and code behind its
+  inverse on Linux alone. The resolution path carries no `cfg(windows)`, and
+  every Linux backend is a stub that returns `Unsupported`, so both hold on a
+  host with no Windows API.
+- A module that needs unsafe code takes an `allow(unsafe_code)` with a reason
+  on its `mod` line, so the list of those attributes is the list of modules
+  that hold any.
+- Every line a command prints goes through `xtask/src/ui.rs`, so the color
+  policy and the column math live in one place.
+- A comment explains a constraint the reader can verify today. What was wrong
+  before, and why an earlier approach failed, goes in the commit message.
+
+## Dependencies
+
+`bunfig.toml` sets the install cooldown for Bun and travels with the clone, so
+a container run with no user-level configuration sees the same gate. Cargo has
+no cooldown file of its own; the `cooldown` in `.github/dependabot.yml` is the
+gate on a crate bump.
+
+The gate's `deny` row runs `cargo deny check licenses bans sources`.
+Advisories are not a row: Dependabot alerts read RustSec for every pushed
+lockfile, and `cargo deny check advisories` runs by hand, reading the
+`[advisories]` table in `deny.toml`.
+
+A transitive advisory is fixed in the lockfile alone: `cargo update --package
+<crate>` to the fixed release, and commit `Cargo.lock`. When no fixed release
+satisfies the requirement, bump the direct dependency that pulls it in.
+
+## Releases
+
+None.
 
 ## What never happens
 
@@ -188,3 +184,9 @@ repository.
   is committed. The extractors are committed; their output is not. The one
   published exception is the signature table, which holds function addresses and
   the patterns that recover them.
+- No hardcoded address is committed without the pattern that recovers it. A
+  table row is a lock on a scan result, not a substitute for the scan.
+  Addresses resolve in tiers at run time: a cross-reference from a format
+  string, a wildcard byte pattern, then the recorded offset. Every tier that
+  runs has to agree with the recorded offset, because a recorded offset the scan
+  contradicts means the build moved.

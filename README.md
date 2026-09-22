@@ -34,17 +34,12 @@ declared is resolved.
 
 ## Crates
 
-| Crate              | Holds                                                              |
-| ------------------ | ------------------------------------------------------------------ |
-| `ember-platform`   | Operating system seam: image access, inline hooks, library loading |
-| `ember-sigs`       | Per-build signature and layout tables, as data                     |
-| `ember-holistic`   | The Holistic engine: reflection registry, components, systems      |
-| `ember-kfc`        | Keen's KFC container format: the directory, resources, loca tags   |
-| `ember-enshrouded` | The game above the engine: sessions, chat, saves, items, recipes   |
-| `ember-sdk`        | What a mod author writes against                                   |
-| `ember-loader`     | The library the server loads                                       |
-| `ember-testkit`    | Development only: a local channel for driving a test server        |
-| `xtask`            | Repository automation                                              |
+Every crate says what it holds in its own `Cargo.toml`, and one command prints
+them all:
+
+```sh
+cargo xtask crates
+```
 
 The engine and game layers are separate because one public game runs on
 Holistic, so nothing can test cross-game reuse. Keeping them apart means the
@@ -97,33 +92,17 @@ function. Report one with the "New Keen build" issue template.
 ## Installing
 
 Ember goes beside the dedicated server, never inside a Steam library copy of the
-game. One proxy library and one `ember/` directory:
-
-```text
-enshrouded_server.exe
-POWRPROF.dll        Ember
-ember/
-  config.json       Ember's own settings
-  logs/             The startup report and the running log
-  mods/<mod>/       One directory per mod, each with its own config.json
-```
+game. [docs/install.md](docs/install.md) has the layout.
 
 ## Documentation
 
-| File                               | For                                        |
-| ---------------------------------- | ------------------------------------------ |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | The gate, the commit convention, the hooks |
-| [docs/dev.md](docs/dev.md)         | The first run, end to end                  |
-
-## Requirements
-
-- Rust, at the release `rust-toolchain.toml` pins
-- A C toolchain, for MinHook, the hook engine. On Windows, Visual Studio Build
-  Tools.
-- [Bun](https://bun.sh), for the repository's own tooling, at the release
-  `.bun-version` pins
-- On Windows, `core.symlinks=true` and Developer Mode, so `CLAUDE.md` checks
-  out as the symlink to `AGENTS.md` that git records
+| File                               | For                                                                  |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| [docs/install.md](docs/install.md) | Where Ember goes beside a server, and how it is upgraded and removed |
+| [docs/dev.md](docs/dev.md)         | What to install, the first run, the dev server, the tools behind it  |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | The gate, the commit convention, where code goes, what never happens |
+| [SECURITY.md](SECURITY.md)         | How to report a vulnerability and what is in scope                   |
+| [AGENTS.md](AGENTS.md)             | What an agent reads first, runs to verify, and never does            |
 
 ## License
 
