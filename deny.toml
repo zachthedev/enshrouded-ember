@@ -1,3 +1,6 @@
+# Read by the weekly advisories report alone. The gate runs the licenses, bans
+# and sources checks, and Dependabot alerts carry RustSec advisories per push;
+# a yanked crate is what neither of those sees.
 [advisories]
 yanked = "deny"
 

@@ -24,18 +24,9 @@ pub const PINS: &str = "mise.toml";
 /// [`PINS`] pins.
 pub const LOCK: &str = "mise.lock";
 
-/// The mise platforms every tool has to record an entry for.
-///
-/// These are the platforms the gate runs on, and [`RELOCK`] writes exactly
-/// these, so a platform block naming any other is an anomaly rather than a
-/// spare.
-pub const PLATFORMS: &[&str] = &["linux-x64", "windows-x64"];
-
-/// The command that rewrites [`LOCK`] after an edit to [`PINS`].
-///
-/// A test holds its platform list to [`PLATFORMS`], because a `const` cannot
-/// join one.
-pub const RELOCK: &str = "mise lock --platform linux-x64,windows-x64";
+/// The command that rewrites [`LOCK`] after an edit to [`PINS`], for the
+/// platforms `lockfile_platforms` names there.
+pub const RELOCK: &str = "mise lock";
 
 /// The host every release artifact [`LOCK`] records is served from.
 pub const RELEASE_HOST: &str = "github.com";
@@ -191,15 +182,6 @@ pub const TOOLS: &[Tool] = &[
         repository: "nextest",
         tag_prefix: "cargo-nextest-",
         provenance: Some(ATTESTED),
-    },
-    Tool {
-        key: "github:rustsec/rustsec",
-        binary: "cargo-audit",
-        backend: Backend::Github,
-        owner: "rustsec",
-        repository: "rustsec",
-        tag_prefix: "cargo-audit/v",
-        provenance: None,
     },
     Tool {
         key: "shellcheck",
@@ -380,57 +362,40 @@ pub fn pinned_tools(text: &str) -> Result<Vec<(String, String)>, String> {
         .collect()
 }
 
-/// Whether [`PINS`] sets `locked` in its `[settings]` table.
+/// The platforms [`PINS`] names under `settings.lockfile_platforms`, which are
+/// the platforms [`LOCK`] has to carry a block for, per tool, and no other.
 ///
-/// This is the locked mode a developer's own environment answers for.
-/// `MISE_LOCKED=false` turns it off, and so does a `MISE_LOCKED_SCOPES` that
-/// leaves out the project scope, in both cases while `mise settings get locked`
-/// still prints what this file holds. [`tool_config_locked`] is the setting
-/// neither reaches, and the two are asserted together for that reason.
-#[must_use]
-pub fn locked(text: &str) -> bool {
-    toml::from_str::<toml::Value>(text)
-        .ok()
-        .and_then(|document| document.get("settings")?.get("locked")?.as_bool())
-        .unwrap_or(false)
-}
-
-/// Whether [`PINS`] sets `locked` in its `[tool_config]` table.
+/// mise writes exactly these when it relocks, so a block for any other platform
+/// is a url and a checksum nothing installs.
 ///
-/// This is the locked mode that holds whatever the environment says. mise reads
-/// it from the file alone, so the value here is the value that applies and no
-/// effective-value lookup can differ from it. It is also the only one of the
-/// two that mise refuses an unlocked install under when `MISE_LOCKED_SCOPES`
-/// drops the project scope.
+/// # Errors
 ///
-/// `mise settings get` answers `Unknown setting` for it, so this file is where
-/// it is read from.
-#[must_use]
-pub fn tool_config_locked(text: &str) -> bool {
-    toml::from_str::<toml::Value>(text)
-        .ok()
-        .and_then(|document| document.get("tool_config")?.get("locked")?.as_bool())
-        .unwrap_or(false)
-}
-
-/// Whether [`PINS`] sets `locked_verify_provenance` in its `[settings]` table.
-///
-/// With it off, an install trusts the `provenance` value [`LOCK`] records and
-/// checks only that the matching setting is on, so an entry claiming an
-/// attestation it does not have installs without one. With it on, the
-/// attestation is re-verified against the artifact. A tool whose entry records
-/// no provenance installs on its checksum either way.
-#[must_use]
-pub fn verify_provenance(text: &str) -> bool {
-    toml::from_str::<toml::Value>(text)
-        .ok()
-        .and_then(|document| {
-            document
-                .get("settings")?
-                .get("locked_verify_provenance")?
-                .as_bool()
-        })
-        .unwrap_or(false)
+/// Returns the sentence a result row carries when the text is not TOML or
+/// names no platform list.
+pub fn lockfile_platforms(text: &str) -> Result<Vec<String>, String> {
+    let document: toml::Value =
+        toml::from_str(text).map_err(|err| format!("{PINS} is not TOML: {err}"))?;
+    let entries = document
+        .get("settings")
+        .and_then(|settings| settings.get("lockfile_platforms"))
+        .and_then(toml::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut platforms = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(platform) = entry.as_str() else {
+            return Err(format!(
+                "{PINS} names lockfile_platforms entry {index} as something other than a platform name"
+            ));
+        };
+        platforms.push(platform.to_string());
+    }
+    if platforms.is_empty() {
+        return Err(format!(
+            "{PINS} names no lockfile_platforms under [settings], so nothing says which blocks {LOCK} has to carry"
+        ));
+    }
+    Ok(platforms)
 }
 
 /// The binary the gate runs for the [`PINS`] key `name`.
@@ -739,22 +704,10 @@ fn array_problems(lock: &str) -> Vec<String> {
 pub fn problems(pins: &str, lock: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
 
-    if !locked(pins) {
-        found.push(format!(
-            "{PINS} does not set locked = true under [settings], so an install takes whatever a registry serves"
-        ));
-    }
-    if !tool_config_locked(pins) {
-        found.push(format!(
-            "{PINS} does not set locked = true under [tool_config], so MISE_LOCKED_SCOPES turns locked mode off"
-        ));
-    }
-    if !verify_provenance(pins) {
-        found.push(format!(
-            "{PINS} does not set locked_verify_provenance = true, so an install trusts the attestation {LOCK} records rather than checking it"
-        ));
-    }
-
+    let platforms = match lockfile_platforms(pins) {
+        Ok(platforms) => platforms,
+        Err(problem) => return vec![problem],
+    };
     let tools = match pinned_tools(pins) {
         Ok(tools) => tools,
         Err(problem) => return vec![problem],
@@ -788,11 +741,11 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
 
     found.extend(array_problems(lock));
 
-    // Every platform block is read, not only the ones `PLATFORMS` names. A block
-    // nothing reads is a url and a checksum nobody checked, and `RELOCK` writes
-    // exactly those platforms, so any other is an anomaly.
+    // Every platform block is read, not only the ones the list names. A block
+    // nothing reads is a url and a checksum nobody checked, and a relock writes
+    // exactly the listed platforms, so any other is an anomaly.
     for entry in &locked_entries {
-        if pinned.contains(entry.tool.as_str()) && !PLATFORMS.contains(&entry.platform.as_str()) {
+        if pinned.contains(entry.tool.as_str()) && !platforms.contains(&entry.platform) {
             found.push(format!(
                 "{LOCK} records a {} entry for {}, which is no platform the gate installs on",
                 entry.platform, entry.tool
@@ -804,10 +757,10 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
         let Some(tool) = tool_for(name) else {
             continue;
         };
-        for platform in PLATFORMS {
+        for platform in &platforms {
             if !locked_entries
                 .iter()
-                .any(|entry| &entry.tool == name && entry.platform == *platform)
+                .any(|entry| &entry.tool == name && &entry.platform == platform)
             {
                 found.push(format!("{name} records no {platform} entry in {LOCK}"));
             }
@@ -834,9 +787,7 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Backend, PLATFORMS, RELOCK, TOOLS, absolute, locked, problems, tool_config_locked,
-    };
+    use super::{Backend, TOOLS, absolute, lockfile_platforms, problems};
     use std::collections::BTreeSet;
 
     /// A pin file every rule accepts, for the cases below to change one thing
@@ -845,8 +796,7 @@ mod tests {
         "[tools]\n",
         "taplo = \"0.10.0\"\n",
         "\"github:nextest-rs/nextest\" = { version = \"0.9.145\" }\n",
-        "\n[tool_config]\nlocked = true\n",
-        "\n[settings]\nlocked = true\nlocked_verify_provenance = true\n",
+        "\n[settings]\nlockfile_platforms = [\"linux-x64\", \"windows-x64\"]\n",
     );
 
     /// Two digests of the right shape, for the cases that name one.
@@ -912,19 +862,25 @@ mod tests {
     fn the_pin_rules_refuse_the_shapes_they_name() {
         let cases: &[(&str, String, String, &str)] = &[
             (
-                "locked mode off",
+                "the platform list deleted",
                 SOUND_PINS.replace(
-                    "\n[settings]\nlocked = true\n",
-                    "\n[settings]\nlocked = false\n",
+                    "\n[settings]\nlockfile_platforms = [\"linux-x64\", \"windows-x64\"]\n",
+                    "",
                 ),
                 SOUND_LOCK.to_string(),
-                "does not set locked = true under [settings]",
+                "names no lockfile_platforms under [settings]",
             ),
             (
-                "the tool_config locked line deleted",
-                SOUND_PINS.replace("\n[tool_config]\nlocked = true\n", ""),
+                "the platform list emptied",
+                SOUND_PINS.replace("[\"linux-x64\", \"windows-x64\"]", "[]"),
                 SOUND_LOCK.to_string(),
-                "does not set locked = true under [tool_config]",
+                "names no lockfile_platforms under [settings]",
+            ),
+            (
+                "a platform dropped from the list, its blocks kept",
+                SOUND_PINS.replace("[\"linux-x64\", \"windows-x64\"]", "[\"linux-x64\"]"),
+                SOUND_LOCK.to_string(),
+                "records a windows-x64 entry for taplo, which is no platform the gate installs on",
             ),
         ];
         refuses(cases);
@@ -938,12 +894,6 @@ mod tests {
     #[test]
     fn the_lockfile_rules_refuse_an_entry_nothing_else_reads() {
         let cases: &[(&str, String, String, &str)] = &[
-            (
-                "the provenance verification line deleted",
-                SOUND_PINS.replace("\nlocked_verify_provenance = true\n", "\n"),
-                SOUND_LOCK.to_string(),
-                "does not set locked_verify_provenance = true",
-            ),
             (
                 "an attested tool's provenance line deleted",
                 SOUND_PINS.to_string(),
@@ -1276,9 +1226,9 @@ mod tests {
 
         let github = TOOLS
             .iter()
-            .find(|tool| tool.key == "github:rustsec/rustsec")
-            .expect("rustsec is pinned");
-        assert_eq!(github.coordinate(), "github:rustsec/rustsec");
+            .find(|tool| tool.key == "github:bnjbvr/cargo-machete")
+            .expect("cargo-machete is pinned");
+        assert_eq!(github.coordinate(), "github:bnjbvr/cargo-machete");
         assert_eq!(github.backend, Backend::Github);
     }
 
@@ -1299,27 +1249,16 @@ mod tests {
         }
     }
 
-    /// The relock command writes exactly the platforms the rules read.
+    /// The platform list is read from the settings table alone, in order.
     #[test]
-    fn the_relock_command_names_every_platform() {
-        let listed = RELOCK
-            .strip_prefix("mise lock --platform ")
-            .expect("the relock command names its platforms");
-        assert_eq!(listed.split(',').collect::<Vec<_>>(), PLATFORMS);
-    }
-
-    /// The two locked spellings are read from their own tables.
-    ///
-    /// `settings.locked` answers to the environment and `tool_config.locked`
-    /// does not, so a file setting one is not a file setting the other.
-    #[test]
-    fn each_locked_spelling_is_read_from_its_own_table() {
-        let settings_only = "[tools]\na = \"1.0.0\"\n[settings]\nlocked = true\n";
-        assert!(locked(settings_only));
-        assert!(!tool_config_locked(settings_only));
-
-        let tool_config_only = "[tools]\na = \"1.0.0\"\n[tool_config]\nlocked = true\n";
-        assert!(!locked(tool_config_only));
-        assert!(tool_config_locked(tool_config_only));
+    fn the_platform_list_is_read_from_the_settings_table() {
+        let listed = lockfile_platforms(SOUND_PINS).expect("the sound pins name platforms");
+        assert_eq!(listed, ["linux-x64", "windows-x64"]);
+        assert!(lockfile_platforms("[tools]\na = \"1.0.0\"\n").is_err());
+        assert!(lockfile_platforms("not toml = = =").is_err());
+        assert!(
+            lockfile_platforms("[settings]\nlockfile_platforms = [\"linux-x64\", 1]\n")
+                .is_err_and(|problem| problem.contains("entry 1"))
+        );
     }
 }

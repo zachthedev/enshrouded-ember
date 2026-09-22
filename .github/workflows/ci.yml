@@ -44,23 +44,31 @@ jobs:
       # nothing, so it needs neither mise nor any pinned tool.
       - run: cargo xtask pins
         shell: bash
-      # mise reads mise.toml for every tool the gate runs and mise.lock for the
-      # checksum of each artifact, so no release is written here. The action
-      # verifies its own mise download against a minisign-signed SHASUMS256.txt,
-      # and a sha256 input returns before that check runs, so none is passed.
-      # The mise release is exact, because an unpinned one resolves at run time
-      # and a resolved release is under no cooldown.
+      # The action installs mise and nothing else: the install below runs
+      # --locked, so a tool mise.lock does not record is refused rather than
+      # fetched. The action verifies its own mise download against a
+      # minisign-signed SHASUMS256.txt, and a sha256 input returns before that
+      # check runs, so none is passed. The mise release is exact, because an
+      # unpinned one resolves at run time and a resolved release is under no
+      # cooldown.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           version: 2026.9.5
+          install: false
+      - run: mise install --locked
+        shell: bash
       # Both legs name a shell, because a bare `run:` is bash on ubuntu and
       # pwsh on windows, so one line would execute under two dialects while
       # actionlint reads it as one. Each line below is the same in either
       # shell, so bash is the one that leaves actionlint reading what runs.
       - run: bun install --frozen-lockfile
         shell: bash
+      # zizmor runs its online audits when a token is present; the job token
+      # reads the actions API under contents: read.
       - run: cargo xtask check
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   commits:
     runs-on: ubuntu-latest

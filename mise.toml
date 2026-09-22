@@ -9,25 +9,35 @@
 # which builds from source, and `mise lock` records no checksum for a build.
 #
 # mise.lock holds a checksum per platform for every entry below, so a version
-# appears here and a hash appears there. `mise lock --platform
-# linux-x64,windows-x64` rewrites it after any edit to this file.
+# appears here and a hash appears there. `mise lock` rewrites it after any edit
+# to this file, for the platforms `lockfile_platforms` names. `cargo xtask pins`
+# reads the pair, and the gate runs it before it runs any tool.
 #
-# Some entries also carry a provenance line. That is a lock-time check: mise
-# verifies the signer when it writes the entry, and the checksum is what an
-# install compares. `cargo xtask pins` reads this pair, and the gate runs it
-# before it runs any tool.
+# The comment beside each entry names what its lockfile entry rests on:
+# provenance, where the publisher attests the release and mise re-checks the
+# attestation at install time; a checksum in a pinned tree, where the registry
+# entry mise resolves through carries the digest; a checksum recorded at lock
+# time, where mise hashes the release asset it downloaded; or a checksum
+# recorded here, computed by hand at the bump because the publisher records
+# none.
 #
 # Nothing bumps these automatically. Dependabot has no ecosystem for a mise
 # tool, so a human edits this file.
 
 [tools]
+# provenance
 actionlint = "1.7.12"
+# checksum in a pinned tree
 cargo-deny = "0.20.2"
+# checksum recorded at lock time
 "github:bnjbvr/cargo-machete" = "0.9.2"
+# provenance
 "github:nextest-rs/nextest" = { version = "0.9.145", version_prefix = "cargo-nextest-" }
-"github:rustsec/rustsec" = { version = "0.22.2", version_prefix = "cargo-audit/v" }
+# checksum in a pinned tree
 shellcheck = "0.11.0"
+# checksum recorded here
 taplo = "0.10.0"
+# provenance
 zizmor = "1.30.1"
 
 [tool_config]
@@ -45,10 +55,19 @@ locked = true
 # reaches the [tool_config] line above.
 locked = true
 
-# Re-verify an attested artifact against its attestation at install time. With
+# Write and read mise.lock, for exactly these platforms. A platform block for
+# any other is a url and a checksum nothing installs, and the gate refuses it.
+lockfile = true
+lockfile_platforms = ["linux-x64", "windows-x64"]
+
+# Re-check an attested artifact against its attestation at install time. With
 # this off, an install trusts the provenance mise.lock records and checks only
 # that the matching setting is still on, so an entry claiming an attestation it
 # does not have installs without one. A tool whose entry carries no provenance
 # line installs on its checksum either way, so this needs no allow list: the
-# per-tool provenance line in mise.lock is what makes verification required.
+# per-tool provenance line in mise.lock is what makes the check required.
 locked_verify_provenance = true
+
+# An attestation lookup that fails is a refusal, not a pass. Without this, an
+# API outage installs an attested tool as if it carried no attestation.
+provenance_api_failures_fatal = true
