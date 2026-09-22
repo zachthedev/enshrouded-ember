@@ -140,10 +140,9 @@ derived data, stays under `.cache`, and is never committed.
 cargo xtask check
 ```
 
-It runs the steps in the gate table in
-[CONTRIBUTING.md](../CONTRIBUTING.md#the-gate), in order, stopping at the first
-failure. That section also says what each step covers and what the gate does
-when a tool is missing.
+`cargo xtask check --rows` prints its rows and what each covers.
+[CONTRIBUTING.md](../CONTRIBUTING.md#the-gate) says what the gate does when a
+tool is missing.
 
 `pre-push` runs the same command, and so does continuous integration.
 

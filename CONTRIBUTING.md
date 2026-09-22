@@ -62,25 +62,17 @@ One command, and the only one:
 cargo xtask check
 ```
 
-It runs, in order and stopping at the first failure:
+It runs its rows in order and stops at the first failure. The rows, and what
+each one covers, are printed by the same table the gate runs:
 
-| Step         | What it checks                                           |
-| ------------ | -------------------------------------------------------- |
-| `fmt`        | Rust formatting                                          |
-| `taplo`      | TOML formatting                                          |
-| `clippy`     | Lints on every target, with warnings denied              |
-| `tests`      | The workspace's tests, through `cargo nextest`           |
-| `doctests`   | Every documented example                                 |
-| `deny`       | Advisories, licenses, bans and sources                   |
-| `machete`    | Dependencies a crate declares and never uses             |
-| `audit`      | The lockfile against the RustSec advisory database       |
-| `prettier`   | Markup, JavaScript and TypeScript formatting             |
-| `typecheck`  | The types in `tools/`                                    |
-| `tools`      | The tests in `tools/`                                    |
-| `actionlint` | Workflow syntax, runner labels and expressions           |
-| `zizmor`     | Workflow pinning, credentials, permissions and injection |
+```sh
+cargo xtask check --rows
+```
 
-`taplo` reads `.taplo.toml` for the files it covers.
+`cargo xtask` runs `--locked`, and so does every cargo row, so a manifest edit
+with no relock is refused before the gate starts rather than rewriting
+`Cargo.lock`. `taplo` reads
+`.taplo.toml` for the files it covers.
 
 `typecheck` and `tools` cover `tools/`, the repository's own TypeScript. Bun
 strips types rather than checking them, so without `typecheck` the gate would
@@ -93,29 +85,32 @@ outputs, and a misspelled one reads as an empty string rather than an error.
 
 Its shellcheck pass is on, and `mise.toml` holds the version every host
 installs. actionlint shells out to an analyzer it finds on `PATH` and says
-nothing at all when it does not, so the gate hands it the path mise resolved and
-refuses the step unless that binary reports the pinned version. Both matrix legs
-then read the shell in a `run:` block the same way. pyflakes stays off, because
-no Windows package manager ships it and leaving it on would have the quiet leg
-report a pass for an analysis it never ran.
+nothing at all when it does not, and no flag changes that, so the gate hands it
+the path mise resolved and first runs it over a canary workflow with one
+unquoted expansion. The row is refused unless that run reports `SC2086`. Both
+matrix legs then read the shell in a `run:` block the same way. pyflakes stays
+off, because no Windows package manager ships it and leaving it on would have
+the quiet leg report a pass for an analysis it never ran.
 
 `zizmor` audits the same files for supply chain and credential problems: an
 action not pinned to a commit, a checkout that leaves a credential behind, a
 workflow with no `permissions` block, and expression injection through untrusted
 context. `--strict-collection` makes a file it cannot parse fail the step rather
-than drop out of the audit. `--offline` keeps it from needing a GitHub token, so
-a runner and a laptop get the same findings. `--config` names
+than drop out of the audit. It runs online when `gh auth token` answers, so the
+audits that read the GitHub API run, and `--offline` otherwise; the row's note
+says which. `--config` names
 `.github/zizmor.yml`, which holds the Dependabot cooldown threshold, so the
 environment cannot swap it for another. The inline markers in the workflows
 answer the findings this repository accepts.
 
-`doctests` runs whether or not `cargo-nextest` is installed, because
-`cargo nextest` runs none of them and a doctest that stops compiling would
-otherwise pass the gate in silence.
+`doctests` runs beside `tests`, because `cargo nextest` runs none of them and a
+doctest that stops compiling would otherwise pass the gate in silence. `doc`
+builds every crate's documentation with warnings denied, so a broken link is a
+failure.
 
-`tests` falls back to `cargo test --workspace` when `cargo-nextest` is absent,
-and the summary says which runner ran. Any other missing tool stops the gate and
-names itself, because a check that did not run is not a check that passed.
+A missing tool stops the gate and names itself, because a check that did not
+run is not a check that passed. Advisories are not a row: Dependabot alerts read
+RustSec for every pushed lockfile.
 
 The pre-push hook and continuous integration call the same command, so neither
 can run a different gate.

@@ -18,15 +18,13 @@ goblin.workspace = true
 owo-colors.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 time.workspace = true
 toml.workspace = true
 which.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-link.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
 
 [lints]
 workspace = true

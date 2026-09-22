@@ -10,15 +10,22 @@
 //! Nothing recovered from a Keen binary is committed. Every extraction lands
 //! under the gitignored `.cache` directory and is regenerated from a build the
 //! caller fetched.
-
 mod check;
 mod image;
 mod kfc;
 mod loca;
 pub mod pins;
+#[allow(
+    unsafe_code,
+    reason = "Win32 process control for the development server"
+)]
 mod proc;
 mod root;
 mod schema;
+#[allow(
+    unsafe_code,
+    reason = "the Win32 random source, for the server password"
+)]
 mod server;
 mod sig;
 mod steam;
@@ -81,8 +88,12 @@ struct GlobalArgs {
 enum Command {
     /// Print the commit scopes this repository accepts.
     Scopes,
-    /// Run every gate step in order and stop at the first failure.
-    Check,
+    /// Run every gate row in order and stop at the first failure.
+    Check {
+        /// Print the rows and what each checks, and run nothing.
+        #[arg(long)]
+        rows: bool,
+    },
     /// Hold mise.toml and mise.lock to their rules, which the gate does first.
     Pins,
     /// Fetch, seed, launch, tail and stop a dedicated server build.
@@ -339,7 +350,11 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
             }
             Ok(true)
         }
-        Command::Check => check::run(ui),
+        Command::Check { rows: true } => {
+            check::rows(ui);
+            Ok(true)
+        }
+        Command::Check { rows: false } => check::run(ui),
         Command::Pins => {
             let problems = check::pin_problems(&workspace_root());
             for problem in &problems {

@@ -8,14 +8,10 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-# The extensions prettier owns here. Prettier reads this file for the options
-# .prettierrc leaves unset, so this list has to match the gate's prettier glob.
-# A file outside it takes the indent width the [*] section sets.
-[*.{md,json,yml,yaml,js,mjs,cjs,ts}]
-indent_size = 2
-
-# Prettier formats its own configuration file, so it takes the same width.
-[.prettierrc]
+# The files prettier owns here, its own configuration file included. Prettier
+# reads this file for the options .prettierrc leaves unset, and a file outside
+# this section takes the indent width the [*] section sets.
+[{*.{md,json,yml,yaml,js,mjs,cjs,ts},.prettierrc}]
 indent_size = 2
 
 # A markdown line break is two trailing spaces.
