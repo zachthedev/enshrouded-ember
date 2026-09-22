@@ -14,6 +14,10 @@ indent_size = 4
 [*.{md,json,yml,yaml,js,mjs,cjs,ts}]
 indent_size = 2
 
+# Prettier formats its own configuration file, so it takes the same width.
+[.prettierrc]
+indent_size = 2
+
 # A markdown line break is two trailing spaces.
 [*.md]
 trim_trailing_whitespace = false
