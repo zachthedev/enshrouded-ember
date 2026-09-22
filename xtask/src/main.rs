@@ -5,7 +5,8 @@
 //! seeds it, launches it with the loader injected, tails it and stops it.
 //! `schema` recovers the reflection schema from a build and diffs two
 //! recoveries. `loca` writes a client's localization tables out, so a mod can
-//! name a tag id it looked up.
+//! name a tag id it looked up. `crates` prints every workspace member and what
+//! it holds, read from each manifest's `description`.
 //!
 //! Nothing recovered from a Keen binary is committed. Every extraction lands
 //! under the gitignored `.cache` directory and is regenerated from a build the
@@ -63,6 +64,61 @@ fn scopes() -> anyhow::Result<Vec<Scope>> {
     serde_json::from_str(SCOPES_JSON).context("reading .github/commit-scopes.json")
 }
 
+/// One workspace member, as `cargo metadata` describes it.
+#[derive(serde::Deserialize)]
+struct Member {
+    name: String,
+    description: Option<String>,
+}
+
+/// The `cargo metadata` document, reduced to the fields the crate map reads.
+#[derive(serde::Deserialize)]
+struct Metadata {
+    packages: Vec<Member>,
+}
+
+/// Every workspace member with its description, in manifest order.
+///
+/// A crate's `description` is the one place that says what it holds, so a
+/// member without one is reported by name rather than printed as a blank.
+///
+/// # Errors
+///
+/// Returns an error when `metadata` is not a `cargo metadata` document, or
+/// when a member carries no description.
+fn members(metadata: &str) -> anyhow::Result<Vec<(String, String)>> {
+    let metadata: Metadata = serde_json::from_str(metadata).context("reading cargo metadata")?;
+    metadata
+        .packages
+        .into_iter()
+        .map(|member| {
+            let description = member
+                .description
+                .filter(|description| !description.trim().is_empty())
+                .with_context(|| format!("{} has no description in its Cargo.toml", member.name))?;
+            Ok((member.name, description))
+        })
+        .collect()
+}
+
+/// The workspace's own members, as cargo reads them from the manifests.
+///
+/// `--no-deps` keeps the read to the workspace, so no dependency is resolved
+/// and no network is reached.
+fn workspace_metadata() -> anyhow::Result<String> {
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
+        .current_dir(workspace_root())
+        .output()
+        .context("running cargo metadata")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "cargo metadata failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).context("cargo metadata printed text that is not UTF-8")
+}
+
 #[derive(Parser)]
 #[command(name = "xtask", about = "Repository automation for Ember")]
 struct Cli {
@@ -88,6 +144,8 @@ struct GlobalArgs {
 enum Command {
     /// Print the commit scopes this repository accepts.
     Scopes,
+    /// Print every workspace crate and what it holds, from each Cargo.toml.
+    Crates,
     /// Run every gate row in order and stop at the first failure.
     Check {
         /// Print the rows and what each checks, and run nothing.
@@ -350,6 +408,12 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
             }
             Ok(true)
         }
+        Command::Crates => {
+            for (name, description) in members(&workspace_metadata()?)? {
+                println!("{name}  {description}");
+            }
+            Ok(true)
+        }
         Command::Check { rows: true } => {
             check::rows(ui);
             Ok(true)
@@ -383,7 +447,64 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::scopes;
+    use super::{members, scopes};
+
+    /// What one crate-map case expects: the members read, or the text the
+    /// error must carry.
+    type Expected = Result<Vec<(&'static str, &'static str)>, &'static str>;
+
+    /// The crate map prints each manifest's `description`, so the read keeps
+    /// manifest order and a member with no description is named, not skipped.
+    #[test]
+    fn crate_map_reads_every_member_or_names_the_one_with_no_description() {
+        let cases: [(&str, &str, Expected); 4] = [
+            (
+                "two members in manifest order",
+                r#"{"packages":[{"name":"ember-sdk","description":"The surface."},{"name":"xtask","description":"Automation."}]}"#,
+                Ok(vec![
+                    ("ember-sdk", "The surface."),
+                    ("xtask", "Automation."),
+                ]),
+            ),
+            (
+                "a member with no description field",
+                r#"{"packages":[{"name":"ember-sdk","description":"The surface."},{"name":"ember-sigs"}]}"#,
+                Err("ember-sigs has no description in its Cargo.toml"),
+            ),
+            (
+                "a member whose description is blank",
+                r#"{"packages":[{"name":"ember-kfc","description":"  "}]}"#,
+                Err("ember-kfc has no description in its Cargo.toml"),
+            ),
+            (
+                "text that is not a cargo metadata document",
+                "not json",
+                Err("reading cargo metadata"),
+            ),
+        ];
+        for (case, metadata, expected) in cases {
+            let read = members(metadata);
+            match expected {
+                Ok(expected) => {
+                    let read = read.unwrap_or_else(|err| panic!("{case}: {err:#}"));
+                    let read: Vec<(&str, &str)> = read
+                        .iter()
+                        .map(|(name, description)| (name.as_str(), description.as_str()))
+                        .collect();
+                    assert_eq!(read, expected, "{case}");
+                }
+                Err(expected) => {
+                    let err = read
+                        .err()
+                        .unwrap_or_else(|| panic!("{case}: read a crate map"));
+                    assert!(
+                        format!("{err:#}").contains(expected),
+                        "{case}: the error does not name the cause: {err:#}"
+                    );
+                }
+            }
+        }
+    }
 
     /// The scope file feeds the commit hook, so a duplicate or an empty entry
     /// would accept a commit nobody meant to allow.
