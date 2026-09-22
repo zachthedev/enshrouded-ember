@@ -191,6 +191,9 @@ repository.
 
 - No path inside a Steam library is ever written to, launched, or injected into.
   A dedicated server for development is fetched separately into `.cache`.
+  `.claude/settings.json` carries two `deny` entries that refuse an agent an
+  edit under a Steam library, because a rule read is a rule that can be
+  forgotten and a deny cannot.
 - No schema dump, string table, protocol registry or other recovered game data
   is committed. The extractors are committed; their output is not. The one
   published exception is the signature table, which holds function addresses and
