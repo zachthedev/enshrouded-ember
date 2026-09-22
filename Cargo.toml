@@ -54,12 +54,17 @@ tempfile = "3.27.0"
 
 [workspace.lints.rust]
 missing_docs = "warn"
+# A module that needs unsafe code takes an allow with a reason on its `mod`
+# line, so the list of modules that hold any is the list of those attributes.
+unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"
+multiple_unsafe_ops_per_block = "warn"
 undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
 
 [profile.release]
 lto = true

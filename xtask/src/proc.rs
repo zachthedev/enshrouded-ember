@@ -367,21 +367,22 @@ mod platform {
     /// why this runs in a short-lived child process rather than in the command
     /// the operator typed.
     pub fn send_break(pid: u32) -> Result<()> {
-        // SAFETY: each call takes plain integers or a function pointer with the
-        // signature the handler list expects.
-        unsafe {
-            FreeConsole();
-            if AttachConsole(pid) == 0 {
-                bail!("could not join the console of process {pid}; it is not a console process");
-            }
-            SetConsoleCtrlHandler(Some(swallow_control_event), 1);
-            // The group id is the server's own process id, because the server
-            // was started in a process group of its own. Group zero would send
-            // the event to every process on the console, which includes the
-            // command that asked for the stop.
-            if GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) == 0 {
-                bail!("could not raise a console control event for process {pid}");
-            }
+        // SAFETY: takes no argument and detaches this process from its console.
+        unsafe { FreeConsole() };
+        // SAFETY: takes a plain process id.
+        if unsafe { AttachConsole(pid) } == 0 {
+            bail!("could not join the console of process {pid}; it is not a console process");
+        }
+        // SAFETY: the function pointer has the signature the handler list
+        // expects, and it stays valid for the life of the process.
+        unsafe { SetConsoleCtrlHandler(Some(swallow_control_event), 1) };
+        // The group id is the server's own process id, because the server was
+        // started in a process group of its own. Group zero would send the
+        // event to every process on the console, which includes the command
+        // that asked for the stop.
+        // SAFETY: takes two plain integers.
+        if unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) } == 0 {
+            bail!("could not raise a console control event for process {pid}");
         }
         Ok(())
     }
@@ -478,14 +479,14 @@ mod platform {
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        // SAFETY: both strings are NUL terminated and live across the calls.
-        let loader = unsafe {
-            let module = GetModuleHandleW(module_name.as_ptr());
-            if module == 0 {
-                bail!("kernel32.dll is not loaded in this process");
-            }
-            GetProcAddress(module, c"LoadLibraryW".as_ptr().cast())
-        };
+        // SAFETY: the module name is NUL terminated and lives across the call.
+        let module = unsafe { GetModuleHandleW(module_name.as_ptr()) };
+        if module == 0 {
+            bail!("kernel32.dll is not loaded in this process");
+        }
+        // SAFETY: the module handle is live and the export name is a NUL
+        // terminated literal.
+        let loader = unsafe { GetProcAddress(module, c"LoadLibraryW".as_ptr().cast()) };
         if loader.is_null() {
             bail!("kernel32.dll exports no LoadLibraryW");
         }
@@ -508,13 +509,13 @@ mod platform {
         }
         let thread = Handle(thread);
 
-        // SAFETY: the thread handle is live for the wait and the read.
-        let (waited, thread_code) = unsafe {
-            let waited = WaitForSingleObject(thread.0, LOAD_TIMEOUT_MS);
-            let mut code: u32 = 0;
-            let readable = GetExitCodeThread(thread.0, &raw mut code) != 0;
-            (waited, readable.then_some(code))
-        };
+        // SAFETY: the thread handle is live for the wait.
+        let waited = unsafe { WaitForSingleObject(thread.0, LOAD_TIMEOUT_MS) };
+        let mut code: u32 = 0;
+        // SAFETY: the thread handle is live, and the out pointer names a local
+        // that outlives the call.
+        let readable = unsafe { GetExitCodeThread(thread.0, &raw mut code) } != 0;
+        let thread_code = readable.then_some(code);
         if waited == WAIT_TIMEOUT {
             // The loader may still be reading the path. Leaking one page in a
             // process the operator is about to stop costs nothing; freeing it
