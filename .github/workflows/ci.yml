@@ -1,42 +1,59 @@
 name: ci
 
+# Everything that judges a change: the gate on every platform, the commit
+# messages, the workflow linters and the advisory check. The shared jobs call
+# the reusable workflows in zachthedev/.github, pinned at a release
+# commit, so a fix there lands here on the next bump.
 on:
   push:
     branches: [main]
+  # Every pull request, whatever it targets. A stacked pull request is based on
+  # the layer below it, and a base filter would leave a middle layer unchecked.
   pull_request:
 
-# The token can read the checkout and nothing else, so a compromised action on
-# a runner cannot push, release or write to the repository.
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 # Every action is pinned to a commit. A tag can be retargeted by its owner with
-# no pull request and no cooldown; a commit cannot. Dependabot bumps the hash
-# and keeps the version comment current.
+# no pull request and no cooldown; a commit cannot. Renovate bumps the hash and
+# keeps the version comment current.
 jobs:
-  # The pre-push hook runs this gate on whichever host a contributor uses. Code
-  # behind cfg(windows) or its inverse builds on one host only, so both run it.
+  # The gate a contributor runs locally, called and never restated.
+  # `cargo xtask check --rows` prints what it covers. The pre-push hook runs it
+  # on whichever host a contributor uses, and code behind cfg(windows) or its
+  # inverse builds on one host only, so every platform runs it.
   gate:
     strategy:
-      # A failure on one host says nothing about the other, so both legs finish.
+      # A failure on one host says nothing about the others, so every leg
+      # finishes.
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
       # This job pushes nothing, so the job token does not stay in the checkout
       # for the steps that follow it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The one third-party action. actions/cache needs hand-written keys for
+      # the registry, the git database and the target directory, and this one
+      # derives them from the lockfile and the toolchain.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # packageManager in package.json is the one Bun pin. The action verifies
+      # no download, so that pin plus the cooldown is the control.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version-file: .bun-version
+          bun-version-file: package.json
       # The pin rules, ahead of the step that installs from them. mise-action
       # runs `mise install`, which fetches and unpacks every artifact mise.lock
       # records, so a rule that ran after it would report a finding about bytes
@@ -46,7 +63,8 @@ jobs:
         shell: bash
       # The action installs mise and nothing else: the install below runs
       # --locked, so a tool mise.lock does not record is refused rather than
-      # fetched. The action verifies its own mise download against a
+      # fetched. cache: false, so nothing is restored ahead of the pin rules
+      # either. The action verifies its own mise download against a
       # minisign-signed SHASUMS256.txt, and a sha256 input returns before that
       # check runs, so none is passed. The mise release is exact, because an
       # unpinned one resolves at run time and a resolved release is under no
@@ -55,6 +73,7 @@ jobs:
         with:
           version: 2026.9.5
           install: false
+          cache: false
       - run: mise install --locked
         shell: bash
       # Both legs name a shell, because a bare `run:` is bash on ubuntu and
@@ -70,19 +89,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+  # Each calling job grants what its called job declares. A called job can only
+  # lower what its caller passes, and a caller passing none is refused before
+  # any step runs.
   commits:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: .bun-version
-      - run: bun install --frozen-lockfile
-      - run: bunx --no-install commitlint --from ${{
-          github.event.pull_request.base.sha }} --to ${{
-          github.event.pull_request.head.sha }}
+    permissions:
+      contents: read
+    uses: zachthedev/.github/.github/workflows/commits.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+
+  workflows:
+    permissions:
+      contents: read
+    uses: zachthedev/.github/.github/workflows/workflows.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+
+  dependency-review:
+    permissions:
+      contents: read
+    uses: zachthedev/.github/.github/workflows/dependency-review.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0

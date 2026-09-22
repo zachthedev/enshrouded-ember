@@ -1,0 +1,38 @@
+name: codeql
+
+# Code scanning from a committed workflow, never default setup: default setup
+# pins nothing and names checks the repository does not control. The reusable
+# workflow runs one analysis per language below. In a caller each check run is
+# named <caller job> / Analyze (<language>), so here `codeql / Analyze (rust)`
+# and `codeql / Analyze (actions)`, which are the names a branch ruleset
+# requires.
+#
+# The languages are the shipped one plus actions. The actions analysis runs
+# beside zizmor, and neither replaces the other. Rust is analyzed under
+# build-mode none; codeql-action can fall back to autobuild on a server-side
+# flag and logs it, so a first run's log is read before its conclusion is
+# trusted.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # At least once a week, so a query published after the last change to this
+  # repository still reports against this tree. Thursday, clear of audit.yml's
+  # Monday cron.
+  schedule:
+    - cron: '37 9 * * 4'
+
+permissions: {}
+
+jobs:
+  # The calling job grants what the called job declares. A called job can only
+  # lower what its caller passes, and a caller passing less is refused before
+  # any step runs.
+  codeql:
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    uses: zachthedev/.github/.github/workflows/codeql.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+    with:
+      languages: '[{"language": "rust"}, {"language": "actions"}]'

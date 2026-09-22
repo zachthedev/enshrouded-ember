@@ -21,8 +21,8 @@
 # recorded here, computed by hand at the bump because the publisher records
 # none.
 #
-# Nothing bumps these automatically. Dependabot has no ecosystem for a mise
-# tool, so a human edits this file.
+# Renovate's mise manager bumps a version here. `mise lock` then rewrites the
+# lockfile, and a taplo bump takes its hash by hand, in the same change.
 
 [tools]
 # provenance
@@ -58,7 +58,7 @@ locked = true
 # Write and read mise.lock, for exactly these platforms. A platform block for
 # any other is a url and a checksum nothing installs, and the gate refuses it.
 lockfile = true
-lockfile_platforms = ["linux-x64", "windows-x64"]
+lockfile_platforms = ["linux-x64", "macos-arm64", "windows-x64"]
 
 # Re-check an attested artifact against its attestation at install time. With
 # this off, an install trusts the provenance mise.lock records and checks only

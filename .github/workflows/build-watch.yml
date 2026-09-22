@@ -89,7 +89,7 @@ env:
   # fetching a build. The watch job gives the container no environment, no
   # volume and no token, so its only channel out is the stdout redirect. The
   # archive job mounts one directory for the payload and gives it nothing else.
-  STEAMCMD_IMAGE: steamcmd/steamcmd@sha256:bf25fdfcfd8245a7f7b3dccfa0fe42004621aa99eb80166fc26f9d75083e8356
+  STEAMCMD_IMAGE: steamcmd/steamcmd:ubuntu-24@sha256:bf25fdfcfd8245a7f7b3dccfa0fe42004621aa99eb80166fc26f9d75083e8356
   # Depot 2278521 declares oslist windows, and a Linux SteamCMD selects depots
   # by client platform. Without this the fetch dies with "Missing
   # configuration" and writes nothing, measured on ubuntu-latest.
@@ -98,12 +98,6 @@ env:
   # megabytes rather than the multi-gigabyte depot. The names have to agree with
   # ARCHIVE_FILES in tools/records.ts, which a case asserts.
   STEAMCMD_FILE_FILTER: 'enshrouded_server.exe;enshrouded_server.kfc'
-  # Bun is fetched and checked rather than installed by an action. The archive
-  # job runs it with both halves of the write token in its environment, and
-  # setup-bun's only hash call is a cache key over the URL. The release is the
-  # one .bun-version names, and this is the digest of its bun-linux-x64.zip, so
-  # the two change together or the check fails closed.
-  BUN_SHA256: 36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913
 
 jobs:
   # Reads what Steam advertises and records it. No archive credential reaches
@@ -111,7 +105,9 @@ jobs:
   watch:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: digest-push
+    environment:
+      name: digest-push
+      deployment: false
     # Shared with the client watcher, which appends to the same record.
     # Two jobs appending to the end of one file and pushing it is the race,
     # and the loser rebases into a content conflict rather than replaying,
@@ -150,14 +146,11 @@ jobs:
         with: # zizmor: ignore[artipacked]
           ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
 
-      - name: Install Bun, pinned and checked
-        run: |
-          version="$(tr -d '[:space:]' < .bun-version)"
-          curl --fail --silent --show-error --location --output bun.zip \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
-          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
-          unzip -q bun.zip
-          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+      # packageManager in package.json is the one Bun pin. The action verifies
+      # no download, so that pin plus the cooldown is the control.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
 
       # --ignore-scripts because the root `prepare` installs lefthook, whose
       # pre-push runs the whole gate. The runner has no tool belt, so the gate
@@ -274,7 +267,9 @@ jobs:
     if: ${{ !cancelled() && needs.watch.outputs.server_manifest_id != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: archive-read
+    environment:
+      name: archive-read
+      deployment: false
     permissions:
       contents: read
     outputs:
@@ -286,14 +281,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Bun, pinned and checked
-        run: |
-          version="$(tr -d '[:space:]' < .bun-version)"
-          curl --fail --silent --show-error --location --output bun.zip \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
-          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
-          unzip -q bun.zip
-          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
 
       - run: bun install --frozen-lockfile --ignore-scripts
 
@@ -355,14 +345,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Bun, pinned and checked
-        run: |
-          version="$(tr -d '[:space:]' < .bun-version)"
-          curl --fail --silent --show-error --location --output bun.zip \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
-          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
-          unzip -q bun.zip
-          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
 
       # --ignore-scripts because the root `prepare` installs lefthook, whose
       # pre-push runs the whole gate. The runner has no tool belt, so the gate
@@ -470,7 +455,9 @@ jobs:
     if: ${{ !cancelled() && needs.archive.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: digest-push
+    environment:
+      name: digest-push
+      deployment: false
     # The other pusher. A rebase handles a race with the watcher, and this
     # keeps two of these from racing each other.
     concurrency:
@@ -484,14 +471,9 @@ jobs:
         with: # zizmor: ignore[artipacked]
           ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
 
-      - name: Install Bun, pinned and checked
-        run: |
-          version="$(tr -d '[:space:]' < .bun-version)"
-          curl --fail --silent --show-error --location --output bun.zip \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
-          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
-          unzip -q bun.zip
-          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
 
       - run: bun install --frozen-lockfile --ignore-scripts
 
@@ -533,7 +515,9 @@ jobs:
       && needs.watch.outputs.server_manifest_id != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: archive-read
+    environment:
+      name: archive-read
+      deployment: false
     permissions:
       contents: read
       issues: write
@@ -546,14 +530,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: Install Bun, pinned and checked
-        run: |
-          version="$(tr -d '[:space:]' < .bun-version)"
-          curl --fail --silent --show-error --location --output bun.zip \
-            "https://github.com/oven-sh/bun/releases/download/bun-v$version/bun-linux-x64.zip"
-          echo "$BUN_SHA256  bun.zip" | sha256sum --check --strict
-          unzip -q bun.zip
-          echo "$PWD/bun-linux-x64" >> "$GITHUB_PATH"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
 
       - run: bun install --frozen-lockfile --ignore-scripts
 

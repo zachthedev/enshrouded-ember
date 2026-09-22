@@ -7,7 +7,8 @@
 - A C toolchain, for MinHook, the hook engine. On Windows that is Visual Studio
   Build Tools.
 - [Bun](https://bun.sh), for the repository's own tooling, at the release
-  `.bun-version` pins. Continuous integration reads the same file.
+  `packageManager` in `package.json` pins. Continuous integration reads the
+  same field.
 - [mise](https://mise.jdx.dev), for every gate tool that rustup, cargo and bun
   do not provide. `mise.toml` pins a version per tool and `mise.lock` records
   a checksum per platform, so an install takes the recorded artifact or fails.
