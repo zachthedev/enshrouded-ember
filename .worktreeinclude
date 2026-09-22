@@ -1,0 +1,4 @@
+# Gitignored files the Claude Code CLI copies into a new worktree, in .gitignore
+# syntax. .cache/ stays out: it holds fetched server builds, and cargo xtask
+# server fetches into whichever checkout runs it.
+.claude/settings.local.json
