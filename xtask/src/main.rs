@@ -17,8 +17,6 @@ mod image;
 mod kfc;
 mod loca;
 pub mod pins;
-#[cfg(test)]
-mod policy;
 mod proc;
 mod root;
 mod schema;

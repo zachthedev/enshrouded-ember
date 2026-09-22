@@ -852,9 +852,6 @@ mod tests {
                 "not a directory",
             ),
         ];
-        // A name outside the EMBER_ namespace, because a policy case reads
-        // every EMBER_ literal in this crate as a variable the code reads and
-        // holds the documentation to it.
         for (value, wanted) in cases {
             let err = tool_home("A_TEST_TOOL_HOME", "a test tool", value).expect_err(wanted);
             let text = format!("{err:#}");

@@ -66,8 +66,7 @@ permissions:
 # it with.
 #
 # A reviewer list is a GitHub setting rather than a line here, so nothing in
-# this repository can read one. tools/workflows.test.ts names the environments
-# known to carry no reviewer and reads every other one as gating.
+# this repository can read one.
 
 # Concurrency is per job rather than per workflow. The archive job waits for a
 # maintainer's approval, and a run holding a workflow-level group holds it for

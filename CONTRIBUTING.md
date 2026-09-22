@@ -107,7 +107,7 @@ than drop out of the audit. `--offline` keeps it from needing a GitHub token, so
 a runner and a laptop get the same findings. `--config` names
 `.github/zizmor.yml`, which holds the Dependabot cooldown threshold, so the
 environment cannot swap it for another. The inline markers in the workflows
-answer the findings this repository accepts, and a test allowlists each one.
+answer the findings this repository accepts.
 
 `doctests` runs whether or not `cargo-nextest` is installed, because
 `cargo nextest` runs none of them and a doctest that stops compiling would

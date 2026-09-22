@@ -26,9 +26,7 @@ which.workspace = true
 windows-link.workspace = true
 
 [dev-dependencies]
-pulldown-cmark.workspace = true
 tempfile.workspace = true
-yaml-rust2.workspace = true
 
 [lints]
 workspace = true

@@ -36,9 +36,6 @@ goblin = "0.10.7"
 minhook = "0.9.0"
 owo-colors = "4.4.0"
 pelite = "0.10.0"
-# CommonMark and tables, for the tests that read the documentation. The HTML
-# renderer and its command-line front end stay out.
-pulldown-cmark = { version = "0.13.4", default-features = false }
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -47,10 +44,6 @@ time = { version = "0.3.55", features = ["formatting"] }
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-# A YAML parser, for the tests that read the workflow configuration. They read
-# UTF-8 text, so the encoding detection stays out.
-yaml-rust2 = { version = "0.13.0", default-features = false }
-
 which = "8.0.6"
 windows-link = "0.100.0"
 # Decoding only, so the dictionary builder, the legacy frame formats and the
