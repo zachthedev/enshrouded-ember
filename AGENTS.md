@@ -13,7 +13,7 @@ changing anything. They bind an agent as they bind a person.
 ```sh
 cargo xtask check          # the gate: every row in order, stopping at the first failure
 cargo xtask check --rows   # print the rows and what each covers, and run nothing
-cargo xtask pins           # the opening row alone: mise.toml and mise.lock against their rules
+cargo xtask pins           # the opening row alone: both mise pin files against their rules
 ```
 
 [CONTRIBUTING.md#the-gate](CONTRIBUTING.md#the-gate) says what the rows cover

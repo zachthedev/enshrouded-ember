@@ -12,6 +12,8 @@
 - [mise](https://mise.jdx.dev), for every gate tool that rustup, cargo and bun
   do not provide. `mise.toml` pins a version per tool and `mise.lock` records
   a checksum per platform, so an install takes the recorded artifact or fails.
+  `mise.semver.toml` and `mise.semver.lock` are the same pair for
+  cargo-semver-checks alone, which only the release workflow loads.
 
 Install mise, then:
 
@@ -132,6 +134,7 @@ overrides it. `cargo xtask --help` lists every command, and each one takes
 | `Cargo.lock`               | any cargo build after a manifest edit; the gate runs locked   |
 | `bun.lock`                 | `bun install` after a `package.json` edit                     |
 | `mise.lock`                | `mise lock` after a `mise.toml` edit                          |
+| `mise.semver.lock`         | `MISE_ENV=semver mise lock` after a `mise.semver.toml` edit   |
 | `data/steam-builds.jsonl`  | the build watcher workflows, one appended row per change      |
 | `data/build-digests.jsonl` | `bun run archive emit` or `archive record`, one row per build |
 

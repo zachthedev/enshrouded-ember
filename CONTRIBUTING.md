@@ -37,8 +37,8 @@ each one covers, are printed by the same table the gate runs:
 cargo xtask check --rows
 ```
 
-The opening row holds `mise.toml` and `mise.lock` to their rules before any
-tool runs, and `cargo xtask pins` runs that row on its own. A lockfile entry
+The opening row holds `mise.toml`, `mise.semver.toml` and their lockfiles to
+their rules before any tool runs, and `cargo xtask pins` runs that row on its own. A lockfile entry
 the rules reject installs whatever its url serves, so a rule that ran later
 would report a finding about a binary that had already executed.
 
@@ -186,9 +186,10 @@ dependency that pulls it in.
 [release-plz](https://release-plz.dev) releases the workspace, configured in
 `release-plz.toml`, and `.github/workflows/cd.yml` runs it:
 
-1. Every push to main opens or updates one release pull request under the
-   zachthedev-releaser app. It carries each changed crate's next version and
-   its changelog entry.
+1. Every push to main runs `release-update`, which computes each changed
+   crate's next version and changelog entry, then `release-pr`, which applies
+   that change and opens or updates one release pull request under the
+   zachthedev-releaser app.
 2. Merging that pull request, as a squash, is the release. The next run waits
    for the `release` environment's reviewer, then publishes each crate the pull
    request names to crates.io, tags it `<crate>-v<version>`, and drafts a
@@ -196,6 +197,14 @@ dependency that pulls it in.
 3. The publish job waits for the same reviewer a second time, then flips the
    draft public. Two approvals per release is the cost of creating every
    release as a draft.
+
+release-plz's semver check runs in `release-update` and nowhere else. It
+builds rustdoc for each changed library and its last release, which runs every
+dependency's build script and proc macro, so that job holds no credential.
+Its log carries the verdict, and the release pull request carries none.
+`mise.toml` pins release-plz, and `mise.semver.toml` pins cargo-semver-checks,
+which mise loads only where `MISE_ENV=semver` and so never beside the
+releaser's key.
 
 release-plz owns every version in the manifests and every crate's
 `CHANGELOG.md`, beside the crate's `Cargo.toml`. Nobody edits either by hand;
