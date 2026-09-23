@@ -137,10 +137,14 @@ version_group = "ember"
 git_release_enable = true
 
 # Neither leaves the repository, so neither takes a version of its own.
+# release-plz refuses a release run whose publish flag disagrees with a
+# crate's Cargo.toml, so each repeats `publish = false`.
 [[package]]
 name = "ember-testkit"
 release = false
+publish = false
 
 [[package]]
 name = "xtask"
 release = false
+publish = false
