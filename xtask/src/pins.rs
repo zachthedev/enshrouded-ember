@@ -15,8 +15,19 @@
 //! add is a second document to disagree with: the owner and the repository each
 //! artifact belongs to live in [`TOOLS`], in source, so an artifact moving to
 //! another host or another account takes an edit a reviewer reads.
+//!
+//! The url is compared whole against one built from that table, with no url
+//! parser in between, because every parser reads some url differently from the
+//! one mise fetches. The api reference beside it names an asset by number
+//! alone, so nothing offline binds it to a release, and mise fetches it
+//! whenever a HEAD on the url fails. [`PINS`] therefore carries a
+//! `url_replacements` rule sending every such request to a host that resolves
+//! nowhere, and every workflow install carries the same map in
+//! `MISE_URL_REPLACEMENTS`, which a committed config file cannot lift.
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
 
 /// The file pinning a version for every tool mise installs.
 pub const PINS: &str = "mise.toml";
@@ -73,8 +84,42 @@ pub const API_HOST: &str = "api.github.com";
 /// The provenance [`LOCK`] records for a release carrying an attestation.
 pub const ATTESTED: &str = "github-attestations";
 
+/// The one `url_replacements` key [`PINS`] carries under `[settings]`, which
+/// matches every release asset api reference.
+pub const URL_API_PATTERN: &str =
+    r"regex:^https://api\.github\.com/repos/[^/]+/[^/]+/releases/assets/.*$";
+
+/// Where [`URL_API_PATTERN`] sends a request: a reserved name that resolves
+/// nowhere, so an install that falls back to the api fails.
+pub const URL_API_REFUSED: &str = "https://url-api-refused.invalid/";
+
 /// The digits a sha256 digest is written with, after its `sha256:` prefix.
 const SHA256_DIGITS: usize = 64;
+
+/// The tables [`PINS`] holds. mise also runs hooks and tasks and exports an
+/// environment from a pin file, and no rule here reads any of those.
+const PIN_TABLES: &[&str] = &["tools", "tool_config", "settings"];
+
+/// The settings [`PINS`] sets true, each a refusal mise makes: the locked mode,
+/// the lockfile itself, the attestation check and its failure mode.
+const SETTINGS_ON: &[&str] = &[
+    "locked",
+    "lockfile",
+    "locked_verify_provenance",
+    "provenance_api_failures_fatal",
+];
+
+/// The settings [`PINS`] holds beside [`SETTINGS_ON`], each read by a rule here.
+const SETTINGS_READ: &[&str] = &["lockfile_platforms", "url_replacements"];
+
+/// The keys mise writes at a lockfile's top level.
+const LOCK_KEYS: &[&str] = &["lockfile_version", "tools"];
+
+/// The keys mise writes on a locked entry beside its platform blocks.
+const ENTRY_KEYS: &[&str] = &["version", "backend", "specifiers", "options"];
+
+/// The keys mise writes in a platform block.
+const PLATFORM_KEYS: &[&str] = &["checksum", "url", "url_api", "provenance"];
 
 /// The backend mise installs a tool through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +139,14 @@ impl Backend {
             Self::Github => "github",
         }
     }
+}
+
+/// The file one platform installs from a tool's release.
+pub struct Asset {
+    /// The mise platform the file installs on.
+    pub platform: &'static str,
+    /// The file name, with `{version}` standing for the pinned release.
+    pub name: &'static str,
 }
 
 /// A tool [`PINS`] names, and the GitHub release its artifacts come from.
@@ -124,6 +177,13 @@ pub struct Tool {
     pub provenance: Option<&'static str>,
     /// The pair whose pin file holds this tool, and no other.
     pub pair: Pair,
+    /// The file each platform installs, one per platform `lockfile_platforms`
+    /// names.
+    ///
+    /// Held here so the url [`LOCK`] records is compared whole against one
+    /// built from source. An upstream that renames an asset takes an edit here
+    /// in the same diff as the relock.
+    pub assets: &'static [Asset],
 }
 
 impl Tool {
@@ -143,19 +203,35 @@ impl Tool {
         )
     }
 
-    /// The path prefix every artifact url for this tool sits under.
+    /// The url [`LOCK`] has to record for `version` on `platform`, or `None`
+    /// where [`Tool::assets`] names no file for that platform.
     #[must_use]
-    pub fn release_prefix(&self) -> String {
-        format!("/{}/{}/releases/download/", self.owner, self.repository)
+    pub fn url(&self, platform: &str, version: &str) -> Option<String> {
+        let asset = self
+            .assets
+            .iter()
+            .find(|asset| asset.platform == platform)?;
+        Some(format!(
+            "https://{RELEASE_HOST}/{}/{}/releases/download/{}/{}",
+            self.owner,
+            self.repository,
+            self.tag(version),
+            asset.name.replace("{version}", version)
+        ))
     }
 
-    /// The path prefix every release api reference for this tool sits under.
+    /// The text every release api reference for this tool starts with, ahead
+    /// of the asset number.
     ///
-    /// The api addresses a release by asset number rather than by tag, so this
-    /// prefix carries no version and nothing downstream looks for one in it.
+    /// The api addresses an asset by number rather than by tag, so nothing here
+    /// carries the version. GitHub answers a number under another repository's
+    /// path with a 404, which is what binds the repository.
     #[must_use]
     pub fn api_prefix(&self) -> String {
-        format!("/repos/{}/{}/releases/", self.owner, self.repository)
+        format!(
+            "https://{API_HOST}/repos/{}/{}/releases/assets/",
+            self.owner, self.repository
+        )
     }
 
     /// The release tag every artifact url for this tool sits under, for
@@ -195,6 +271,20 @@ pub const TOOLS: &[Tool] = &[
         tag_prefix: "v",
         provenance: Some(ATTESTED),
         pair: MAIN,
+        assets: &[
+            Asset {
+                platform: "linux-x64",
+                name: "actionlint_{version}_linux_amd64.tar.gz",
+            },
+            Asset {
+                platform: "macos-arm64",
+                name: "actionlint_{version}_darwin_arm64.tar.gz",
+            },
+            Asset {
+                platform: "windows-x64",
+                name: "actionlint_{version}_windows_amd64.zip",
+            },
+        ],
     },
     Tool {
         key: "cargo-deny",
@@ -205,6 +295,20 @@ pub const TOOLS: &[Tool] = &[
         tag_prefix: "",
         provenance: None,
         pair: MAIN,
+        assets: &[
+            Asset {
+                platform: "linux-x64",
+                name: "cargo-deny-{version}-x86_64-unknown-linux-musl.tar.gz",
+            },
+            Asset {
+                platform: "macos-arm64",
+                name: "cargo-deny-{version}-aarch64-apple-darwin.tar.gz",
+            },
+            Asset {
+                platform: "windows-x64",
+                name: "cargo-deny-{version}-x86_64-pc-windows-msvc.tar.gz",
+            },
+        ],
     },
     Tool {
         key: "github:bnjbvr/cargo-machete",
@@ -215,6 +319,20 @@ pub const TOOLS: &[Tool] = &[
         tag_prefix: "v",
         provenance: None,
         pair: MAIN,
+        assets: &[
+            Asset {
+                platform: "linux-x64",
+                name: "cargo-machete-v{version}-x86_64-unknown-linux-musl.tar.gz",
+            },
+            Asset {
+                platform: "macos-arm64",
+                name: "cargo-machete-v{version}-aarch64-apple-darwin.tar.gz",
+            },
+            Asset {
+                platform: "windows-x64",
+                name: "cargo-machete-v{version}-x86_64-pc-windows-msvc.tar.gz",
+            },
+        ],
     },
     Tool {
         key: "github:nextest-rs/nextest",
@@ -225,6 +343,20 @@ pub const TOOLS: &[Tool] = &[
         tag_prefix: "cargo-nextest-",
         provenance: Some(ATTESTED),
         pair: MAIN,
+        assets: &[
+            Asset {
+                platform: "linux-x64",
+                name: "cargo-nextest-{version}-x86_64-unknown-linux-gnu.tar.gz",
+            },
+            Asset {
+                platform: "macos-arm64",
+                name: "cargo-nextest-{version}-universal-apple-darwin.tar.gz",
+            },
+            Asset {
+                platform: "windows-x64",
+                name: "cargo-nextest-{version}-x86_64-pc-windows-msvc.zip",
+            },
+        ],
     },
     Tool {
         key: "github:obi1kenobi/cargo-semver-checks",
@@ -235,6 +367,20 @@ pub const TOOLS: &[Tool] = &[
         tag_prefix: "v",
         provenance: None,
         pair: SEMVER,
+        assets: &[
+            Asset {
+                platform: "linux-x64",
+                name: "cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz",
+            },
+            Asset {
+                platform: "macos-arm64",
+                name: "cargo-semver-checks-aarch64-apple-darwin.tar.gz",
+            },
+            Asset {
+                platform: "windows-x64",
+                name: "cargo-semver-checks-x86_64-pc-windows-msvc.zip",
+            },
+        ],
     },
     Tool {
         key: "release-plz",
@@ -245,6 +391,20 @@ pub const TOOLS: &[Tool] = &[
         tag_prefix: "release-plz-v",
         provenance: None,
         pair: MAIN,
+        assets: &[
+            Asset {
+                platform: "linux-x64",
+                name: "release-plz-x86_64-unknown-linux-gnu.tar.gz",
+            },
+            Asset {
+                platform: "macos-arm64",
+                name: "release-plz-aarch64-apple-darwin.tar.gz",
+            },
+            Asset {
+                platform: "windows-x64",
+                name: "release-plz-x86_64-pc-windows-msvc.tar.gz",
+            },
+        ],
     },
     Tool {
         key: "shellcheck",
@@ -255,6 +415,20 @@ pub const TOOLS: &[Tool] = &[
         tag_prefix: "v",
         provenance: None,
         pair: MAIN,
+        assets: &[
+            Asset {
+                platform: "linux-x64",
+                name: "shellcheck-v{version}.linux.x86_64.tar.xz",
+            },
+            Asset {
+                platform: "macos-arm64",
+                name: "shellcheck-v{version}.darwin.aarch64.tar.xz",
+            },
+            Asset {
+                platform: "windows-x64",
+                name: "shellcheck-v{version}.zip",
+            },
+        ],
     },
     Tool {
         key: "taplo",
@@ -265,6 +439,20 @@ pub const TOOLS: &[Tool] = &[
         tag_prefix: "",
         provenance: None,
         pair: MAIN,
+        assets: &[
+            Asset {
+                platform: "linux-x64",
+                name: "taplo-linux-x86_64.gz",
+            },
+            Asset {
+                platform: "macos-arm64",
+                name: "taplo-darwin-aarch64.gz",
+            },
+            Asset {
+                platform: "windows-x64",
+                name: "taplo-windows-x86_64.zip",
+            },
+        ],
     },
     Tool {
         key: "zizmor",
@@ -275,6 +463,20 @@ pub const TOOLS: &[Tool] = &[
         tag_prefix: "v",
         provenance: Some(ATTESTED),
         pair: MAIN,
+        assets: &[
+            Asset {
+                platform: "linux-x64",
+                name: "zizmor-x86_64-unknown-linux-gnu.tar.gz",
+            },
+            Asset {
+                platform: "macos-arm64",
+                name: "zizmor-aarch64-apple-darwin.tar.gz",
+            },
+            Asset {
+                platform: "windows-x64",
+                name: "zizmor-x86_64-pc-windows-msvc.zip",
+            },
+        ],
     },
 ];
 
@@ -319,73 +521,12 @@ pub struct LockedTool {
     pub entries: usize,
     /// How many of those record no platform block at all.
     pub platformless: usize,
-}
-
-/// An absolute `https` url, split into the parts a rule reads.
-pub struct Absolute<'a> {
-    /// The host the request lands on.
-    pub host: &'a str,
-    /// The path, whose segments are literal because [`absolute`] refuses any
-    /// url whose segments are not.
-    pub path: &'a str,
-}
-
-/// `text` as an absolute `https` url, or `None` when it is anything else.
-///
-/// This refuses rather than normalizes, because every url mise writes is a
-/// plain `https` release url and anything else is already wrong. Userinfo, a
-/// port, a percent escape in the authority and a backslash each move where a
-/// request lands while leaving the text looking familiar, and a `.` or `..`
-/// segment moves where a path resolves to. A query or a fragment would let text
-/// after the path carry the version a caller looks for. Each is refused here,
-/// so a caller compares a host whole and reads a path whose segments are
-/// literal.
-///
-/// A percent escape is refused in the path as well as the authority, because a
-/// segment check reads literal text and `%2e%2e` is a traversal this rule would
-/// otherwise walk past. Every byte below `0x21` goes too: a url parser drops
-/// tab, newline and carriage return while parsing, so a path carrying one is a
-/// string that differs from the url a client fetches.
-///
-/// Refusing is what separates this from a text match. `https://github.com.example/x`
-/// holds every substring a search for the host would find, and its host is
-/// `github.com.example`.
-#[must_use]
-pub fn absolute(text: &str) -> Option<Absolute<'_>> {
-    let rest = text.strip_prefix("https://")?;
-    if rest.contains('\\') {
-        return None;
-    }
-    let at = rest.find('/')?;
-    let (authority, path) = rest.split_at(at);
-    if authority.is_empty()
-        || authority.contains('@')
-        || authority.contains(':')
-        || authority.contains('%')
-    {
-        return None;
-    }
-    if path.contains('?') || path.contains('#') || path.contains('%') {
-        return None;
-    }
-    // Printable ASCII only. A space, a tab, a newline or a DEL is dropped or
-    // rewritten by a url parser, so the text a rule read would differ from the
-    // url a client fetches. Anything above that range renders as something
-    // other than what it is: a zero-width space hides inside a name and a
-    // right-to-left override reverses one in a reviewer's diff.
-    if path.bytes().any(|byte| !(0x21..=0x7e).contains(&byte)) {
-        return None;
-    }
-    if path
-        .split('/')
-        .any(|segment| segment == "." || segment == "..")
-    {
-        return None;
-    }
-    Some(Absolute {
-        host: authority,
-        path,
-    })
+    /// How many of those carry a nested `platforms` table.
+    ///
+    /// mise writes each platform as a quoted `platforms.<name>` key, and it
+    /// also installs from the nested form, for any platform, while the rules
+    /// here read the quoted keys alone.
+    pub nested: usize,
 }
 
 /// The version [`PINS`] holds for the tool spelled `name`, or `None` when its
@@ -474,7 +615,7 @@ pub fn lockfile_platforms(text: &str) -> Result<Vec<String>, String> {
 pub fn binary_for(name: &str) -> Result<String, String> {
     tool_for(name)
         .map(|tool| tool.binary.to_string())
-        .ok_or_else(|| format!("{name} is a key no entry names a binary and a release for"))
+        .ok_or_else(|| format!("{name:?} is a key no entry names a binary and a release for"))
 }
 
 /// Every binary the gate runs, derived from the keys [`PINS`] holds.
@@ -583,75 +724,34 @@ pub fn locked_tools(pair: Pair, text: &str) -> Result<Vec<LockedTool>, String> {
                     .is_none_or(|table| !table.keys().any(|key| key.starts_with("platforms.")))
             })
             .count();
+        let nested = entries
+            .iter()
+            .filter(|entry| {
+                entry
+                    .as_table()
+                    .is_some_and(|table| table.contains_key("platforms"))
+            })
+            .count();
         found.push(LockedTool {
             tool: name.clone(),
             entries: entries.len(),
             platformless,
+            nested,
         });
     }
     Ok(found)
 }
 
-/// Every way one entry's url falls short of the release it claims to serve.
+/// Whether `version` is one exact release: three dot-separated runs of digits.
 ///
-/// `label` opens each sentence, `expected` is the host the url has to land on,
-/// and `prefix` is the path it has to sit under. `tag`, where given, is the
-/// release tag the path has to carry between the prefix and the asset filename.
-///
-/// The tag is compared whole rather than searched for. A search anywhere in the
-/// path accepts a filename that names the release while the tag names an older
-/// one, and a search over the tag alone accepts a prerelease tag that merely
-/// starts with it. The tag is split off at the last slash, because a tag is free
-/// to contain one.
-fn url_problems(
-    lock: &str,
-    label: &str,
-    url: &str,
-    expected: &str,
-    prefix: &str,
-    tag: Option<&str>,
-) -> Vec<String> {
-    let Some(parsed) = absolute(url) else {
-        return vec![format!(
-            "{label} records {url}, which is not an absolute https url"
-        )];
-    };
-    let mut found = Vec::new();
-    if !parsed.host.eq_ignore_ascii_case(expected) {
-        found.push(format!(
-            "{label} records a url served by {}, and {expected} serves it",
-            parsed.host
-        ));
-    }
-    let Some(rest) = parsed.path.strip_prefix(prefix) else {
-        found.push(format!(
-            "{label} records a url at {}, and {prefix} holds it",
-            parsed.path
-        ));
-        return found;
-    };
-    if let Some(tag) = tag {
-        match rest.rsplit_once('/') {
-            None => found.push(format!(
-                "{label} records a url at {}, which names no release tag",
-                parsed.path
-            )),
-            Some((found_tag, asset)) => {
-                if found_tag != tag {
-                    found.push(format!(
-                        "{label} records a url tagged {found_tag}, and {lock} records the release {tag}"
-                    ));
-                }
-                if asset.is_empty() {
-                    found.push(format!(
-                        "{label} records a url at {}, which names no artifact",
-                        parsed.path
-                    ));
-                }
-            }
-        }
-    }
-    found
+/// The version is written into the url the lockfile entry is compared against,
+/// so anything else could carry a `/` or a `..` that walks the built url out of
+/// the release, and the comparison would then hold two equal wrong urls.
+fn exact_release(version: &str) -> bool {
+    version.split('.').count() == 3
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Every way one platform entry falls short, as one sentence each.
@@ -668,55 +768,64 @@ fn entry_problems(pair: Pair, tool: &Tool, version: &str, entry: &LockedEntry) -
                 && digits.bytes().all(|byte| byte.is_ascii_hexdigit());
             if !sound {
                 found.push(format!(
-                    "{label} carries {checksum}, and a sha256 digest is {SHA256_DIGITS} hex digits"
+                    "{label} carries {checksum:?}, and a sha256 digest is {SHA256_DIGITS} hex digits"
                 ));
             }
         }
     }
     if entry.version != version {
         found.push(format!(
-            "{pins} pins {} {version} and {lock} records {}",
+            "{pins} pins {} {version:?} and {lock} records {:?}",
             tool.key, entry.version
         ));
     }
 
+    // `printable` escapes every hidden character a finding carries, so a
+    // value read from a file reaches no terminal raw, quoted here or not.
     let coordinate = tool.coordinate();
     if entry.backend != coordinate {
-        found.push(format!(
-            "{label} installs through {}, and {pins} pins {coordinate}",
-            if entry.backend.is_empty() {
-                "no backend"
-            } else {
-                &entry.backend
-            }
-        ));
+        found.push(if entry.backend.is_empty() {
+            format!("{label} installs through no backend, and {pins} pins {coordinate}")
+        } else {
+            format!(
+                "{label} installs through {:?}, and {pins} pins {coordinate}",
+                entry.backend
+            )
+        });
     }
 
-    match &entry.url {
-        None => found.push(format!("{label} records no url in {lock}")),
-        Some(url) => found.extend(url_problems(
-            lock,
-            &label,
-            url,
-            RELEASE_HOST,
-            &tool.release_prefix(),
-            Some(&tool.tag(version)),
+    // Compared whole, so a tag, an asset or a byte a url parser drops can
+    // differ in no way at all. No url is built from a version that is not one
+    // exact release, which is refused where the pin file is read, and a
+    // platform with no asset in `TOOLS` is refused where the platform list is.
+    let expected = exact_release(version)
+        .then(|| tool.url(&entry.platform, version))
+        .flatten();
+    match (&entry.url, expected) {
+        (None, _) => found.push(format!("{label} records no url in {lock}")),
+        (Some(url), Some(expected)) if *url != expected => found.push(format!(
+            "{label} records the url {url:?}, and the release asset is {expected}"
         )),
+        _ => {}
     }
     // Absence is refused here the same way a missing url is. mise writes this
     // field for every entry, so a lockfile without one has had it taken out,
     // and that is the quiet way to drop the reference an attestation lookup
-    // reads.
+    // reads. Its asset number binds no version, which the `url_replacements`
+    // rule answers by keeping mise from ever fetching it.
     match &entry.url_api {
         None => found.push(format!("{label} records no url_api in {lock}")),
-        Some(url_api) => found.extend(url_problems(
-            lock,
-            &format!("{label} api"),
-            url_api,
-            API_HOST,
-            &tool.api_prefix(),
-            None,
-        )),
+        Some(url_api) => {
+            let prefix = tool.api_prefix();
+            let numbered = url_api.strip_prefix(&prefix).is_some_and(|number| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            });
+            if !numbered {
+                found.push(format!(
+                    "{label} records the api reference {url_api:?}, and it is {prefix} and an asset number"
+                ));
+            }
+        }
     }
 
     // The provenance line is what makes `locked_verify_provenance` require an
@@ -728,7 +837,7 @@ fn entry_problems(pair: Pair, tool: &Tool, version: &str, entry: &LockedEntry) -
                 format!("{label} records no provenance, and {wanted} is required for it")
             }
             (Some(carried), None) => {
-                format!("{label} records provenance {carried}, and no release of it is attested")
+                format!("{label} records provenance {carried:?}, and no release of it is attested")
             }
             (carried, wanted) => {
                 format!("{label} records provenance {carried:?}, and {wanted:?} is required for it")
@@ -766,8 +875,191 @@ fn array_problems(pair: Pair, text: &str) -> Vec<String> {
                 tool.tool
             ));
         }
+        if tool.nested > 0 {
+            found.push(format!(
+                "{lock} records {}'s platforms as a nested table, which mise installs from and no rule here reads",
+                tool.tool
+            ));
+        }
     }
     found
+}
+
+/// The directories below the repository root that mise reads configuration
+/// from, whose every file the stray configuration rule reads.
+const CONFIG_DIRS: &[&str] = &[".config", ".mise", "mise"];
+
+/// One entry the stray configuration rule reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeEntry {
+    /// The path from the repository root, with `/` separators.
+    pub path: String,
+    /// Whether the entry is a link, which is listed and never followed.
+    pub link: bool,
+}
+
+/// What one directory entry is, read without following a link.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    File,
+    Dir,
+    Link,
+}
+
+/// Every entry at `root`, and every entry under the directories mise reads
+/// configuration from, sorted by path.
+///
+/// A link is listed and never followed, so a linked directory reads as the one
+/// entry it is. A directory's name matches without case, because Windows and
+/// macOS open `.Config` when mise asks for `.config`.
+///
+/// # Errors
+///
+/// Returns the sentence a result row carries when a directory cannot be
+/// listed.
+pub fn config_paths(root: &Path) -> Result<Vec<TreeEntry>, String> {
+    let mut found = Vec::new();
+    for (name, kind) in listing(root)? {
+        if kind == Kind::Dir && CONFIG_DIRS.contains(&name.to_ascii_lowercase().as_str()) {
+            walk(&root.join(&name), &name, &mut found)?;
+        }
+        found.push(TreeEntry {
+            path: name,
+            link: kind == Kind::Link,
+        });
+    }
+    found.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(found)
+}
+
+/// Every entry under `dir`, pushed as `prefix/<name>`.
+fn walk(dir: &Path, prefix: &str, found: &mut Vec<TreeEntry>) -> Result<(), String> {
+    for (name, kind) in listing(dir)? {
+        let path = format!("{prefix}/{name}");
+        if kind == Kind::Dir {
+            walk(&dir.join(&name), &path, found)?;
+        }
+        found.push(TreeEntry {
+            path,
+            link: kind == Kind::Link,
+        });
+    }
+    Ok(())
+}
+
+/// The entries of `dir`, each with what it is. A junction reads as a link on
+/// Windows, the same as a symbolic link.
+fn listing(dir: &Path) -> Result<Vec<(String, Kind)>, String> {
+    let cannot = |err: std::io::Error| printable(format!("listing {}: {err}", dir.display()));
+    fs::read_dir(dir)
+        .map_err(cannot)?
+        .map(|entry| {
+            let entry = entry.map_err(cannot)?;
+            let file_type = entry.file_type().map_err(cannot)?;
+            let kind = if file_type.is_symlink() {
+                Kind::Link
+            } else if file_type.is_dir() {
+                Kind::Dir
+            } else {
+                Kind::File
+            };
+            Ok((entry.file_name().to_string_lossy().into_owned(), kind))
+        })
+        .collect()
+}
+
+/// Whether mise reads `path` as configuration or as a lockfile beside it,
+/// other than the two pairs the rules here hold.
+///
+/// Only the exact spellings of the pairs pass. Every other name is classified
+/// without case, because Windows and macOS open `MISE.LOCAL.TOML` when mise
+/// asks for `mise.local.toml`.
+fn stray_config(path: &str) -> bool {
+    if [PINS, LOCK, SEMVER.pins, SEMVER.lock].contains(&path) {
+        return false;
+    }
+    let path = path.to_ascii_lowercase();
+    match path.split_once('/') {
+        Some((".mise" | "mise", _)) => true,
+        Some((".config", rest)) => rest.starts_with("mise"),
+        Some(_) => false,
+        None => {
+            let name = path.strip_prefix('.').unwrap_or(&path);
+            matches!(name, "mise" | "miserc.toml" | "tool-versions")
+                || matches!(
+                    name.rsplit_once('.'),
+                    Some((stem, "toml" | "lock")) if stem == "mise" || stem.starts_with("mise.")
+                )
+        }
+    }
+}
+
+/// Every link, and every mise configuration or lockfile other than the two
+/// pairs, among `entries`, as one sentence each.
+///
+/// mise merges every configuration file it discovers, and the lockfile beside
+/// each, highest precedence first. A committed `mise.local.toml` and
+/// `mise.local.lock` would decide what `mise install --locked` downloads while
+/// [`PINS`] and [`LOCK`] still met every rule here, so any such file is
+/// refused rather than read. mise follows a link where the listing does not,
+/// so a link is refused whatever it names: a linked `.config` would carry
+/// configuration past every name above. Neither repository tracks a link.
+#[must_use]
+pub fn stray_config_problems(entries: &[TreeEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let path = &entry.path;
+            if entry.link {
+                Some(format!(
+                    "{path:?} is a link, which mise would follow to configuration no rule here reads"
+                ))
+            } else if stray_config(path) {
+                Some(format!(
+                    "{path:?} is mise configuration beside {PINS}, which mise would merge over it"
+                ))
+            } else {
+                None
+            }
+        })
+        .map(printable)
+        .collect()
+}
+
+/// Whether `character` changes how the text around it displays without
+/// showing itself: a control, a bidirectional or zero-width format mark, or a
+/// line or paragraph separator.
+fn hidden(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{061C}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+        )
+}
+
+/// `finding` with every [`hidden`] character written as its escape, so a
+/// value read from a committed file reaches no terminal or CI log raw, and no
+/// reader sees a sentence reordered or cut short.
+fn printable(finding: String) -> String {
+    if !finding.chars().any(hidden) {
+        return finding;
+    }
+    finding
+        .chars()
+        .flat_map(|character| {
+            let escaped: Vec<char> = if hidden(character) {
+                character.escape_default().collect()
+            } else {
+                vec![character]
+            };
+            escaped
+        })
+        .collect()
 }
 
 /// Every way the main pin files fall short, as one sentence each.
@@ -776,9 +1068,186 @@ fn array_problems(pair: Pair, text: &str) -> Vec<String> {
 /// same way against the repository and against a case written in a test.
 #[must_use]
 pub fn problems(pins: &str, lock: &str) -> Vec<String> {
-    match lockfile_platforms(pins) {
+    let mut found = match lockfile_platforms(pins) {
         Ok(platforms) => pair_problems(MAIN, &platforms, pins, lock),
         Err(problem) => vec![problem],
+    };
+    found.extend(replacement_problems(pins));
+    found.extend(table_problems(pins));
+    found.into_iter().map(printable).collect()
+}
+
+/// Every table [`PINS`] carries beyond [`PIN_TABLES`], and every way its
+/// `[tool_config]` and `[settings]` differ from what the rules read.
+///
+/// mise runs hooks and tasks and exports an environment from this file, so
+/// anything no rule reads could run beside every install. Both tables are
+/// compared whole: a setting left out or turned off lifts a refusal mise
+/// makes, and a setting added is one nothing here checks.
+fn table_problems(pins: &str) -> Vec<String> {
+    let Ok(document) = toml::from_str::<toml::Table>(pins) else {
+        // A file that is not TOML is refused where the platform list is read.
+        return Vec::new();
+    };
+    let mut found: Vec<String> = document
+        .keys()
+        .filter(|key| !PIN_TABLES.contains(&key.as_str()))
+        .map(|key| {
+            format!(
+                "{PINS} carries {key:?}, and it holds [tools], [tool_config] and [settings] alone"
+            )
+        })
+        .collect();
+    found.extend(section_problems(&document, "tool_config", &["locked"], &[]));
+    found.extend(section_problems(
+        &document,
+        "settings",
+        SETTINGS_ON,
+        SETTINGS_READ,
+    ));
+    found
+}
+
+/// Every way the `[name]` table of [`PINS`] falls short of setting each of `on`
+/// true and holding `read`, with nothing else beside them.
+fn section_problems(document: &toml::Table, name: &str, on: &[&str], read: &[&str]) -> Vec<String> {
+    let Some(table) = document.get(name).and_then(toml::Value::as_table) else {
+        return vec![format!("{PINS} holds no [{name}] table")];
+    };
+    let mut found: Vec<String> = table
+        .keys()
+        .filter(|key| !on.contains(&key.as_str()) && !read.contains(&key.as_str()))
+        .map(|key| format!("{PINS} sets {key:?} under [{name}], which no rule here reads"))
+        .collect();
+    for key in on {
+        if table.get(*key).and_then(toml::Value::as_bool) != Some(true) {
+            found.push(format!("{PINS} does not set {key} = true under [{name}]"));
+        }
+    }
+    found
+}
+
+/// Every option `file` gives the tool `name` beyond its version and the tag
+/// prefix [`TOOLS`] holds for it.
+///
+/// mise honors a postinstall command, an install environment and an asset
+/// pattern on a tool entry, and records the options in the lockfile beside
+/// it, so both files hold an entry to the keys a rule here reads.
+fn option_problems(file: &str, name: &str, options: &toml::Table) -> Vec<String> {
+    let mut found = Vec::new();
+    for (key, value) in options {
+        match key.as_str() {
+            "version" => {}
+            "version_prefix" => {
+                if let Some(tool) = tool_for(name)
+                    && value.as_str() != Some(tool.tag_prefix)
+                {
+                    found.push(format!(
+                        "{file} gives {name:?} the version_prefix {value}, and its release tags start {:?}",
+                        tool.tag_prefix
+                    ));
+                }
+            }
+            _ => found.push(format!(
+                "{file} gives {name:?} the option {key:?}, and a tool here carries its version and tag prefix alone"
+            )),
+        }
+    }
+    found
+}
+
+/// Every option a `[tools]` entry in `pair`'s pin file carries beyond the ones
+/// [`option_problems`] allows.
+fn pin_entry_problems(pair: Pair, pins: &str) -> Vec<String> {
+    let Ok(document) = toml::from_str::<toml::Table>(pins) else {
+        return Vec::new();
+    };
+    let Some(tools) = document.get("tools").and_then(toml::Value::as_table) else {
+        return Vec::new();
+    };
+    tools
+        .iter()
+        .filter_map(|(name, value)| Some((name, value.as_table()?)))
+        .flat_map(|(name, options)| option_problems(pair.pins, name, options))
+        .collect()
+}
+
+/// Every key `pair`'s lockfile carries beyond the ones mise writes.
+///
+/// mise reads the options it records on an entry, and a key it does not write
+/// is one no rule here reads either.
+fn lock_key_problems(pair: Pair, text: &str) -> Vec<String> {
+    let lock = pair.lock;
+    let Ok(document) = toml::from_str::<toml::Table>(text) else {
+        // A file that is not TOML is refused where its entries are read.
+        return Vec::new();
+    };
+    let mut found: Vec<String> = document
+        .keys()
+        .filter(|key| !LOCK_KEYS.contains(&key.as_str()))
+        .map(|key| format!("{lock} carries {key:?}, which mise does not write"))
+        .collect();
+    let Some(tools) = document.get("tools").and_then(toml::Value::as_table) else {
+        return found;
+    };
+    for (name, entries) in tools {
+        let tables = entries.as_array().into_iter().flatten();
+        for entry in tables.filter_map(toml::Value::as_table) {
+            for (key, value) in entry {
+                if let Some(platform) = key.strip_prefix("platforms.") {
+                    let fields = value.as_table().into_iter().flat_map(toml::Table::keys);
+                    for field in fields.filter(|field| !PLATFORM_KEYS.contains(&field.as_str())) {
+                        found.push(format!(
+                            "{lock} gives {name:?} on {platform:?} the key {field:?}, which mise does not write"
+                        ));
+                    }
+                } else if key == "options" {
+                    match value.as_table() {
+                        Some(options) => found.extend(option_problems(lock, name, options)),
+                        None => found.push(format!(
+                            "{lock} gives {name:?} options that are not a table"
+                        )),
+                    }
+                } else if key != "platforms" && !ENTRY_KEYS.contains(&key.as_str()) {
+                    // A nested `platforms` table is refused where entries are
+                    // counted, so it is left to that rule here.
+                    found.push(format!(
+                        "{lock} gives {name:?} the key {key:?}, which mise does not write"
+                    ));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Whether [`PINS`] carries the one `url_replacements` rule, and nothing
+/// beside it.
+///
+/// mise fetches a lockfile entry's `url_api` whenever a HEAD on its url fails,
+/// and that reference names an asset by number alone. The rule sends every
+/// such request to [`URL_API_REFUSED`], so the fallback fails rather than
+/// installing another release. A second rule could redirect any download, so
+/// the map is compared whole.
+fn replacement_problems(pins: &str) -> Vec<String> {
+    let Ok(document) = toml::from_str::<toml::Value>(pins) else {
+        // A file that is not TOML is refused where the platform list is read.
+        return Vec::new();
+    };
+    let rules = document
+        .get("settings")
+        .and_then(|settings| settings.get("url_replacements"))
+        .and_then(toml::Value::as_table);
+    let sound = rules.is_some_and(|rules| {
+        rules.len() == 1
+            && rules.get(URL_API_PATTERN).and_then(toml::Value::as_str) == Some(URL_API_REFUSED)
+    });
+    if sound {
+        Vec::new()
+    } else {
+        vec![format!(
+            "{PINS} carries url_replacements other than the one rule sending {URL_API_PATTERN} to {URL_API_REFUSED}"
+        )]
     }
 }
 
@@ -787,10 +1256,24 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
 /// The platforms come from `main_pins`, which mise loads beside this pair.
 #[must_use]
 pub fn semver_problems(main_pins: &str, pins: &str, lock: &str) -> Vec<String> {
-    match lockfile_platforms(main_pins) {
+    let mut found = match lockfile_platforms(main_pins) {
         Ok(platforms) => pair_problems(SEMVER, &platforms, pins, lock),
         Err(problem) => vec![problem],
+    };
+    // mise layers this file over mise.toml, and where both set a value this
+    // one wins, so a [settings] or [tool_config] here could lift the locked
+    // mode or the url_replacements rule mise.toml holds.
+    if let Ok(document) = toml::from_str::<toml::Value>(pins)
+        && let Some(table) = document.as_table()
+    {
+        for extra in table.keys().filter(|key| *key != "tools") {
+            found.push(format!(
+                "{} carries [{extra}], and it holds [tools] alone: everything else comes from {PINS}",
+                SEMVER.pins
+            ));
+        }
     }
+    found.into_iter().map(printable).collect()
 }
 
 /// Every way one pair falls short, for the platforms mise locks.
@@ -806,13 +1289,9 @@ fn pair_problems(pair: Pair, platforms: &[String], pins: &str, lock: &str) -> Ve
         return vec![format!("{pin_file} pins nothing")];
     }
     for (name, version) in &tools {
-        let exact = version.split('.').count() == 3
-            && version
-                .split('.')
-                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
-        if !exact {
+        if !exact_release(version) {
             found.push(format!(
-                "{pin_file} pins {name} at {version}, which is not one exact release"
+                "{pin_file} pins {name} at {version:?}, which is not one exact release"
             ));
         }
         // A tool in the other pair's file loads where its pair does not: the
@@ -825,6 +1304,26 @@ fn pair_problems(pair: Pair, platforms: &[String], pins: &str, lock: &str) -> Ve
                 "{pin_file} pins {name}, which belongs in {}",
                 tool.pair.pins
             ));
+        }
+        // The url rule compares each entry against the asset named for its
+        // platform, so a platform with none would go unchecked, and an asset
+        // for an unlisted platform is a name nothing compares.
+        if let Some(tool) = tool_for(name) {
+            for platform in platforms {
+                if !tool.assets.iter().any(|asset| asset.platform == platform) {
+                    found.push(format!(
+                        "{PINS} lists {platform} under lockfile_platforms, and no {platform} asset is named for {name}"
+                    ));
+                }
+            }
+            for asset in tool.assets {
+                if !platforms.iter().any(|platform| platform == asset.platform) {
+                    found.push(format!(
+                        "{name} names a {0} asset, and {PINS} lists no {0} under lockfile_platforms",
+                        asset.platform
+                    ));
+                }
+            }
         }
     }
     if let Err(problem) = pinned_binaries(pair, pins) {
@@ -841,6 +1340,8 @@ fn pair_problems(pair: Pair, platforms: &[String], pins: &str, lock: &str) -> Ve
     };
 
     found.extend(array_problems(pair, lock));
+    found.extend(pin_entry_problems(pair, pins));
+    found.extend(lock_key_problems(pair, lock));
 
     // Every platform block is read, not only the ones the list names. A block
     // nothing reads is a url and a checksum nobody checked, and a relock writes
@@ -890,17 +1391,41 @@ fn pair_problems(pair: Pair, platforms: &[String], pins: &str, lock: &str) -> Ve
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, TOOLS, absolute, lockfile_platforms, problems, semver_problems};
+    use super::{
+        Backend, TOOLS, TreeEntry, config_paths, hidden, lockfile_platforms, problems,
+        semver_problems, stray_config_problems,
+    };
     use std::collections::BTreeSet;
+    use std::path::Path;
+
+    /// A listed entry that is not a link.
+    fn file(path: &str) -> TreeEntry {
+        TreeEntry {
+            path: path.to_string(),
+            link: false,
+        }
+    }
+
+    /// The platform list the sound pin file names.
+    const PLATFORMS: &str = "[\"linux-x64\", \"macos-arm64\", \"windows-x64\"]";
+
+    /// The one `url_replacements` rule the sound pin file carries, spelled as
+    /// a reviewer reads it rather than built from the constant it has to equal.
+    const RULE: &str = r#"url_replacements = { 'regex:^https://api\.github\.com/repos/[^/]+/[^/]+/releases/assets/.*$' = "https://url-api-refused.invalid/" }"#;
 
     /// A pin file every rule accepts, for the cases below to change one thing
     /// in.
-    const SOUND_PINS: &str = concat!(
-        "[tools]\n",
-        "taplo = \"0.10.0\"\n",
-        "\"github:nextest-rs/nextest\" = { version = \"0.9.145\" }\n",
-        "\n[settings]\nlockfile_platforms = [\"linux-x64\", \"windows-x64\"]\n",
-    );
+    fn sound_pins() -> String {
+        format!(
+            "[tools]\ntaplo = \"0.10.0\"\n\"github:nextest-rs/nextest\" = {{ version = \"0.9.145\", version_prefix = \"cargo-nextest-\" }}\n\n[tool_config]\n{TOOL_CONFIG}\n\n[settings]\n{SOUND_SETTINGS}\nlockfile_platforms = {PLATFORMS}\n{RULE}\n"
+        )
+    }
+
+    /// The `[tool_config]` body the sound pin file carries.
+    const TOOL_CONFIG: &str = "locked = true";
+
+    /// The refusals the sound pin file turns on under `[settings]`.
+    const SOUND_SETTINGS: &str = "locked = true\nlockfile = true\nlocked_verify_provenance = true\nprovenance_api_failures_fatal = true";
 
     /// Two digests of the right shape, for the cases that name one.
     const DIGEST_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -916,16 +1441,26 @@ mod tests {
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n",
         "url = \"https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz\"\n",
         "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600\"\n",
+        "[tools.taplo.\"platforms.macos-arm64\"]\nchecksum = \"sha256:",
+        "9999999999999999999999999999999999999999999999999999999999999999\"\n",
+        "url = \"https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-darwin-aarch64.gz\"\n",
+        "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257322740\"\n",
         "[tools.taplo.\"platforms.windows-x64\"]\nchecksum = \"sha256:",
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n",
         "url = \"https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip\"\n",
         "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257323062\"\n",
         "[[tools.\"github:nextest-rs/nextest\"]]\nversion = \"0.9.145\"\n",
-        "backend = \"github:nextest-rs/nextest\"\n",
+        "backend = \"github:nextest-rs/nextest\"\nspecifiers = [\"0.9.145\"]\n",
+        "[tools.\"github:nextest-rs/nextest\".options]\nversion_prefix = \"cargo-nextest-\"\n",
         "[tools.\"github:nextest-rs/nextest\".\"platforms.linux-x64\"]\nchecksum = \"sha256:",
         "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"\n",
         "url = \"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.145/cargo-nextest-0.9.145-x86_64-unknown-linux-gnu.tar.gz\"\n",
         "url_api = \"https://api.github.com/repos/nextest-rs/nextest/releases/assets/568838794\"\n",
+        "provenance = \"github-attestations\"\n",
+        "[tools.\"github:nextest-rs/nextest\".\"platforms.macos-arm64\"]\nchecksum = \"sha256:",
+        "8888888888888888888888888888888888888888888888888888888888888888\"\n",
+        "url = \"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.145/cargo-nextest-0.9.145-universal-apple-darwin.tar.gz\"\n",
+        "url_api = \"https://api.github.com/repos/nextest-rs/nextest/releases/assets/568841216\"\n",
         "provenance = \"github-attestations\"\n",
         "[tools.\"github:nextest-rs/nextest\".\"platforms.windows-x64\"]\nchecksum = \"sha256:",
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"\n",
@@ -938,7 +1473,7 @@ mod tests {
     /// something that worked.
     #[test]
     fn the_sound_documents_meet_every_rule() {
-        assert_eq!(problems(SOUND_PINS, SOUND_LOCK), Vec::<String>::new());
+        assert_eq!(problems(&sound_pins(), SOUND_LOCK), Vec::<String>::new());
     }
 
     /// Run each case and assert the rules said the thing it names.
@@ -966,22 +1501,19 @@ mod tests {
         let cases: &[(&str, String, String, &str)] = &[
             (
                 "the platform list deleted",
-                SOUND_PINS.replace(
-                    "\n[settings]\nlockfile_platforms = [\"linux-x64\", \"windows-x64\"]\n",
-                    "",
-                ),
+                sound_pins().replace(&format!("lockfile_platforms = {PLATFORMS}\n"), ""),
                 SOUND_LOCK.to_string(),
                 "names no lockfile_platforms under [settings]",
             ),
             (
                 "the platform list emptied",
-                SOUND_PINS.replace("[\"linux-x64\", \"windows-x64\"]", "[]"),
+                sound_pins().replace(PLATFORMS, "[]"),
                 SOUND_LOCK.to_string(),
                 "names no lockfile_platforms under [settings]",
             ),
             (
                 "a platform dropped from the list, its blocks kept",
-                SOUND_PINS.replace("[\"linux-x64\", \"windows-x64\"]", "[\"linux-x64\"]"),
+                sound_pins().replace(PLATFORMS, "[\"linux-x64\", \"macos-arm64\"]"),
                 SOUND_LOCK.to_string(),
                 "records a windows-x64 entry for taplo, which is no platform the gate installs on",
             ),
@@ -999,18 +1531,18 @@ mod tests {
         let cases: &[(&str, String, String, &str)] = &[
             (
                 "an attested tool's provenance line deleted",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 SOUND_LOCK.replace("provenance = \"github-attestations\"\n", ""),
                 "records no provenance, and github-attestations is required for it",
             ),
             (
                 "a provenance line added to a tool with no attestation",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 SOUND_LOCK.replace(
                     "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600\"\n",
                     "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600\"\nprovenance = \"github-attestations\"\n",
                 ),
-                "records provenance github-attestations, and no release of it is attested",
+                "records provenance \"github-attestations\", and no release of it is attested",
             ),
         ];
         refuses(cases);
@@ -1026,7 +1558,7 @@ mod tests {
         let cases: &[(&str, String, String, &str)] = &[
             (
                 "a second entry for a tool, beside the sound one",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 format!(
                     "{SOUND_LOCK}[[tools.taplo]]\nversion = \"0.10.0\"\nbackend = \"aqua:attacker/taplo\"\n[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:{DIGEST_A}\"\nurl = \"https://cdn.attacker.example/taplo/payload.gz\"\n"
                 ),
@@ -1034,7 +1566,7 @@ mod tests {
             ),
             (
                 "a second entry carrying no platform block",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 format!(
                     "{SOUND_LOCK}[[tools.taplo]]\nversion = \"0.10.0\"\nbackend = \"aqua:attacker/taplo\"\n"
                 ),
@@ -1042,7 +1574,7 @@ mod tests {
             ),
             (
                 "a second entry carrying only an options table",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 format!(
                     "{SOUND_LOCK}[[tools.taplo]]\nversion = \"9.9.9\"\nbackend = \"aqua:attacker/taplo\"\n[tools.taplo.options]\nversion_prefix = \"attacker-\"\n"
                 ),
@@ -1050,27 +1582,27 @@ mod tests {
             ),
             (
                 "a platform block the gate never installs on",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 format!(
-                    "{SOUND_LOCK}[tools.taplo.\"platforms.macos-arm64\"]\nchecksum = \"md5:00\"\nurl = \"https://cdn.attacker.example/taplo/payload.gz\"\n"
+                    "{SOUND_LOCK}[tools.taplo.\"platforms.linux-arm64\"]\nchecksum = \"md5:00\"\nurl = \"https://cdn.attacker.example/taplo/payload.gz\"\n"
                 ),
-                "records a macos-arm64 entry for taplo, which is no platform the gate installs on",
+                "records a linux-arm64 entry for taplo, which is no platform the gate installs on",
             ),
             (
                 "a truncated digest",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 SOUND_LOCK.replace(&format!("sha256:{DIGEST_A}"), "sha256:0"),
                 "and a sha256 digest is 64 hex digits",
             ),
             (
                 "a checksum dropped, the platform block kept",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 SOUND_LOCK.replace(&format!("checksum = \"sha256:{DIGEST_B}\"\n"), ""),
                 "taplo on windows-x64 carries no checksum",
             ),
             (
                 "a platform block dropped",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 SOUND_LOCK.replace(
                     &format!(
                         "[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:{DIGEST_A}\"\n"
@@ -1081,25 +1613,25 @@ mod tests {
             ),
             (
                 "the two files disagreeing on a version",
-                SOUND_PINS.replace("taplo = \"0.10.0\"", "taplo = \"0.10.1\""),
+                sound_pins().replace("taplo = \"0.10.0\"", "taplo = \"0.10.1\""),
                 SOUND_LOCK.to_string(),
-                "pins taplo 0.10.1 and mise.lock records 0.10.0",
+                "pins taplo \"0.10.1\" and mise.lock records \"0.10.0\"",
             ),
             (
                 "a range in place of an exact release",
-                SOUND_PINS.replace("taplo = \"0.10.0\"", "taplo = \"0.10\""),
+                sound_pins().replace("taplo = \"0.10.0\"", "taplo = \"0.10\""),
                 SOUND_LOCK.to_string(),
                 "which is not one exact release",
             ),
             (
                 "a lockfile entry the pin file no longer names",
-                SOUND_PINS.replace("taplo = \"0.10.0\"\n", ""),
+                sound_pins().replace("taplo = \"0.10.0\"\n", ""),
                 SOUND_LOCK.to_string(),
                 "locks taplo, which mise.toml no longer pins",
             ),
             (
                 "a key naming no binary",
-                SOUND_PINS.replace("github:nextest-rs/nextest", "github:nextest-rs/elsewhere"),
+                sound_pins().replace("github:nextest-rs/nextest", "github:nextest-rs/elsewhere"),
                 SOUND_LOCK.replace("github:nextest-rs/nextest", "github:nextest-rs/elsewhere"),
                 "is a key no entry names a binary and a release for",
             ),
@@ -1118,19 +1650,19 @@ mod tests {
         let cases: &[(&str, String, String, &str)] = &[
             (
                 "the backend moved to another account",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 SOUND_LOCK.replace("aqua:tamasfe/taplo", "aqua:attacker/taplo"),
-                "installs through aqua:attacker/taplo, and mise.toml pins aqua:tamasfe/taplo",
+                "installs through \"aqua:attacker/taplo\", and mise.toml pins aqua:tamasfe/taplo",
             ),
             (
                 "the backend switched to the other kind",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 SOUND_LOCK.replace("aqua:tamasfe/taplo", "github:tamasfe/taplo"),
-                "installs through github:tamasfe/taplo",
+                "installs through \"github:tamasfe/taplo\"",
             ),
             (
                 "the backend line dropped",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 SOUND_LOCK.replace("backend = \"aqua:tamasfe/taplo\"\n", ""),
                 "installs through no backend",
             ),
@@ -1138,131 +1670,229 @@ mod tests {
         refuses(cases);
     }
 
-    /// The rules refuse a url that moved, which a checksum rule alone accepts.
+    /// The sound linux-x64 taplo url, which every url case below changes.
+    const TAPLO_LINUX: &str =
+        "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz";
+
+    /// The sentence the url rule says for the linux-x64 taplo entry, whatever
+    /// the url it records.
+    const TAPLO_LINUX_REFUSED: &str = ", and the release asset is https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz";
+
+    /// The rules refuse a url that moved to another host, owner, release or
+    /// asset, which a checksum rule alone accepts.
     ///
-    /// The host, the owner and the release each come from `TOOLS` rather than
-    /// from the generated file, so no rewrite confined to that file satisfies
-    /// them.
+    /// Each case leaves the lockfile agreeing with itself and disagreeing with
+    /// the url built from `TOOLS`.
     #[test]
     fn the_lockfile_rules_refuse_a_moved_url() {
+        let moved = |to: &str| SOUND_LOCK.replace(TAPLO_LINUX, to);
         let cases: &[(&str, String, String, &str)] = &[
             (
-                "the url pointed at another host",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
-                    "https://cdn.attacker.example/taplo/taplo-linux-x86_64.gz",
-                ),
-                "records a url served by cdn.attacker.example, and github.com serves it",
+                "another host",
+                sound_pins(),
+                moved("https://cdn.attacker.example/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz"),
+                TAPLO_LINUX_REFUSED,
             ),
             (
-                "the url on a host whose text holds the real one",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "https://github.com/tamasfe",
-                    "https://github.com.attacker.example/tamasfe",
-                ),
-                "records a url served by github.com.attacker.example",
+                "a host whose text holds the real one",
+                sound_pins(),
+                moved("https://github.com.attacker.example/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz"),
+                TAPLO_LINUX_REFUSED,
             ),
             (
-                "the url under another owner",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "github.com/tamasfe/taplo/releases",
-                    "github.com/attacker/taplo/releases",
-                ),
-                "and /tamasfe/taplo/releases/download/ holds it",
+                "another owner",
+                sound_pins(),
+                moved("https://github.com/attacker/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz"),
+                TAPLO_LINUX_REFUSED,
             ),
             (
-                "the url naming an older release of the genuine repository",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace("download/0.10.0/taplo-linux", "download/0.9.0/taplo-linux"),
-                "records a url tagged 0.9.0, and mise.lock records the release 0.10.0",
+                "an older release of the genuine repository",
+                sound_pins(),
+                moved("https://github.com/tamasfe/taplo/releases/download/0.9.3/taplo-linux-x86_64.gz"),
+                TAPLO_LINUX_REFUSED,
             ),
             (
                 "an older tag with the pinned release moved into the filename",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "download/0.10.0/taplo-linux-x86_64.gz",
-                    "download/0.9.0/taplo-0.10.0-linux-x86_64.gz",
-                ),
-                "records a url tagged 0.9.0, and mise.lock records the release 0.10.0",
+                sound_pins(),
+                moved("https://github.com/tamasfe/taplo/releases/download/0.9.3/taplo-0.10.0-linux-x86_64.gz"),
+                TAPLO_LINUX_REFUSED,
             ),
             (
                 "a prerelease tag that starts with the pinned release",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace("download/0.10.0/taplo-linux", "download/0.10.0-rc1/taplo-linux"),
-                "records a url tagged 0.10.0-rc1, and mise.lock records the release 0.10.0",
+                sound_pins(),
+                moved("https://github.com/tamasfe/taplo/releases/download/0.10.0-rc1/taplo-linux-x86_64.gz"),
+                TAPLO_LINUX_REFUSED,
             ),
             (
-                "the url walked back out of the release path",
-                SOUND_PINS.to_string(),
+                "another platform's asset",
+                sound_pins(),
                 SOUND_LOCK.replace(
-                    "download/0.10.0/taplo-linux-x86_64.gz",
-                    "download/0.10.0/../../../../attacker/taplo/0.10.0.gz",
+                    "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip",
+                    TAPLO_LINUX,
                 ),
-                "which is not an absolute https url",
-            ),
-            (
-                "the url served over plain http",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "url = \"https://github.com/tamasfe",
-                    "url = \"http://github.com/tamasfe",
-                ),
-                "which is not an absolute https url",
-            ),
-            (
-                "the url carrying userinfo ahead of the real host",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "https://github.com/tamasfe",
-                    "https://github.com@attacker.example/tamasfe",
-                ),
-                "which is not an absolute https url",
+                ", and the release asset is https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip",
             ),
             (
                 "the url dropped",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "url = \"https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz\"\n",
-                    "",
-                ),
-                "records no url",
+                sound_pins(),
+                SOUND_LOCK.replace(&format!("url = \"{TAPLO_LINUX}\"\n"), ""),
+                "taplo on linux-x64 records no url",
             ),
         ];
         refuses(cases);
     }
 
-    /// The rules refuse an api reference that moved, which nothing downstream
-    /// would notice.
+    /// The rules refuse a url some parser reads as the genuine one, and one
+    /// GitHub answers with a 404, which sends mise to the api reference.
     ///
-    /// The api addresses a release by asset number rather than by tag, so the
-    /// version rule does not apply and the host and the owner carry it alone.
+    /// Equality refuses each with no parser to disagree with mise's.
     #[test]
-    fn the_lockfile_rules_refuse_a_moved_api_reference() {
-        let cases: &[(&str, String, String, &str)] = &[
+    fn the_lockfile_rules_refuse_a_url_a_parser_reads_as_genuine() {
+        let urls: &[(&str, &str)] = &[
             (
-                "the api reference moved to another host",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "https://api.github.com/repos/tamasfe",
-                    "https://api.github.com.attacker.example/repos/tamasfe",
-                ),
-                "api records a url served by api.github.com.attacker.example",
+                "a walk back out of the release path",
+                "https://github.com/tamasfe/taplo/releases/download/0.10.0/../../../../koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz",
             ),
             (
-                "the api reference under another owner",
-                SOUND_PINS.to_string(),
-                SOUND_LOCK.replace(
-                    "api.github.com/repos/tamasfe/taplo",
-                    "api.github.com/repos/attacker/taplo",
-                ),
-                "and /repos/tamasfe/taplo/releases/ holds it",
+                "plain http",
+                "http://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+            ),
+            (
+                "userinfo ahead of the real host",
+                "https://github.com@attacker.example/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+            ),
+            (
+                "a port",
+                "https://github.com:8443/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+            ),
+            (
+                "a query",
+                "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz?x=1",
+            ),
+            (
+                "a fragment",
+                "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz#x",
+            ),
+            (
+                "a percent escape walking out of the release",
+                "https://github.com/tamasfe/taplo/releases/download/0.10.0/%2e%2e/taplo-linux-x86_64.gz",
+            ),
+            (
+                "a percent escape in the host",
+                "https://%67ithub.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+            ),
+            (
+                "a backslash",
+                "https://github.com\\\\attacker.example/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+            ),
+            (
+                "a tab a url parser drops",
+                "https://github.com/tamasfe/taplo/releases/download/0.10.0/\\ttaplo-linux-x86_64.gz",
+            ),
+            (
+                "the host in capitals",
+                "https://GitHub.COM/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+            ),
+            (
+                "an extra segment GitHub answers with a 404",
+                "https://github.com/tamasfe/taplo/releases/download/0.10.0/extra/taplo-linux-x86_64.gz",
+            ),
+            (
+                "a missing asset GitHub answers with a 404",
+                "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-missing.gz",
+            ),
+        ];
+        let cases: Vec<(&str, String, String, &str)> = urls
+            .iter()
+            .map(|(what, url)| {
+                (
+                    *what,
+                    sound_pins(),
+                    SOUND_LOCK.replace(TAPLO_LINUX, url),
+                    TAPLO_LINUX_REFUSED,
+                )
+            })
+            .collect();
+        refuses(&cases);
+    }
+
+    /// A version that walks out of the release, pinned and locked alike.
+    const WALK: &str = "../../../../koalaman/shellcheck/releases/download/v0.11.0";
+
+    /// The rules refuse a version that is not one exact release, before any
+    /// url is built from it.
+    ///
+    /// The version is written into the url an entry is compared against, so a
+    /// walking version pinned and locked alike yields a lockfile url equal to
+    /// the one built, and only the version rule stands in its way.
+    #[test]
+    fn a_version_walking_out_of_the_release_is_refused() {
+        refuses(&[(
+            "a walking version in the pin file and the lockfile",
+            sound_pins().replace("taplo = \"0.10.0\"", &format!("taplo = \"{WALK}\"")),
+            SOUND_LOCK.replace("0.10.0", WALK),
+            "pins taplo at \"../../../../koalaman/shellcheck/releases/download/v0.11.0\", which is not one exact release",
+        )]);
+    }
+
+    /// The sentence the api rule says for any taplo entry.
+    const TAPLO_API_REFUSED: &str =
+        "and it is https://api.github.com/repos/tamasfe/taplo/releases/assets/ and an asset number";
+
+    /// The rules refuse any api reference but taplo's prefix and a number.
+    ///
+    /// The asset number itself binds nothing offline, which the
+    /// `url_replacements` rule answers. What is checked here is everything
+    /// around it: GitHub answers a number under another repository's path with
+    /// a 404, so the prefix binds the repository.
+    #[test]
+    fn the_lockfile_rules_refuse_an_api_reference_off_the_repository() {
+        let moved = |to: &str| {
+            SOUND_LOCK.replace(
+                "https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600",
+                to,
+            )
+        };
+        let cases: &[(&str, String, String, &str)] = &[
+            (
+                "another host",
+                sound_pins(),
+                moved("https://api.github.com.attacker.example/repos/tamasfe/taplo/releases/assets/257322600"),
+                TAPLO_API_REFUSED,
+            ),
+            (
+                "another owner",
+                sound_pins(),
+                moved("https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056944"),
+                TAPLO_API_REFUSED,
+            ),
+            (
+                "a tail that is not a number",
+                sound_pins(),
+                moved("https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600x"),
+                TAPLO_API_REFUSED,
+            ),
+            (
+                "no number at all",
+                sound_pins(),
+                moved("https://api.github.com/repos/tamasfe/taplo/releases/assets/"),
+                TAPLO_API_REFUSED,
+            ),
+            (
+                "an extra segment",
+                sound_pins(),
+                moved("https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600/1"),
+                TAPLO_API_REFUSED,
+            ),
+            (
+                "a walk to another repository",
+                sound_pins(),
+                moved("https://api.github.com/repos/tamasfe/taplo/releases/assets/../../../../koalaman/shellcheck/releases/assets/279056944"),
+                TAPLO_API_REFUSED,
             ),
             (
                 "the api reference dropped",
-                SOUND_PINS.to_string(),
+                sound_pins(),
                 SOUND_LOCK.replace(
                     "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600\"\n",
                     "",
@@ -1270,46 +1900,120 @@ mod tests {
                 "records no url_api",
             ),
         ];
-
         refuses(cases);
     }
 
-    /// The url reader refuses every url that is not a plain absolute https one.
+    /// The rules refuse a platform list and an asset table that disagree.
     ///
-    /// Each of these holds the text a search for the host would find, and each
-    /// lands somewhere else.
+    /// A listed platform with no asset would leave its url compared against
+    /// nothing, and an asset for an unlisted platform is a name no url is
+    /// compared with.
     #[test]
-    fn the_url_reader_refuses_what_a_text_match_accepts() {
-        for text in [
-            "http://github.com/a/b",
-            "https://github.com@attacker.example/a/b",
-            "https://github.com:8443/a/b",
-            "https://github.com/a/b/../../c",
-            "https://github.com/a/b?github.com/x",
-            "https://github.com/a/b#github.com/x",
-            "https://github.com\\attacker.example/a/b",
-            "https://%67ithub.com/a/b",
-            "https://github.com",
-            "github.com/a/b",
-        ] {
-            assert!(
-                absolute(text).is_none(),
-                "{text} was read as an absolute url"
-            );
-        }
-        let parsed = absolute("https://github.com/a/b").expect("a plain release url");
-        assert_eq!(parsed.host, "github.com");
-        assert_eq!(parsed.path, "/a/b");
+    fn the_asset_table_covers_the_platform_list_exactly() {
+        let cases: &[(&str, String, String, &str)] = &[
+            (
+                "a listed platform no asset is named for",
+                sound_pins().replace(
+                    PLATFORMS,
+                    "[\"linux-arm64\", \"linux-x64\", \"macos-arm64\", \"windows-x64\"]",
+                ),
+                SOUND_LOCK.to_string(),
+                "mise.toml lists linux-arm64 under lockfile_platforms, and no linux-arm64 asset is named for taplo",
+            ),
+            (
+                "an asset for a platform the list drops",
+                sound_pins().replace(PLATFORMS, "[\"linux-x64\", \"windows-x64\"]"),
+                SOUND_LOCK.to_string(),
+                "taplo names a macos-arm64 asset, and mise.toml lists no macos-arm64 under lockfile_platforms",
+            ),
+        ];
+        refuses(cases);
     }
 
-    /// A host differing only in case is the same host, and one differing by a
-    /// label is not.
+    /// The rules refuse a nested `platforms` table.
+    ///
+    /// mise installs from the nested form for any platform, and the per-entry
+    /// rules read only the quoted `platforms.<name>` keys, so a nested table
+    /// is a url and a checksum nothing here would compare.
     #[test]
-    fn the_host_comparison_ignores_case_and_nothing_else() {
-        let same = absolute("https://GitHub.COM/a/b").expect("a url");
-        assert!(same.host.eq_ignore_ascii_case("github.com"));
-        let other = absolute("https://github.com.attacker.example/a/b").expect("a url");
-        assert!(!other.host.eq_ignore_ascii_case("github.com"));
+    fn the_lockfile_rules_refuse_a_nested_platform_table() {
+        let nested = |platform: &str| {
+            SOUND_LOCK.replace(
+                "[[tools.\"github:nextest-rs/nextest\"]]",
+                &format!(
+                    "[tools.taplo.platforms.{platform}]\nchecksum = \"sha256:{DIGEST_A}\"\nurl = \"https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip\"\n[[tools.\"github:nextest-rs/nextest\"]]"
+                ),
+            )
+        };
+        let cases: &[(&str, String, String, &str)] = &[
+            (
+                "a nested table for a platform the list leaves out",
+                sound_pins(),
+                nested("linux-arm64"),
+                "records taplo's platforms as a nested table",
+            ),
+            (
+                "a nested table beside the quoted one for a listed platform",
+                sound_pins(),
+                nested("windows-x64"),
+                "records taplo's platforms as a nested table",
+            ),
+        ];
+        refuses(cases);
+    }
+
+    /// The sentence the `url_replacements` rule says.
+    const RULE_REFUSED: &str = "mise.toml carries url_replacements other than the one rule";
+
+    /// The rules refuse any `url_replacements` map but the one rule.
+    ///
+    /// Without it, a failed HEAD on a url sends mise to the api reference,
+    /// whose asset number can name another release. A second entry could
+    /// redirect any download, so the map is compared whole.
+    #[test]
+    fn the_pin_rules_hold_the_one_url_replacement() {
+        let cases: &[(&str, String, String, &str)] = &[
+            (
+                "the rule deleted",
+                sound_pins().replace(&format!("{RULE}\n"), ""),
+                SOUND_LOCK.to_string(),
+                RULE_REFUSED,
+            ),
+            (
+                "the map emptied",
+                sound_pins().replace(RULE, "url_replacements = {}"),
+                SOUND_LOCK.to_string(),
+                RULE_REFUSED,
+            ),
+            (
+                "the target moved to a host that resolves",
+                sound_pins().replace("https://url-api-refused.invalid/", "https://mirror.attacker.example/"),
+                SOUND_LOCK.to_string(),
+                RULE_REFUSED,
+            ),
+            (
+                "the pattern narrowed to one repository",
+                sound_pins().replace("repos/[^/]+/[^/]+/releases", "repos/tamasfe/taplo/releases"),
+                SOUND_LOCK.to_string(),
+                RULE_REFUSED,
+            ),
+            (
+                "a second entry beside the rule",
+                sound_pins().replace(
+                    " = \"https://url-api-refused.invalid/\" }",
+                    " = \"https://url-api-refused.invalid/\", 'https://github.com/' = \"https://mirror.attacker.example/\" }",
+                ),
+                SOUND_LOCK.to_string(),
+                RULE_REFUSED,
+            ),
+            (
+                "the map written as a string",
+                sound_pins().replace(RULE, "url_replacements = \"https://url-api-refused.invalid/\""),
+                SOUND_LOCK.to_string(),
+                RULE_REFUSED,
+            ),
+        ];
+        refuses(cases);
     }
 
     /// Each backend renders the coordinate mise records for it.
@@ -1324,8 +2028,15 @@ mod tests {
             .find(|tool| tool.key == "taplo")
             .expect("taplo is pinned");
         assert_eq!(aqua.coordinate(), "aqua:tamasfe/taplo");
-        assert_eq!(aqua.release_prefix(), "/tamasfe/taplo/releases/download/");
-        assert_eq!(aqua.api_prefix(), "/repos/tamasfe/taplo/releases/");
+        assert_eq!(
+            aqua.url("linux-x64", "0.10.0").as_deref(),
+            Some("https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz")
+        );
+        assert_eq!(aqua.url("linux-arm64", "0.10.0"), None);
+        assert_eq!(
+            aqua.api_prefix(),
+            "https://api.github.com/repos/tamasfe/taplo/releases/assets/"
+        );
 
         let github = TOOLS
             .iter()
@@ -1333,6 +2044,13 @@ mod tests {
             .expect("cargo-machete is pinned");
         assert_eq!(github.coordinate(), "github:bnjbvr/cargo-machete");
         assert_eq!(github.backend, Backend::Github);
+        // The version fills the tag and the asset name alike.
+        assert_eq!(
+            github.url("windows-x64", "0.9.2").as_deref(),
+            Some(
+                "https://github.com/bnjbvr/cargo-machete/releases/download/v0.9.2/cargo-machete-v0.9.2-x86_64-pc-windows-msvc.tar.gz"
+            )
+        );
     }
 
     /// No two entries share a key or a binary, and every one names a release.
@@ -1352,11 +2070,11 @@ mod tests {
         }
     }
 
-    /// A semver pin file every rule accepts beside [`SOUND_PINS`].
+    /// A semver pin file every rule accepts beside [`sound_pins`].
     const SOUND_SEMVER_PINS: &str =
         "[tools]\n\"github:obi1kenobi/cargo-semver-checks\" = \"0.50.0\"\n";
 
-    /// Its lockfile, for the platforms [`SOUND_PINS`] names, shaped as mise
+    /// Its lockfile, for the platforms [`sound_pins`] names, shaped as mise
     /// writes one.
     const SOUND_SEMVER_LOCK: &str = concat!(
         "[[tools.\"github:obi1kenobi/cargo-semver-checks\"]]\nversion = \"0.50.0\"\n",
@@ -1365,6 +2083,10 @@ mod tests {
         "checksum = \"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"\n",
         "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz\"\n",
         "url_api = \"https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498085744\"\n",
+        "[tools.\"github:obi1kenobi/cargo-semver-checks\".\"platforms.macos-arm64\"]\n",
+        "checksum = \"sha256:7777777777777777777777777777777777777777777777777777777777777777\"\n",
+        "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-aarch64-apple-darwin.tar.gz\"\n",
+        "url_api = \"https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498087310\"\n",
         "[tools.\"github:obi1kenobi/cargo-semver-checks\".\"platforms.windows-x64\"]\n",
         "checksum = \"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"\n",
         "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-pc-windows-msvc.zip\"\n",
@@ -1376,7 +2098,7 @@ mod tests {
     #[test]
     fn the_sound_semver_pair_meets_every_rule() {
         assert_eq!(
-            semver_problems(SOUND_PINS, SOUND_SEMVER_PINS, SOUND_SEMVER_LOCK),
+            semver_problems(&sound_pins(), SOUND_SEMVER_PINS, SOUND_SEMVER_LOCK),
             Vec::<String>::new()
         );
     }
@@ -1399,7 +2121,7 @@ mod tests {
     /// install it and run the check.
     #[test]
     fn a_tool_in_the_other_pairs_file_is_refused() {
-        let semver_in_main_pins = SOUND_PINS.replace(
+        let semver_in_main_pins = sound_pins().replace(
             "[tools]\n",
             "[tools]\n\"github:obi1kenobi/cargo-semver-checks\" = \"0.50.0\"\n",
         );
@@ -1414,7 +2136,7 @@ mod tests {
 
         semver_refuses(&[(
             "taplo in the semver file",
-            SOUND_PINS.to_string(),
+            sound_pins(),
             format!("{SOUND_SEMVER_PINS}taplo = \"0.10.0\"\n"),
             SOUND_SEMVER_LOCK.to_string(),
             "mise.semver.toml pins taplo, which belongs in mise.toml",
@@ -1429,7 +2151,7 @@ mod tests {
     /// nothing.
     #[test]
     fn the_semver_rules_name_the_semver_files() {
-        let main = || SOUND_PINS.to_string();
+        let main = || sound_pins();
         let pins = || SOUND_SEMVER_PINS.to_string();
         let lock = || SOUND_SEMVER_LOCK.to_string();
         semver_refuses(&[
@@ -1458,7 +2180,7 @@ mod tests {
                 main(),
                 SOUND_SEMVER_PINS.replace("0.50.0", "0.50.1"),
                 lock(),
-                "mise.semver.toml pins github:obi1kenobi/cargo-semver-checks 0.50.1 and mise.semver.lock records 0.50.0",
+                "mise.semver.toml pins github:obi1kenobi/cargo-semver-checks \"0.50.1\" and mise.semver.lock records \"0.50.0\"",
             ),
             (
                 "the url naming another release",
@@ -1468,7 +2190,31 @@ mod tests {
                     "download/v0.50.0/cargo-semver-checks-x86_64-unknown",
                     "download/v0.49.0/cargo-semver-checks-x86_64-unknown",
                 ),
-                "records a url tagged v0.49.0, and mise.semver.lock records the release v0.50.0",
+                ", and the release asset is https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz",
+            ),
+            (
+                "the api reference under another repository",
+                main(),
+                pins(),
+                SOUND_SEMVER_LOCK.replace(
+                    "repos/obi1kenobi/cargo-semver-checks/releases/assets/498085744",
+                    "repos/obi1kenobi/elsewhere/releases/assets/498085744",
+                ),
+                "and it is https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/ and an asset number",
+            ),
+            (
+                "a settings table that would lift the rules mise.toml holds",
+                main(),
+                format!("{SOUND_SEMVER_PINS}\n[settings]\nurl_replacements = {{}}\n"),
+                lock(),
+                "mise.semver.toml carries [settings], and it holds [tools] alone",
+            ),
+            (
+                "a tool_config table that would lift the locked mode",
+                main(),
+                format!("{SOUND_SEMVER_PINS}\n[tool_config]\nlocked = false\n"),
+                lock(),
+                "mise.semver.toml carries [tool_config], and it holds [tools] alone",
             ),
             (
                 "a lockfile entry the semver file no longer names",
@@ -1495,11 +2241,11 @@ mod tests {
                     "github:obi1kenobi/cargo-semver-checks",
                     "github:obi1kenobi/elsewhere",
                 ),
-                "github:obi1kenobi/elsewhere is a key no entry names a binary and a release for",
+                "\"github:obi1kenobi/elsewhere\" is a key no entry names a binary and a release for",
             ),
             (
                 "a platform mise.toml no longer lists",
-                SOUND_PINS.replace("[\"linux-x64\", \"windows-x64\"]", "[\"linux-x64\"]"),
+                sound_pins().replace(PLATFORMS, "[\"linux-x64\", \"macos-arm64\"]"),
                 pins(),
                 lock(),
                 "mise.semver.lock records a windows-x64 entry for github:obi1kenobi/cargo-semver-checks, which is no platform the gate installs on",
@@ -1510,13 +2256,384 @@ mod tests {
     /// The platform list is read from the settings table alone, in order.
     #[test]
     fn the_platform_list_is_read_from_the_settings_table() {
-        let listed = lockfile_platforms(SOUND_PINS).expect("the sound pins name platforms");
-        assert_eq!(listed, ["linux-x64", "windows-x64"]);
+        let listed = lockfile_platforms(&sound_pins()).expect("the sound pins name platforms");
+        assert_eq!(listed, ["linux-x64", "macos-arm64", "windows-x64"]);
         assert!(lockfile_platforms("[tools]\na = \"1.0.0\"\n").is_err());
         assert!(lockfile_platforms("not toml = = =").is_err());
         assert!(
             lockfile_platforms("[settings]\nlockfile_platforms = [\"linux-x64\", 1]\n")
                 .is_err_and(|problem| problem.contains("entry 1"))
+        );
+    }
+
+    /// Every other mise configuration or lockfile is refused, and the two
+    /// pairs and files mise never reads are not.
+    ///
+    /// mise merges a discovered configuration file and the lockfile beside it
+    /// over `mise.toml` and `mise.lock`, so each refused path here is one a
+    /// committed file could use to decide what an install downloads.
+    #[test]
+    fn every_other_mise_configuration_is_refused() {
+        for path in [
+            "mise.local.toml",
+            "mise.local.lock",
+            ".mise.toml",
+            ".mise.local.toml",
+            "mise.ci.toml",
+            "mise.ci.lock",
+            ".mise.ci.toml",
+            ".miserc.toml",
+            ".tool-versions",
+            ".mise",
+            "mise",
+            ".config/mise.toml",
+            ".config/mise.lock",
+            ".config/mise",
+            ".config/mise/config.toml",
+            ".config/mise/conf.d/extra.toml",
+            ".config/miserc.toml",
+            ".mise/config.toml",
+            "mise/config.toml",
+            "MISE.LOCAL.TOML",
+            "Mise.Local.Lock",
+            ".MISE.toml",
+            "MISE.TOML",
+            "Mise.Semver.Lock",
+            ".Tool-Versions",
+            ".CONFIG/mise.toml",
+            ".config/MISE/config.toml",
+            "Mise/config.toml",
+        ] {
+            let found = stray_config_problems(&[file(path)]);
+            assert_eq!(
+                found,
+                [format!(
+                    "{path:?} is mise configuration beside mise.toml, which mise would merge over it"
+                )],
+                "{path}"
+            );
+        }
+        for path in [
+            "mise.toml",
+            "mise.lock",
+            "mise.semver.toml",
+            "mise.semver.lock",
+            ".config/nextest.toml",
+            ".config",
+            "Cargo.toml",
+            "src/mise.local.toml",
+        ] {
+            assert_eq!(
+                stray_config_problems(&[file(path)]),
+                Vec::<String>::new(),
+                "{path}"
+            );
+        }
+    }
+
+    /// The listing names every root entry and every file under the
+    /// directories mise reads configuration from, whatever the case of the
+    /// directory's name, and nothing deeper elsewhere.
+    #[test]
+    fn the_listing_reaches_every_configuration_directory() {
+        let root = tempfile::tempdir().expect("a temporary directory");
+        for file in [
+            "mise.toml",
+            ".config/nextest.toml",
+            ".config/mise/conf.d/extra.toml",
+            ".mise/config.toml",
+            "Mise/config.toml",
+            "src/mise.local.toml",
+        ] {
+            let path = root.path().join(file);
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+            std::fs::write(&path, "").expect("a file");
+        }
+        let listed = config_paths(root.path()).expect("the listing");
+        for wanted in [
+            "mise.toml",
+            ".config",
+            ".config/nextest.toml",
+            ".config/mise",
+            ".config/mise/conf.d/extra.toml",
+            ".mise",
+            ".mise/config.toml",
+            "Mise",
+            "Mise/config.toml",
+            "src",
+        ] {
+            assert!(
+                listed.iter().any(|entry| entry.path == wanted),
+                "{wanted} in {listed:?}"
+            );
+        }
+        assert!(
+            !listed
+                .iter()
+                .any(|entry| entry.path == "src/mise.local.toml"),
+            "{listed:?}"
+        );
+        assert!(listed.iter().all(|entry| !entry.link), "{listed:?}");
+        let refused: Vec<&str> = listed
+            .iter()
+            .filter(|entry| !stray_config_problems(&[(*entry).clone()]).is_empty())
+            .map(|entry| entry.path.as_str())
+            .collect();
+        assert_eq!(
+            refused,
+            [
+                ".config/mise",
+                ".config/mise/conf.d",
+                ".config/mise/conf.d/extra.toml",
+                ".mise",
+                ".mise/config.toml",
+                "Mise",
+                "Mise/config.toml",
+            ],
+            "{listed:?}"
+        );
+    }
+
+    /// Link `link` to the directory `target`.
+    fn link_dir(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).expect("a link");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(target, link).expect("a link");
+    }
+
+    /// A link is listed as a link, never walked, and refused whatever it
+    /// names.
+    ///
+    /// mise follows a linked `.config` to the configuration behind it, which
+    /// no name the rule checks would reach.
+    #[test]
+    fn a_link_is_refused_and_never_walked() {
+        let root = tempfile::tempdir().expect("a temporary directory");
+        for name in ["fixtures/mise.toml", "fixtures/mise/conf.d/extra.toml"] {
+            let path = root.path().join(name);
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+            std::fs::write(&path, "").expect("a file");
+        }
+        link_dir(&root.path().join("fixtures"), &root.path().join(".config"));
+        let listed = config_paths(root.path()).expect("the listing");
+        assert!(
+            listed.contains(&TreeEntry {
+                path: ".config".to_string(),
+                link: true
+            }),
+            "{listed:?}"
+        );
+        assert!(
+            !listed
+                .iter()
+                .any(|entry| entry.path.starts_with(".config/")),
+            "{listed:?}"
+        );
+        assert_eq!(
+            stray_config_problems(&listed),
+            ["\".config\" is a link, which mise would follow to configuration no rule here reads"]
+        );
+        let linked_pins = TreeEntry {
+            path: "mise.toml".to_string(),
+            link: true,
+        };
+        assert_eq!(
+            stray_config_problems(&[linked_pins]),
+            [
+                "\"mise.toml\" is a link, which mise would follow to configuration no rule here reads"
+            ]
+        );
+    }
+
+    /// The pin file holds the tables the rules read, and its `[tool_config]`
+    /// and `[settings]` are compared whole.
+    ///
+    /// mise runs a hook, exports an `[env]` table and honors a task from this
+    /// file, and a setting turned off lifts a refusal mise makes. Each case
+    /// passed every other rule here.
+    #[test]
+    fn the_pin_file_holds_the_tables_the_rules_read() {
+        let lock = || SOUND_LOCK.to_string();
+        let with = |extra: &str| format!("{}{extra}", sound_pins());
+        let tool_config = format!("[tool_config]\n{TOOL_CONFIG}");
+        let cases: &[(&str, String, String, &str)] = &[
+            (
+                "an env table",
+                with("\n[env]\n_.path = [\"./bin\"]\n"),
+                lock(),
+                "mise.toml carries \"env\", and it holds [tools], [tool_config] and [settings] alone",
+            ),
+            (
+                "a hooks table",
+                with("\n[hooks]\npostinstall = \"echo\"\n"),
+                lock(),
+                "mise.toml carries \"hooks\", and it holds [tools], [tool_config] and [settings] alone",
+            ),
+            (
+                "a task",
+                with("\n[tasks.build]\nrun = \"echo\"\n"),
+                lock(),
+                "mise.toml carries \"tasks\", and it holds [tools], [tool_config] and [settings] alone",
+            ),
+            (
+                "a key above every table",
+                format!("min_version = \"2026.1.0\"\n{}", sound_pins()),
+                lock(),
+                "mise.toml carries \"min_version\", and it holds [tools], [tool_config] and [settings] alone",
+            ),
+            (
+                "the tool_config table deleted",
+                sound_pins().replace(&format!("{tool_config}\n\n"), ""),
+                lock(),
+                "mise.toml holds no [tool_config] table",
+            ),
+            (
+                "the tool_config lock off",
+                sound_pins().replace(&tool_config, "[tool_config]\nlocked = false"),
+                lock(),
+                "mise.toml does not set locked = true under [tool_config]",
+            ),
+            (
+                "a key beside the tool_config lock",
+                sound_pins().replace(
+                    &tool_config,
+                    "[tool_config]\nlocked = true\ndisable_backends = []",
+                ),
+                lock(),
+                "mise.toml sets \"disable_backends\" under [tool_config], which no rule here reads",
+            ),
+            (
+                "the settings lock off",
+                sound_pins().replace("[settings]\nlocked = true", "[settings]\nlocked = false"),
+                lock(),
+                "mise.toml does not set locked = true under [settings]",
+            ),
+            (
+                "the attestation check deleted",
+                sound_pins().replace("locked_verify_provenance = true\n", ""),
+                lock(),
+                "mise.toml does not set locked_verify_provenance = true under [settings]",
+            ),
+            (
+                "a failed lookup written as a string",
+                sound_pins().replace(
+                    "provenance_api_failures_fatal = true",
+                    "provenance_api_failures_fatal = \"true\"",
+                ),
+                lock(),
+                "mise.toml does not set provenance_api_failures_fatal = true under [settings]",
+            ),
+            (
+                "a setting beside the ones read",
+                sound_pins().replace("[settings]\n", "[settings]\nexperimental = true\n"),
+                lock(),
+                "mise.toml sets \"experimental\" under [settings], which no rule here reads",
+            ),
+        ];
+        refuses(cases);
+    }
+
+    /// A tool entry carries its version and its tag prefix and nothing else,
+    /// in either pin file and in the options its lockfile entry records, and a
+    /// lockfile carries only the keys mise writes.
+    ///
+    /// mise runs a postinstall command and exports an install environment from
+    /// a tool entry. Each case passed every other rule here.
+    #[test]
+    fn a_tool_entry_carries_its_version_and_tag_prefix_alone() {
+        let nextest = "\"github:nextest-rs/nextest\" = { version = \"0.9.145\", version_prefix = \"cargo-nextest-\" }";
+        let taplo_api =
+            "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600\"\n";
+        let cases: &[(&str, String, String, &str)] = &[
+            (
+                "a postinstall command",
+                sound_pins().replace(
+                    "taplo = \"0.10.0\"",
+                    "taplo = { version = \"0.10.0\", postinstall = \"echo\" }",
+                ),
+                SOUND_LOCK.to_string(),
+                "mise.toml gives \"taplo\" the option \"postinstall\", and a tool here carries its version and tag prefix alone",
+            ),
+            (
+                "an install environment",
+                sound_pins().replace(
+                    nextest,
+                    &nextest.replace(" }", ", install_env = { A = \"b\" } }"),
+                ),
+                SOUND_LOCK.to_string(),
+                "mise.toml gives \"github:nextest-rs/nextest\" the option \"install_env\", and a tool here carries its version and tag prefix alone",
+            ),
+            (
+                "a tag prefix naming other tags",
+                sound_pins().replace(
+                    "version_prefix = \"cargo-nextest-\"",
+                    "version_prefix = \"v\"",
+                ),
+                SOUND_LOCK.to_string(),
+                "mise.toml gives \"github:nextest-rs/nextest\" the version_prefix \"v\", and its release tags start \"cargo-nextest-\"",
+            ),
+            (
+                "an option in the lockfile alone",
+                sound_pins(),
+                SOUND_LOCK.replace(
+                    "version_prefix = \"cargo-nextest-\"\n",
+                    "version_prefix = \"cargo-nextest-\"\npostinstall = \"echo\"\n",
+                ),
+                "mise.lock gives \"github:nextest-rs/nextest\" the option \"postinstall\", and a tool here carries its version and tag prefix alone",
+            ),
+            (
+                "a key on an entry mise does not write",
+                sound_pins(),
+                SOUND_LOCK.replace(
+                    "specifiers = [\"0.9.145\"]\n",
+                    "specifiers = [\"0.9.145\"]\ninstall_env = { A = \"b\" }\n",
+                ),
+                "mise.lock gives \"github:nextest-rs/nextest\" the key \"install_env\", which mise does not write",
+            ),
+            (
+                "a key in a platform block mise does not write",
+                sound_pins(),
+                SOUND_LOCK.replace(taplo_api, &format!("{taplo_api}bin = \"other\"\n")),
+                "mise.lock gives \"taplo\" on \"linux-x64\" the key \"bin\", which mise does not write",
+            ),
+            (
+                "a key above every table",
+                sound_pins(),
+                format!("env = {{ A = \"b\" }}\n{SOUND_LOCK}"),
+                "mise.lock carries \"env\", which mise does not write",
+            ),
+        ];
+        refuses(cases);
+        semver_refuses(&[(
+            "a postinstall command in the semver file",
+            sound_pins(),
+            SOUND_SEMVER_PINS.replace(
+                "= \"0.50.0\"",
+                "= { version = \"0.50.0\", postinstall = \"echo\" }",
+            ),
+            SOUND_SEMVER_LOCK.to_string(),
+            "mise.semver.toml gives \"github:obi1kenobi/cargo-semver-checks\" the option \"postinstall\", and a tool here carries its version and tag prefix alone",
+        )]);
+    }
+
+    /// A control character in a value a finding prints reaches the finding as
+    /// its escape, so a committed file writes no raw escape to a terminal and
+    /// starts no line of its own in a CI log.
+    #[test]
+    fn a_finding_carries_no_raw_control_character() {
+        let lock = format!(
+            "{SOUND_LOCK}[[tools.\"probe\\n::error title=spoofed::pins passed\\u001b[8m\\u202edessap\"]]\nversion = \"1.0.0\"\n"
+        );
+        let found = problems(&sound_pins(), &lock);
+        assert!(
+            found.iter().any(|problem| problem
+                .contains("probe\\n::error title=spoofed::pins passed\\u{1b}[8m\\u{202e}dessap")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().all(|problem| !problem.chars().any(hidden)),
+            "{found:?}"
         );
     }
 }

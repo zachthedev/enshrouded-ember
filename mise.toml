@@ -75,3 +75,11 @@ locked_verify_provenance = true
 # An attestation lookup that fails is a refusal, not a pass. Without this, an
 # API outage installs an attested tool as if it carried no attestation.
 provenance_api_failures_fatal = true
+
+# mise fetches a lockfile entry's url_api whenever a HEAD on its url fails, and
+# that reference names an asset by number alone, which can be another release's.
+# This sends every such request to a name that resolves nowhere, so the install
+# fails instead. `cargo xtask pins` holds the map to this one rule. A committed
+# mise.local.toml can lift a setting made here, so every workflow install also
+# carries the map in MISE_URL_REPLACEMENTS, which no config file overrides.
+url_replacements = { 'regex:^https://api\.github\.com/repos/[^/]+/[^/]+/releases/assets/.*$' = "https://url-api-refused.invalid/" }

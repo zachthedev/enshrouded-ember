@@ -177,15 +177,18 @@ pub(crate) const STEPS: &[Step] = &[
         name: "zizmor",
         covers: "Workflow pinning, credentials, permissions and injection",
         program: Program::Mise("zizmor"),
-        // The repository root, so every input zizmor collects is audited,
-        // dependabot.yml included. zizmor honors .gitignore, which keeps
-        // node_modules and target out.
+        // .github whole, with ignore handling off. A directory input honors
+        // .gitignore files, .git/info/exclude and the global excludes, so a
+        // committed ignore line could hide a workflow, and --collect=all turns
+        // all of them off. The input stays .github, which collects
+        // dependabot.yml and never reaches node_modules, target or a worktree.
         args: &[
             "--no-progress",
             "--strict-collection",
+            "--collect=all",
             "--config",
             ".github/zizmor.yml",
-            ".",
+            ".github",
         ],
         install: MISE_INSTALL,
         env: &[],
@@ -215,12 +218,23 @@ pub(crate) fn pin_problems(root: &Path) -> Vec<String> {
                 &semver_pins,
                 &semver_lock,
             ));
+            found.extend(stray_problems(root));
             found
         }
         (first, second, third, fourth) => [first, second, third, fourth]
             .into_iter()
             .filter_map(Result::err)
+            .chain(stray_problems(root))
             .collect(),
+    }
+}
+
+/// Every other mise configuration or lockfile under `root`, or the reason the
+/// tree could not be listed.
+fn stray_problems(root: &Path) -> Vec<String> {
+    match crate::pins::config_paths(root) {
+        Ok(paths) => crate::pins::stray_config_problems(&paths),
+        Err(problem) => vec![problem],
     }
 }
 
@@ -257,14 +271,19 @@ pub fn run(ui: &Ui) -> Result<bool> {
         for problem in &problems {
             ui.line(problem);
         }
-        // The relock is the remedy only when a problem is about a lockfile; an
-        // unreadable or malformed pin file needs an edit, not a relock.
+        // A stray file or link is removed, never relocked: `mise lock` would
+        // read the configuration the finding refuses. The relock is the remedy
+        // only when a problem is about a lockfile; an unreadable or malformed
+        // pin file needs an edit, not a relock.
+        let strays = stray_problems(&root);
         let relocks: Vec<&str> = crate::pins::PAIRS
             .iter()
             .filter(|pair| problems.iter().any(|problem| problem.contains(pair.lock)))
             .map(|pair| pair.relock)
             .collect();
-        let remedy = if relocks.is_empty() {
+        let remedy = if !strays.is_empty() {
+            "remove each file and link named above".to_string()
+        } else if relocks.is_empty() {
             format!("fix {}", crate::pins::PINS)
         } else {
             format!("rewrite the lockfile with: {}", relocks.join(", then "))
@@ -323,10 +342,12 @@ fn prepare(root: &Path, step: &Step) -> Result<Command, String> {
             command.arg(flag);
         }
         "zizmor" => {
-            // Online when the host has a GitHub login, so the audits that read
-            // the API run; offline otherwise, so a laptop with no token still
-            // gets the rest.
-            match gh_token() {
+            // Offline in CI, where the gate holds no token: the online audits
+            // run in the shared workflows job, the one job that names the
+            // token. Locally, online when the host has a GitHub login, so those
+            // audits run before a push; offline otherwise.
+            let in_ci = std::env::var_os("CI").is_some_and(|value| !value.is_empty());
+            match if in_ci { None } else { gh_token() } {
                 Some(token) => {
                     command.env("GH_TOKEN", token);
                 }
@@ -378,7 +399,16 @@ fn gh_token() -> Option<String> {
 /// `mise which` exits non-zero for a tool it does not install, and prints one
 /// path on the first line when it does.
 fn mise_which(root: &Path, tool: &str) -> Option<PathBuf> {
+    // mise.toml alone: no .tool-versions, no environment file and no
+    // per-platform file, so a committed mise.local.toml, mise.<env>.toml or
+    // .tool-versions cannot choose the binary. On Windows a name set here
+    // replaces any spelling of it this process inherited, because the child
+    // environment matches names without case.
     let output = Command::new("mise")
+        .env("MISE_OVERRIDE_CONFIG_FILENAMES", crate::pins::PINS)
+        .env("MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES", "none")
+        .env("MISE_ENV", "")
+        .env("MISE_AUTO_ENV", "false")
         .args(["which", tool])
         .current_dir(root)
         .output()
