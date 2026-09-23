@@ -8,7 +8,8 @@ beside the server, and fails closed when a game update moves something.
 
 Nothing here is affiliated with or endorsed by Keen Games.
 
-This repository is in development. No release is published yet.
+This repository is in development. No release is published yet. Versions are
+`0.x`, which promises no compatibility between releases.
 
 ## What a mod author gets
 

@@ -1,0 +1,144 @@
+name: cd
+
+# Everything after a merge. A push to main keeps the release pull request
+# current. The squash merge of that pull request makes the next run publish
+# every crate it names to crates.io, tag each one and draft ember-loader's
+# release, once the release environment's reviewer approves; the publish job
+# then flips that draft public under a second approval. release-plz.toml says
+# what releases and how it is versioned.
+#
+# The merge is a squash, so the tag release-plz creates names the commit this
+# run is for, which the publish job requires. A merge commit would have
+# release-plz tag the pull request's last commit instead.
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# Every action is pinned to a commit. A tag can be retargeted by its owner with
+# no pull request and no cooldown; a commit cannot. Renovate bumps the hash and
+# keeps the version comment current.
+jobs:
+  # Opens or updates the release pull request under the releaser app. A pull
+  # request opened with the job token starts no workflow run, so no check would
+  # reach it; the app is a distinct actor, and its pull request runs CI.
+  release-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Two pushes landing together would race to write the same pull request.
+    # Queued, not canceled, so the later push still reaches the release notes.
+    concurrency:
+      group: release-pr
+      cancel-in-progress: false
+    # The checkout alone reads with the job token. Everything that writes goes
+    # through the app's token.
+    permissions:
+      contents: read
+    # Holds the releaser app's client id and key and admits main alone, through
+    # a deployment branch policy. No reviewer: an approval would hold every
+    # push. deployment: false, because this is a credential scope and not a
+    # target.
+    environment:
+      name: release-pr
+      deployment: false
+    steps:
+      # Narrowed with permission-* inputs. Without one the token carries the
+      # whole installation grant.
+      - id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASER_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASER_PRIVATE_KEY }}
+          # The release branch and its commit.
+          permission-contents: write
+          # The pull request itself.
+          permission-pull-requests: write
+      # The whole history, because release-plz reads every commit since each
+      # crate's last release. release-plz pushes with the app's token on its
+      # own, so none stays in the checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The release is exact, because an unpinned one resolves at run time and
+      # a resolved release is under no cooldown. The action installs it with
+      # cargo-binstall, whose fallback when the prebuilt download fails compiles
+      # it with no lockfile; that path is the action's and stays open.
+      - uses: release-plz/action@d6c56271d640b6c1b61d1e00593641c400a9f4bd # v0.5.138
+        with:
+          command: release-pr
+          version: 0.3.168
+        env:
+          GITHUB_TOKEN: ${{ steps.token.outputs.token }}
+
+  # Publishes every crate the merged pull request names, tags each one and
+  # drafts ember-loader's release, once the release environment's reviewer
+  # approves. No concurrency group: a queued run canceled by a later push would
+  # skip a release.
+  release:
+    # A job in a reviewer-gated environment queues an approval on every run, so
+    # this runs only on the release merge, whose squash subject is the pr_name
+    # release-plz.toml pins. A stray commit with that subject costs one
+    # approval, and release-plz then does nothing.
+    if: "startsWith(github.event.head_commit.message, 'chore: release')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # crates.io trusted publishing. release-plz exchanges the workflow's OIDC
+      # token for a short-lived publish token, so no registry token is stored
+      # anywhere. The crates.io configuration names this file and `release`.
+      id-token: write
+    # The publish approval, which also holds the releaser app's client id and
+    # key, because this job creates the tags.
+    environment: release
+    outputs:
+      tag: ${{ steps.loader.outputs.tag }}
+    steps:
+      # The tags and the draft release are created under the app, the one actor
+      # the tag ruleset lets create a tag.
+      - id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASER_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASER_PRIVATE_KEY }}
+          # The tags and the draft release.
+          permission-contents: write
+          # Finding the release pull request the pushed commit came from.
+          permission-pull-requests: read
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: release
+        uses: release-plz/action@d6c56271d640b6c1b61d1e00593641c400a9f4bd # v0.5.138
+        with:
+          command: release
+          version: 0.3.168
+        env:
+          GITHUB_TOKEN: ${{ steps.token.outputs.token }}
+      # The publish job below flips ember-loader's draft, the one crate with a
+      # GitHub release. A run that did not release it hands on nothing.
+      - id: loader
+        env:
+          RELEASES: ${{ steps.release.outputs.releases }}
+        run: |
+          tag=$(jq --raw-output '.[]? | select(.package_name == "ember-loader") | .tag' <<< "${RELEASES:-[]}")
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+  # Flips ember-loader's draft public under the release environment's reviewer.
+  # No artifact is attached until the loader ships a built library. The calling
+  # job grants what the called job declares, the attestation scopes included,
+  # because the declaration is static.
+  publish:
+    needs: release
+    if: needs.release.outputs.tag != ''
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: zachthedev/.github/.github/workflows/publish.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      flip: true

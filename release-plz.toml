@@ -1,0 +1,77 @@
+# release-plz holds every version and every changelog in this workspace, and
+# nobody edits either by hand. The release decision is content-based: a commit
+# that changes a crate's packaged files releases that crate, whatever its type.
+# The type sets the changelog section and the bump size alone, and a `feat`
+# below 1.0.0 bumps the patch. Each crate keeps its own CHANGELOG.md beside its
+# Cargo.toml, which is release-plz's default, so no root changelog exists.
+# Tags follow the default `<crate>-v<version>`.
+
+[workspace]
+# The release is created as a draft, and cd.yml's publish job flips it once
+# the release environment's reviewer approves. A draft cannot be the latest
+# release, so the flip marks it.
+git_release_draft = true
+git_release_latest = false
+# A GitHub release belongs to the one crate that ships a built artifact. Every
+# released crate still gets its tag.
+git_release_enable = false
+# Only the merge of a release pull request releases. Every other push to main
+# runs `release` and finds nothing to do.
+release_always = false
+# `cargo publish` compiles nothing. Verifying would run every build script and
+# proc macro in the tree inside the job that holds the crates.io token and the
+# releaser app's key, and the gate on the release pull request already built
+# the same commit.
+publish_no_verify = true
+# The release pull request's title, which is also its one commit's subject and
+# so the squash merge's. cd.yml runs the release job only on a push whose
+# message starts `chore: release`, so every branch below keeps that prefix.
+pr_name = "chore: release{% if package and version %} {{ package }} v{{ version }}{% elif version %} v{{ version }}{% endif %}"
+# The pull request names the app that opened it, not the tool.
+pr_body = """
+{% set changes %}
+{%- for release in releases %}
+{%- if release.title and release.changelog %}{% if releases | length > 1 %}
+## `{{ release.package }}`
+{% endif %}
+<blockquote>
+
+## {{ release.title }}
+
+{{ release.changelog }}
+</blockquote>{% endif %}
+{% endfor %}
+{% endset %}
+
+## New release
+{% for release in releases %}
+* `{{ release.package }}`: {% if release.previous_version and release.previous_version != release.next_version %}{{ release.previous_version }} -> {% endif %}{{ release.next_version }}{% if release.semver_check == "incompatible" %} (API breaking changes){% elif release.semver_check == "compatible" %} (API compatible){% endif %}
+{%- endfor %}
+{%- for release in releases %}{% if release.breaking_changes %}
+
+### `{{ release.package }}` breaking changes
+
+```text
+{{ release.breaking_changes }}
+```{% endif %}{% endfor %}
+{% if changes %}
+<details><summary><i><b>Changelog</b></i></summary><p>
+{{ changes }}
+</p></details>
+{% endif %}
+---
+Managed by zachthedev-releaser.
+"""
+
+[[package]]
+name = "ember-loader"
+git_release_enable = true
+
+# Neither leaves the repository, so neither takes a version of its own.
+[[package]]
+name = "ember-testkit"
+release = false
+
+[[package]]
+name = "xtask"
+release = false

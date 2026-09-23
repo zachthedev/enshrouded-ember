@@ -180,7 +180,43 @@ dependency that pulls it in.
 
 ## Releases
 
-None.
+[release-plz](https://release-plz.dev) releases the workspace, configured in
+`release-plz.toml`, and `.github/workflows/cd.yml` runs it:
+
+1. Every push to main opens or updates one release pull request under the
+   zachthedev-releaser app. It carries each changed crate's next version and
+   its changelog entry.
+2. Merging that pull request, as a squash, is the release. The next run waits
+   for the `release` environment's reviewer, then publishes each crate the pull
+   request names to crates.io, tags it `<crate>-v<version>`, and drafts a
+   GitHub release for ember-loader.
+3. The publish job waits for the same reviewer a second time, then flips the
+   draft public. Two approvals per release is the cost of creating every
+   release as a draft.
+
+release-plz owns every version in the manifests and every crate's
+`CHANGELOG.md`, beside the crate's `Cargo.toml`. Nobody edits either by hand;
+to change what a release says, edit the release pull request before merging
+it. A red release pull request is never merged with `--admin`, because the
+bypass also skips the required checks.
+
+A commit that changes a crate's packaged files releases that crate. The commit
+type sets the changelog section and the bump size, and below 1.0.0 a `feat`
+bumps the patch and a breaking change the minor. The workspace starts at 0.1.0
+because nothing depends on it yet, and `0.x` promises no compatibility.
+
+crates.io takes each crate through trusted publishing: the release job's OIDC
+token is exchanged for a short-lived publish token, so no registry token is
+stored anywhere. crates.io accepts that only for a crate that already exists.
+A release pull request naming a crate crates.io has never seen would fail
+after the approval, with the crates before it in publish order already out.
+So a new crate's first version is published by hand, from the release pull
+request's branch and in dependency order, before that pull request merges.
+The release job skips a version already on crates.io, so a version published
+by hand gets no tag and no GitHub release.
+
+A failed release is recovered by cutting the next version, never by moving a
+tag. Only the releaser app can create a tag.
 
 ## What never happens
 
