@@ -22,6 +22,21 @@ on:
 
 permissions: {}
 
+env:
+  # mise fetches a lockfile entry's url_api when a HEAD on its url fails, and
+  # that reference can name another release's asset. mise.toml sends every
+  # such request nowhere, and a committed config file can lift a setting made
+  # there, so every mise run here carries the same map, which no file overrides.
+  MISE_URL_REPLACEMENTS: '{"regex:^https://api\\.github\\.com/repos/[^/]+/[^/]+/releases/assets/.*$":"https://url-api-refused.invalid/"}'
+  # mise reads mise.toml alone in every job here: no .tool-versions, no
+  # environment file and no per-platform file. A committed mise.local.toml,
+  # mise.<env>.toml or .tool-versions then chooses nothing an install, a shim
+  # or mise-action fetches or runs.
+  MISE_OVERRIDE_CONFIG_FILENAMES: mise.toml
+  MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES: none
+  MISE_ENV: ''
+  MISE_AUTO_ENV: 'false'
+
 # Every action is pinned to a commit. A tag can be retargeted by its owner with
 # no pull request and no cooldown; a commit cannot. Renovate bumps the hash and
 # keeps the version comment current.
@@ -57,6 +72,14 @@ jobs:
         with:
           version: 2026.9.5
           install: false
+          # No mise environment or PATH entry reaches a later step: every tool
+          # runs through its shim or `mise which`.
+          env: false
+          export_path: false
+          # A locked install needs no token: with none, mise fetches attestations
+          # through its own proxy. An empty one keeps the action from exporting
+          # the job token to every later step.
+          github_token: ''
           cache: false
       - run: mise install --locked release-plz github:obi1kenobi/cargo-semver-checks
       - run: release-plz update
@@ -113,6 +136,14 @@ jobs:
         with:
           version: 2026.9.5
           install: false
+          # No mise environment or PATH entry reaches a later step: every tool
+          # runs through its shim or `mise which`.
+          env: false
+          export_path: false
+          # A locked install needs no token: with none, mise fetches attestations
+          # through its own proxy. An empty one keeps the action from exporting
+          # the job token to every later step.
+          github_token: ''
           cache: false
       - run: mise install --locked release-plz
       # Outside the checkout, because release-plz commits every changed and
@@ -203,6 +234,14 @@ jobs:
         with:
           version: 2026.9.5
           install: false
+          # No mise environment or PATH entry reaches a later step: every tool
+          # runs through its shim or `mise which`.
+          env: false
+          export_path: false
+          # A locked install needs no token: with none, mise fetches attestations
+          # through its own proxy. An empty one keeps the action from exporting
+          # the job token to every later step.
+          github_token: ''
           cache: false
       - run: mise install --locked release-plz
       # The tags and the draft release are created under the app, the one actor
