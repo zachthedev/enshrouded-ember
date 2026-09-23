@@ -40,7 +40,13 @@ cargo xtask check --rows
 The opening row holds `mise.toml`, `mise.semver.toml` and their lockfiles to
 their rules before any tool runs, and `cargo xtask pins` runs that row on its own. A lockfile entry
 the rules reject installs whatever its url serves, so a rule that ran later
-would report a finding about a binary that had already executed.
+would report a finding about a binary that had already executed. It also
+refuses any link, and any other mise configuration or lockfile, at the root or
+under `.config`, `.mise` or `mise`. mise would merge such a file and its
+lockfile over the pair the rules read, and follow a link to whatever it names.
+`mise.toml` holds `[tools]`, `[tool_config]` and `[settings]` alone, and each
+tool entry holds its version and tag prefix alone. mise runs hooks, tasks and
+postinstall commands from that file, and no rule reads them.
 
 `cargo xtask` runs `--locked`, and so does every cargo row, so a manifest edit
 with no relock is refused before the gate starts rather than rewriting
@@ -67,10 +73,15 @@ the quiet leg report a pass for an analysis it never ran.
 `zizmor` audits the same files for supply chain and credential problems: an
 action not pinned to a commit, a checkout that leaves a credential behind, a
 workflow with no `permissions` block, and expression injection through untrusted
-context. `--strict-collection` makes a file it cannot parse fail the step rather
-than drop out of the audit. It runs online when `gh auth token` answers, so the
-audits that read the GitHub API run, and `--offline` otherwise; the row's note
-says which. `--config` names `.github/zizmor.yml`, which holds the hash-pin
+context. It is given `.github` with `--collect=all`, which turns off every
+ignore file, so a committed ignore line cannot hide a workflow.
+`--strict-collection` makes a file it cannot parse fail the step rather than
+drop out of the audit. Locally it runs online when `gh auth token` answers, so
+the audits that read the GitHub API run before a push, and `--offline`
+otherwise. The row's note says which. In CI it always runs offline and holds no
+token. Those audits catch an impostor commit, an advisory against a pinned
+action and a version comment naming the wrong tag, and they run in CI's shared
+`workflows` job on every pull request. `--config` names `.github/zizmor.yml`, which holds the hash-pin
 policy and the Dependabot cooldown threshold, so the environment cannot swap it
 for another. The inline markers in the workflows answer the findings this
 repository accepts.
