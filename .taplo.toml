@@ -1,9 +1,18 @@
 # Every TOML file in this repository, formatted by `taplo fmt`. The gate runs
-# `taplo fmt --check`.
+# `taplo fmt --check --config .taplo.toml`, so no TAPLO_CONFIG in the
+# environment can point it at another file.
 #
-# taplo reads .gitignore, so target/ and .cache/ stay out without being named.
+# taplo walks every directory and reads no .gitignore, so each ignored
+# directory that can hold a TOML file is excluded here by name.
 
 include = ["**/*.toml"]
+
+exclude = [
+    ".cache/**",
+    ".claude/worktrees/**",
+    "node_modules/**",
+    "target/**",
+]
 
 [formatting]
 # A cargo-machete ignore list stays one name per line, which reads and edits
@@ -12,6 +21,6 @@ include = ["**/*.toml"]
 # adjacent deletions as one hunk. One owner prunes a whole phase's names in one
 # commit, so only one edit ever reaches a list.
 array_auto_collapse = false
-# .editorconfig sets four spaces for every file type but markup, and `cargo add`
-# writes manifests the same way.
+# .editorconfig sets four spaces for Rust and TOML, and `cargo add` writes
+# manifests the same way.
 indent_string = "    "

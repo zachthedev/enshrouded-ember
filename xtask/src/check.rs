@@ -79,7 +79,7 @@ pub(crate) const STEPS: &[Step] = &[
         name: "taplo",
         covers: "TOML formatting, over the files .taplo.toml names",
         program: Program::Mise("taplo"),
-        args: &["fmt", "--check"],
+        args: &["fmt", "--check", "--config", ".taplo.toml"],
         install: MISE_INSTALL,
         env: &[],
     },
@@ -177,13 +177,15 @@ pub(crate) const STEPS: &[Step] = &[
         name: "zizmor",
         covers: "Workflow pinning, credentials, permissions and injection",
         program: Program::Mise("zizmor"),
+        // The repository root, so every input zizmor collects is audited,
+        // dependabot.yml included. zizmor honors .gitignore, which keeps
+        // node_modules and target out.
         args: &[
             "--no-progress",
             "--strict-collection",
             "--config",
             ".github/zizmor.yml",
-            ".github/workflows",
-            ".github/dependabot.yml",
+            ".",
         ],
         install: MISE_INSTALL,
         env: &[],
