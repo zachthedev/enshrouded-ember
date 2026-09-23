@@ -620,14 +620,15 @@ mod tests {
             "LOCALAPPDATA".into(),
             "C:\\Users\\probe\\AppData\\Local".into(),
         );
-        wanted.insert(
-            "TEMP".into(),
-            "C:\\Users\\probe\\AppData\\Local\\Temp".into(),
-        );
-        wanted.insert(
-            "TMP".into(),
-            "C:\\Users\\probe\\AppData\\Local\\Temp".into(),
-        );
+        // The builder joins `Temp` with the host's separator, and the builder
+        // runs on every host even though only Windows hands it folders.
+        let temp = if cfg!(windows) {
+            "C:\\Users\\probe\\AppData\\Local\\Temp"
+        } else {
+            "C:\\Users\\probe\\AppData\\Local/Temp"
+        };
+        wanted.insert("TEMP".into(), temp.into());
+        wanted.insert("TMP".into(), temp.into());
         for name in PROXIES {
             wanted.insert((*name).into(), format!("{name}-value"));
         }
