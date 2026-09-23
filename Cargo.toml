@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
@@ -21,12 +21,12 @@ repository = "https://github.com/zachthedev/enshrouded-ember"
 authors = ["ZachTheDev <hey@zachthe.dev>"]
 
 [workspace.dependencies]
-ember-enshrouded = { version = "0.1.0", path = "crates/ember-enshrouded" }
-ember-holistic = { version = "0.1.0", path = "crates/ember-holistic" }
-ember-kfc = { version = "0.1.0", path = "crates/ember-kfc" }
-ember-platform = { version = "0.1.0", path = "crates/ember-platform" }
-ember-sdk = { version = "0.1.0", path = "crates/ember-sdk" }
-ember-sigs = { version = "0.1.0", path = "crates/ember-sigs" }
+ember-enshrouded = { version = "0.1.1", path = "crates/ember-enshrouded" }
+ember-holistic = { version = "0.1.1", path = "crates/ember-holistic" }
+ember-kfc = { version = "0.1.1", path = "crates/ember-kfc" }
+ember-platform = { version = "0.1.1", path = "crates/ember-platform" }
+ember-sdk = { version = "0.1.1", path = "crates/ember-sdk" }
+ember-sigs = { version = "0.1.1", path = "crates/ember-sigs" }
 
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
