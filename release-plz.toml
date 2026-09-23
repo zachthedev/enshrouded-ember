@@ -31,7 +31,9 @@ pr_name = "chore: release{% if package and version %} {{ package }} v{{ version 
 # moves it to `autorelease: tagged` once its release is created, so a label
 # says where each release pull request stands.
 pr_labels = ["autorelease: pending"]
-# The pull request names the app that opened it, not the tool.
+# The pull request names the app that opened it, not the tool. It carries no
+# semver verdict: the job that opens it never runs the check, and cd.yml's
+# release-update log holds the verdict instead.
 pr_body = """
 {% set changes %}
 {%- for release in releases %}
@@ -49,15 +51,8 @@ pr_body = """
 
 ## New release
 {% for release in releases %}
-* `{{ release.package }}`: {% if release.previous_version and release.previous_version != release.next_version %}{{ release.previous_version }} -> {% endif %}{{ release.next_version }}{% if release.semver_check == "incompatible" %} (API breaking changes){% elif release.semver_check == "compatible" %} (API compatible){% endif %}
+* `{{ release.package }}`: {% if release.previous_version and release.previous_version != release.next_version %}{{ release.previous_version }} -> {% endif %}{{ release.next_version }}
 {%- endfor %}
-{%- for release in releases %}{% if release.breaking_changes %}
-
-### `{{ release.package }}` breaking changes
-
-```text
-{{ release.breaking_changes }}
-```{% endif %}{% endfor %}
 {% if changes %}
 <details><summary><i><b>Changelog</b></i></summary><p>
 {{ changes }}

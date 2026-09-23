@@ -10,6 +10,12 @@ name: cd
 # The merge is a squash, so the tag release-plz creates names the commit this
 # run is for, which the publish job requires. A merge commit would have
 # release-plz tag the pull request's last commit instead.
+#
+# release-plz runs from the mise pin, not release-plz/action, which the
+# handbook's Workflows row names: a deliberate deviation. The action runs the
+# semver check and opens the pull request in one process under one token, and
+# has no command that runs the check alone. mise.toml pins release-plz and
+# mise.semver.toml pins cargo-semver-checks.
 on:
   push:
     branches: [main]
@@ -20,10 +26,64 @@ permissions: {}
 # no pull request and no cooldown; a commit cannot. Renovate bumps the hash and
 # keeps the version comment current.
 jobs:
-  # Opens or updates the release pull request under the releaser app. A pull
-  # request opened with the job token starts no workflow run, so no check would
-  # reach it; the app is a distinct actor, and its pull request runs CI.
+  # Computes the next release: every crate's version, its changelog and the
+  # lockfile, with release-plz's semver check deciding how far a library's
+  # version moves. The check builds rustdoc for each changed library and its
+  # published baseline, which runs every dependency's build script and proc
+  # macro, so this job holds no credential: no environment, and a job token
+  # that reads.
+  release-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    # Loads mise.semver.toml beside mise.toml. The release-pr job never sets
+    # it, so cargo-semver-checks is outside every mise configuration there and
+    # no shim can install it.
+    env:
+      MISE_ENV: semver
+    steps:
+      # The whole history, because release-plz reads every commit since each
+      # crate's last release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Installs mise and nothing else, as in ci.yml. The install below runs
+      # --locked, so a tool the lockfiles do not record is refused. cache:
+      # false, because a cache this job restored or saved would carry what its
+      # build scripts wrote.
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.9.5
+          install: false
+          cache: false
+      - run: mise install --locked release-plz github:obi1kenobi/cargo-semver-checks
+      - run: release-plz update
+      # Every change release-plz made, a crate's first changelog included,
+      # staged so the untracked files are in the diff.
+      - run: |
+          git add --all
+          git diff --cached --output="$RUNNER_TEMP/release.patch"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-update
+          path: ${{ runner.temp }}/release.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  # Opens or updates the release pull request under the releaser app, from the
+  # change release-update computed. A pull request opened with the job token
+  # starts no workflow run, so no check would reach it; the app is a distinct
+  # actor, and its pull request runs CI.
+  #
+  # The environment's key reaches this runner when the job starts, so nothing
+  # here builds or runs the workspace's dependencies. cargo-semver-checks is
+  # never installed: with the handoff applied every released crate is already
+  # at its next version, and with no check to run, a handoff that leaves one
+  # out costs a smaller version bump, which the pull request shows.
   release-pr:
+    needs: release-update
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Two pushes landing together would race to write the same pull request.
@@ -43,8 +103,58 @@ jobs:
       name: release-pr
       deployment: false
     steps:
-      # Narrowed with permission-* inputs. Without one the token carries the
-      # whole installation grant.
+      # release-plz pushes through the API with the app's token, so none stays
+      # in the checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.9.5
+          install: false
+          cache: false
+      - run: mise install --locked release-plz
+      # Outside the checkout, because release-plz commits every changed and
+      # untracked file in the tree.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-update
+          path: ${{ runner.temp }}/release-update
+      # release-update ran the dependencies' code, so its patch is untrusted.
+      # Only the manifests, the lockfile and the changelogs apply: a cargo
+      # config, a toolchain file or a mise file in the patch is dropped, since
+      # each can make a command here run a program. The include list filters
+      # by path alone, and release-plz commits whatever the tree holds, so a
+      # symlink at a manifest path would publish the file it points at. So
+      # git's own summary of the kept hunks may show only a new changelog at
+      # 100644, and no hunk may be binary. No symlink may remain in the tree
+      # either, because this repository tracks none.
+      - run: |
+          patch="$RUNNER_TEMP/release-update/release.patch"
+          include=(--include=Cargo.lock --include='*Cargo.toml' --include='*CHANGELOG.md')
+          summary=$(git apply --allow-empty --summary "${include[@]}" "$patch")
+          refused=$(grep -v -E -e '^ create mode 100644 ([^ ]+/)?CHANGELOG\.md$' -e '^$' <<< "$summary" || true)
+          if [ -n "$refused" ]; then
+            echo "::error::release-update's patch changes more than file contents:"
+            printf '%s\n' "$refused"
+            exit 1
+          fi
+          numstat=$(git apply --allow-empty --numstat "${include[@]}" "$patch")
+          if grep -q -E '^-' <<< "$numstat"; then
+            echo "::error::release-update's patch carries a binary change"
+            exit 1
+          fi
+          git apply --allow-empty "${include[@]}" "$patch"
+          links=$(find . -path ./.git -prune -o -type l -print)
+          if [ -n "$links" ]; then
+            echo "::error::the tree holds a symlink after the patch:"
+            printf '%s\n' "$links"
+            exit 1
+          fi
+      # Minted last, so no earlier step runs beside it. Narrowed with
+      # permission-* inputs; without one the token carries the whole
+      # installation grant.
       - id: token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -54,23 +164,12 @@ jobs:
           permission-contents: write
           # The pull request itself.
           permission-pull-requests: write
-      # The whole history, because release-plz reads every commit since each
-      # crate's last release. release-plz pushes with the app's token on its
-      # own, so none stays in the checkout.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      # The release is exact, because an unpinned one resolves at run time and
-      # a resolved release is under no cooldown. The action installs it with
-      # cargo-binstall, whose fallback when the prebuilt download fails compiles
-      # it with no lockfile; that path is the action's and stays open.
-      - uses: release-plz/action@d6c56271d640b6c1b61d1e00593641c400a9f4bd # v0.5.138
-        with:
-          command: release-pr
-          version: 0.3.168
+      # --allow-dirty takes the applied patch as the release. The token goes
+      # through the environment, which release-plz reads as GIT_TOKEN, so it
+      # is not on the command line.
+      - run: release-plz release-pr --allow-dirty --forge github --repo-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
         env:
-          GITHUB_TOKEN: ${{ steps.token.outputs.token }}
+          GIT_TOKEN: ${{ steps.token.outputs.token }}
 
   # Publishes every crate the merged pull request names, tags each one and
   # drafts ember-loader's release, once the release environment's reviewer
@@ -94,8 +193,18 @@ jobs:
     # key, because this job creates the tags.
     environment: release
     outputs:
-      tag: ${{ steps.loader.outputs.tag }}
+      tag: ${{ steps.release.outputs.tag }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.9.5
+          install: false
+          cache: false
+      - run: mise install --locked release-plz
       # The tags and the draft release are created under the app, the one actor
       # the tag ruleset lets create a tag.
       - id: token
@@ -107,24 +216,25 @@ jobs:
           permission-contents: write
           # Finding the release pull request the pushed commit came from.
           permission-pull-requests: read
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+      # The publish job below flips ember-loader's draft, the one crate with a
+      # GitHub release. A run that did not release it hands on nothing, and
+      # `created` says whether the run released anything at all.
       - id: release
-        uses: release-plz/action@d6c56271d640b6c1b61d1e00593641c400a9f4bd # v0.5.138
-        with:
-          command: release
-          version: 0.3.168
+        run: |
+          release-plz release --forge github --output json > "$RUNNER_TEMP/release.json"
+          tag=$(jq --raw-output '.releases[]? | select(.package_name == "ember-loader") | .tag' "$RUNNER_TEMP/release.json")
+          created=$(jq --raw-output '(.releases // []) | length > 0' "$RUNNER_TEMP/release.json")
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "created=${created}" >> "$GITHUB_OUTPUT"
         env:
-          GITHUB_TOKEN: ${{ steps.token.outputs.token }}
+          GIT_TOKEN: ${{ steps.token.outputs.token }}
       # release-plz labels the release pull request `autorelease: pending` and
       # has no key for the release that follows, so these move the merged pull
       # request to `autorelease: tagged` once a release exists. The label write
       # takes a token of its own, so release-plz never holds it, and a failure
       # here leaves the release, which has already happened, to go on.
       - id: label-token
-        if: steps.release.outputs.releases_created == 'true'
+        if: steps.release.outputs.created == 'true'
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -141,14 +251,6 @@ jobs:
           if [ -n "$pr" ]; then
             gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --remove-label "autorelease: pending" --add-label "autorelease: tagged"
           fi
-      # The publish job below flips ember-loader's draft, the one crate with a
-      # GitHub release. A run that did not release it hands on nothing.
-      - id: loader
-        env:
-          RELEASES: ${{ steps.release.outputs.releases }}
-        run: |
-          tag=$(jq --raw-output '.[]? | select(.package_name == "ember-loader") | .tag' <<< "${RELEASES:-[]}")
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
   # Flips ember-loader's draft public under the release environment's reviewer.
   # No artifact is attached until the loader ships a built library. The calling
