@@ -51,18 +51,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      # This job pushes nothing, so the job token does not stay in the checkout
-      # for the steps that follow it.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The pin rules, ahead of the step that installs from them. This command
-      # reads mise.toml and mise.lock and runs nothing, so it needs neither mise
-      # nor any pinned tool.
-      - run: cargo xtask pins
-      # The action installs mise and nothing else: the install below runs
+      # Ahead of the checkout, as in ci.yml, so the action reads no repository
+      # file. It installs mise and nothing else: the install below runs
       # --locked and names one tool, so cargo-deny arrives at the release
-      # mise.lock records and nothing else is fetched. The mise release is
+      # mise.lock records and nothing else is fetched. cache: false, so
+      # nothing is restored ahead of the pin rules. The mise release is
       # exact, because an unpinned one resolves at run time and a resolved
       # release is under no cooldown.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
@@ -73,10 +66,19 @@ jobs:
           # runs through its shim or `mise which`.
           env: false
           export_path: false
-          # A locked install needs no token: with none, mise fetches attestations
-          # through its own proxy. An empty one keeps the action from exporting
-          # the job token to every later step.
+          cache: false
+          # An empty one keeps the action from exporting the job token to every
+          # later step.
           github_token: ''
+      # This job pushes nothing, so the job token does not stay in the checkout
+      # for the steps that follow it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The pin rules, ahead of the step that installs from them. This command
+      # reads mise.toml and mise.lock and runs nothing, so it needs neither mise
+      # nor any pinned tool.
+      - run: cargo xtask pins
       - run: mise install --locked cargo-deny
       # The binary mise resolved is the binary that runs, as in the gate.
       - run: '"$(mise which cargo-deny)" --locked check advisories'

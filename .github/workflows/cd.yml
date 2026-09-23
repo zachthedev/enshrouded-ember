@@ -58,13 +58,8 @@ jobs:
     env:
       MISE_ENV: semver
     steps:
-      # The whole history, because release-plz reads every commit since each
-      # crate's last release.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      # Installs mise and nothing else, as in ci.yml. The install below runs
+      # Ahead of the checkout, as in ci.yml, so the action reads no repository
+      # file. It installs mise and nothing else. The install below runs
       # --locked, so a tool the lockfiles do not record is refused. cache:
       # false, because a cache this job restored or saved would carry what its
       # build scripts wrote.
@@ -76,12 +71,24 @@ jobs:
           # runs through its shim or `mise which`.
           env: false
           export_path: false
-          # A locked install needs no token: with none, mise fetches attestations
-          # through its own proxy. An empty one keeps the action from exporting
-          # the job token to every later step.
+          # An empty one keeps the action from exporting the job token to every
+          # later step.
           github_token: ''
           cache: false
+      # The whole history, because release-plz reads every commit since each
+      # crate's last release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # cargo-semver-checks is outside mise's registry, so it looks up its
+      # attestations through the GitHub API, which allows 60 unauthenticated
+      # requests an hour per runner address. The job token is set on this
+      # step alone, ahead of `release-plz update`, the first step that runs
+      # a dependency's build script.
       - run: mise install --locked release-plz github:obi1kenobi/cargo-semver-checks
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
       - run: release-plz update
       # Every change release-plz made, a crate's first changelog included,
       # staged so the untracked files are in the diff.
@@ -126,12 +133,8 @@ jobs:
       name: release-pr
       deployment: false
     steps:
-      # release-plz pushes through the API with the app's token, so none stays
-      # in the checkout.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+      # Ahead of the checkout, as in ci.yml, so the action reads no repository
+      # file.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           version: 2026.9.5
@@ -140,11 +143,16 @@ jobs:
           # runs through its shim or `mise which`.
           env: false
           export_path: false
-          # A locked install needs no token: with none, mise fetches attestations
-          # through its own proxy. An empty one keeps the action from exporting
-          # the job token to every later step.
+          # An empty one keeps the action from exporting the job token to every
+          # later step.
           github_token: ''
           cache: false
+      # release-plz pushes through the API with the app's token, so none stays
+      # in the checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - run: mise install --locked release-plz
       # Outside the checkout, because release-plz commits every changed and
       # untracked file in the tree.
@@ -226,10 +234,8 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+      # Ahead of the checkout, as in ci.yml, so the action reads no repository
+      # file.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           version: 2026.9.5
@@ -238,11 +244,14 @@ jobs:
           # runs through its shim or `mise which`.
           env: false
           export_path: false
-          # A locked install needs no token: with none, mise fetches attestations
-          # through its own proxy. An empty one keeps the action from exporting
-          # the job token to every later step.
+          # An empty one keeps the action from exporting the job token to every
+          # later step.
           github_token: ''
           cache: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - run: mise install --locked release-plz
       # The tags and the draft release are created under the app, the one actor
       # the tag ruleset lets create a tag.

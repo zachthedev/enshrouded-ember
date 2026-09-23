@@ -64,12 +64,13 @@ locked = true
 lockfile = true
 lockfile_platforms = ["linux-x64", "macos-arm64", "windows-x64"]
 
-# Re-check an attested artifact against its attestation at install time. With
-# this off, an install trusts the provenance mise.lock records and checks only
-# that the matching setting is still on, so an entry claiming an attestation it
-# does not have installs without one. A tool whose entry carries no provenance
-# line installs on its checksum either way, so this needs no allow list: the
-# per-tool provenance line in mise.lock is what makes the check required.
+# Re-check every entry against its publisher's attestations at install time.
+# With this off, an install trusts the provenance mise.lock records and checks
+# only that the matching setting is still on, so an entry claiming an
+# attestation it does not have installs without one. An entry with no
+# provenance line passes when the publisher attests nothing, so this needs no
+# allow list: the per-tool provenance line in mise.lock is what makes the
+# check required.
 locked_verify_provenance = true
 
 # An attestation lookup that fails is a refusal, not a pass. Without this, an

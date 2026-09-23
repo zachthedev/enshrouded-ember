@@ -53,28 +53,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      # This job pushes nothing, so the job token does not stay in the checkout
-      # for the steps that follow it.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The one third-party action. actions/cache needs hand-written keys for
-      # the registry, the git database and the target directory, and this one
-      # derives them from the lockfile and the toolchain.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # packageManager in package.json is the one Bun pin. The action verifies
-      # no download, so that pin plus the cooldown is the control.
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-      # The pin rules, ahead of the step that installs from them. mise-action
-      # runs `mise install`, which fetches and unpacks every artifact mise.lock
-      # records, so a rule that ran after it would report a finding about bytes
-      # already on disk. This command reads mise.toml and mise.lock and runs
-      # nothing, so it needs neither mise nor any pinned tool.
-      - run: cargo xtask pins
-        shell: bash
-      # The action installs mise and nothing else: the install below runs
+      # Ahead of the checkout, so the action's own `mise --version` and
+      # `mise ls` run with no repository file to read, and no template in a
+      # checked-out mise.toml runs before the pin rules can refuse it. The
+      # action installs mise and nothing else: the install below runs
       # --locked, so a tool mise.lock does not record is refused rather than
       # fetched. cache: false, so nothing is restored ahead of the pin rules
       # either. The action verifies its own mise download against a
@@ -91,12 +73,38 @@ jobs:
           env: false
           export_path: false
           cache: false
-          # A locked install needs no token: with none, mise fetches attestations
-          # through its own proxy. An empty one keeps the action from exporting
-          # the job token to every later step.
+          # An empty one keeps the action from exporting the job token to every
+          # later step.
           github_token: ''
+      # This job pushes nothing, so the job token does not stay in the checkout
+      # for the steps that follow it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The one third-party action. actions/cache needs hand-written keys for
+      # the registry, the git database and the target directory, and this one
+      # derives them from the lockfile and the toolchain.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # packageManager in package.json is the one Bun pin. The action verifies
+      # no download, so that pin plus the cooldown is the control.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      # The pin rules, ahead of the step that installs from them, so no rule
+      # reports a finding about bytes already on disk. This command reads
+      # mise.toml and mise.lock and runs nothing, so it needs neither mise nor
+      # any pinned tool.
+      - run: cargo xtask pins
+        shell: bash
+      # A tool outside mise's registry looks up its attestations through the
+      # GitHub API, which allows 60 unauthenticated requests an hour per
+      # runner address. Only this step is handed the job token. A step ahead
+      # of it that runs checkout code, `cargo xtask pins` among them, can
+      # still reach it, and it reads this public repository and nothing more.
       - run: mise install --locked
         shell: bash
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
       # Both legs name a shell, because a bare `run:` is bash on ubuntu and
       # pwsh on windows, so one line would execute under two dialects while
       # actionlint reads it as one. Each line below is the same in either
