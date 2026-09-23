@@ -1,6 +1,6 @@
 name: audit
 
-# The whole-tree advisories report, weekly. A red run is a report, never a
+# The whole-tree reports, each on its own clock. A red run is a report, never a
 # check: it means work to pick up. Nothing merges, releases or deploys through
 # this file, and no ruleset requires it.
 #
@@ -11,16 +11,26 @@ name: audit
 # directions, so both run. The gate runs the other deny checks per push and
 # never this one, because an advisory published overnight would turn a change
 # red that touched nothing.
+#
+# The workflows job runs the shared actionlint and zizmor job, whose online
+# audits read the pinned actions: a pinned commit outside its action's
+# repository, a stale action ref, a known-vulnerable action. Those answers
+# change with no pull request, so a schedule is what asks again.
 on:
   schedule:
     # Weekly, Monday. The hour is clear of deps.yml's daily cron.
     - cron: '41 6 * * 1'
+    # Weekly, Monday, an hour after the advisories run.
+    - cron: '41 7 * * 1'
   workflow_dispatch:
 
 permissions: {}
 
 jobs:
+  # The first weekly clock, and every dispatch. The schedule context carries
+  # the cron that fired, so a cron edit changes its twin here.
   advisories:
+    if: github.event_name != 'schedule' || github.event.schedule == '41 6 * * 1'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -47,3 +57,11 @@ jobs:
       - run: mise install --locked cargo-deny
       # The binary mise resolved is the binary that runs, as in the gate.
       - run: '"$(mise which cargo-deny)" --locked check advisories'
+
+  # The second weekly clock, and every dispatch. The calling job grants what
+  # the called job declares.
+  workflows:
+    if: github.event_name != 'schedule' || github.event.schedule == '41 7 * * 1'
+    permissions:
+      contents: read
+    uses: zachthedev/.github/.github/workflows/workflows.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0

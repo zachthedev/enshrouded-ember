@@ -9,9 +9,8 @@ name: codeql
 #
 # The languages are the shipped one plus actions. The actions analysis runs
 # beside zizmor, and neither replaces the other. Rust is analyzed under
-# build-mode none; codeql-action can fall back to autobuild on a server-side
-# flag and logs it, so a first run's log is read before its conclusion is
-# trusted.
+# build-mode none, which codeql-action runs as asked: its server-side fallback
+# to autobuild covers C# and Java alone.
 on:
   push:
     branches: [main]
