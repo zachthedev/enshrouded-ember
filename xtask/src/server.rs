@@ -788,9 +788,15 @@ mod tests {
     fn the_default_config_binds_the_loopback_with_one_slot() {
         let dir = TestDir::new("config-bind");
         let config = default_config(dir.path()).expect("the config renders");
-        assert!(config.contains("\"ip\": \"127.0.0.1\""), "{config}");
-        assert!(config.contains("\"slotCount\": 1,"), "{config}");
-        assert!(!config.contains("0.0.0.0"), "{config}");
+        // The messages quote the bind lines alone: the rendered config also
+        // carries the generated passwords, which a failure must not print.
+        let bind: Vec<&str> = config
+            .lines()
+            .filter(|line| line.contains("\"ip\"") || line.contains("\"slotCount\""))
+            .collect();
+        assert!(config.contains("\"ip\": \"127.0.0.1\""), "{bind:?}");
+        assert!(config.contains("\"slotCount\": 1,"), "{bind:?}");
+        assert!(!config.contains("0.0.0.0"), "{bind:?}");
     }
 
     #[test]
