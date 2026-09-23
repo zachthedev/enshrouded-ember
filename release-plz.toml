@@ -1,9 +1,11 @@
 # release-plz holds every version and every changelog in this workspace, and
-# nobody edits either by hand. The release decision is content-based: a commit
-# that changes a crate's packaged files releases that crate, whatever its type.
-# The type sets the changelog section and the bump size alone, and a `feat`
-# below 1.0.0 bumps the patch. Each crate keeps its own CHANGELOG.md beside its
-# Cargo.toml, which is release-plz's default, so no root changelog exists.
+# nobody edits either by hand. A release needs a user-facing change: a feat,
+# fix, perf or revert subject, or a break of any type, in a crate's packaged
+# files. The workspace shares one version, so the released crates move
+# together, as the version_group below says. The type sets the changelog
+# section and the bump size, and a `feat` below 1.0.0 bumps the patch. Each
+# crate keeps its own CHANGELOG.md beside its Cargo.toml, which is
+# release-plz's default, so no root changelog exists.
 # Tags follow the default `<crate>-v<version>`.
 
 [workspace]
@@ -18,6 +20,15 @@ git_release_enable = false
 # Only the merge of a release pull request releases. Every other push to main
 # runs `release` and finds nothing to do.
 release_always = false
+# A crate releases only on a user-facing change: a feat, fix, perf or revert
+# subject, or a breaking change of any type. The squash merge lands one
+# subject per pull request, so this reads the subject that lands. A crate
+# whose local dependency released still follows it, because release-plz
+# bumps a dependent outside this check.
+release_commits = '^(feat|fix|perf|revert)(\([^)]*\))?!?:|^[a-z]+(\([^)]*\))?!:|(?m:^BREAKING[ -]CHANGE:)'
+# GitHub's generated notes follow the changelog on each release, listing
+# every merged pull request, dev-side ones included.
+git_release_generate_notes = true
 # `cargo publish` compiles nothing. Verifying would run every build script and
 # proc macro in the tree inside the job that holds the crates.io token and the
 # releaser app's key, and the gate on the release pull request already built
@@ -62,8 +73,67 @@ pr_body = """
 Managed by zachthedev-releaser.
 """
 
+[changelog]
+# A crate's changelog carries what its users see, under the section names
+# release-please uses in every other repository. The comment in each group
+# fixes the section order, and the body strips it.
+protect_breaking_commits = true
+body = """
+## [{{ version }}]{%- if release_link -%}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+
+{% for commit in commits %}
+{%- if commit.scope -%}
+- *({{commit.scope}})* {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message }}{%- if commit.links %} ({% for link in commit.links %}[{{link.text}}]({{link.href}}) {% endfor -%}){% endif %}
+{% else -%}
+- {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message }}
+{% endif -%}
+{% endfor -%}
+{% endfor %}"""
+commit_parsers = [
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
+    # release-plz writes these when a crate moves only because a dependency did.
+    { message = "^chore: update(d the following local packages:| Cargo\\.(toml|lock) dependencies)", group = "<!-- 1 -->Bug Fixes" },
+    { message = "^perf", group = "<!-- 2 -->Performance" },
+    { message = "^revert", group = "<!-- 3 -->Reverts" },
+    # Every other type is skipped. protect_breaking_commits keeps a breaking one,
+    # and it lands under this group.
+    { message = ".*", group = "<!-- 4 -->Breaking Changes", skip = true },
+]
+
+# The released crates share the workspace's one version, so they are one
+# version_group: release_commits then holds back all of them or none, rather
+# than one whose version moves anyway.
+[[package]]
+name = "ember-platform"
+version_group = "ember"
+
+[[package]]
+name = "ember-sigs"
+version_group = "ember"
+
+[[package]]
+name = "ember-kfc"
+version_group = "ember"
+
+[[package]]
+name = "ember-holistic"
+version_group = "ember"
+
+[[package]]
+name = "ember-enshrouded"
+version_group = "ember"
+
+[[package]]
+name = "ember-sdk"
+version_group = "ember"
+
+# The one crate that ships a built artifact takes a GitHub release.
 [[package]]
 name = "ember-loader"
+version_group = "ember"
 git_release_enable = true
 
 # Neither leaves the repository, so neither takes a version of its own.
