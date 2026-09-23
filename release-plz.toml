@@ -27,6 +27,10 @@ publish_no_verify = true
 # so the squash merge's. cd.yml runs the release job only on a push whose
 # message starts `chore: release`, so every branch below keeps that prefix.
 pr_name = "chore: release{% if package and version %} {{ package }} v{{ version }}{% elif version %} v{{ version }}{% endif %}"
+# The open release pull request carries `autorelease: pending`, and cd.yml
+# moves it to `autorelease: tagged` once its release is created, so a label
+# says where each release pull request stands.
+pr_labels = ["autorelease: pending"]
 # The pull request names the app that opened it, not the tool.
 pr_body = """
 {% set changes %}

@@ -118,6 +118,29 @@ jobs:
           version: 0.3.168
         env:
           GITHUB_TOKEN: ${{ steps.token.outputs.token }}
+      # release-plz labels the release pull request `autorelease: pending` and
+      # has no key for the release that follows, so these move the merged pull
+      # request to `autorelease: tagged` once a release exists. The label write
+      # takes a token of its own, so release-plz never holds it, and a failure
+      # here leaves the release, which has already happened, to go on.
+      - id: label-token
+        if: steps.release.outputs.releases_created == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASER_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASER_PRIVATE_KEY }}
+          permission-pull-requests: write
+      - if: steps.label-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.label-token.outputs.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          pr=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/pulls" --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --remove-label "autorelease: pending" --add-label "autorelease: tagged"
+          fi
       # The publish job below flips ember-loader's draft, the one crate with a
       # GitHub release. A run that did not release it hands on nothing.
       - id: loader
