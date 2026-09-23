@@ -13,6 +13,21 @@
       "PowerShell(git show:*)",
       "PowerShell(git branch:*)"
     ],
-    "deny": ["Edit(//**/SteamLibrary/**)", "Edit(//**/steamapps/common/**)"]
+    "deny": [
+      "Edit(//**/SteamLibrary/**)",
+      "Edit(//**/steamapps/common/**)",
+      "Bash(git diff --output*)",
+      "Bash(git diff *--output*)",
+      "Bash(git log --output*)",
+      "Bash(git log *--output*)",
+      "Bash(git show --output*)",
+      "Bash(git show *--output*)",
+      "PowerShell(git diff --output*)",
+      "PowerShell(git diff *--output*)",
+      "PowerShell(git log --output*)",
+      "PowerShell(git log *--output*)",
+      "PowerShell(git show --output*)",
+      "PowerShell(git show *--output*)"
+    ]
   }
 }
