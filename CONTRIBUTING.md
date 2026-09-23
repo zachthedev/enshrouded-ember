@@ -12,9 +12,12 @@ bun install
 the gate. [lefthook](https://lefthook.dev) installs them into `.git/hooks` when
 `bun install` runs the `prepare` script. Each hook resolves its tool through
 `bunx --no-install`, so a tool that is not installed fails the commit or the
-push rather than letting it through. If `git config core.hooksPath` prints a
-path, unset it first: git ignores `.git/hooks` while that setting names another
-directory.
+push rather than letting it through. The hooks themselves need `node_modules`:
+in a fresh clone before `bun install`, or once `node_modules` is gone, no hook
+runs and every commit and push goes through unchecked. Continuous integration's
+`commits` job and gate are the control that holds either way. If
+`git config core.hooksPath` prints a path, unset it first: git ignores
+`.git/hooks` while that setting names another directory.
 
 [docs/dev.md#prerequisites](docs/dev.md#prerequisites) lists what to install
 and the file that pins each version.
@@ -220,6 +223,12 @@ tag. Only the releaser app can create a tag.
 
 ## What never happens
 
+- Nobody hand-edits a version in a `Cargo.toml` or a crate's `CHANGELOG.md`.
+  release-plz writes both from the commits, as [Releases](#releases) says, and
+  a hand edit is overwritten or shifts the next version it computes.
+- No commit message leaves the convention [Commit messages](#commit-messages)
+  sets. release-plz computes each version and changelog entry from the
+  messages, so a message outside it becomes a wrong entry in a release.
 - No path inside a Steam library is ever written to, launched, or injected into.
   A dedicated server for development is fetched separately into `.cache`.
   `.claude/settings.json` carries two `deny` entries that refuse an agent an

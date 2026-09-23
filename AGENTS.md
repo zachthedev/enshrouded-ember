@@ -27,10 +27,10 @@ and what the gate does when a tool is missing.
   ([What never happens](CONTRIBUTING.md#what-never-happens))
 - Never commit an address without the pattern that recovers it.
   ([What never happens](CONTRIBUTING.md#what-never-happens))
-- Never hand-edit what the release flow owns.
-  ([Releases](CONTRIBUTING.md#releases))
+- Never hand-edit a version in a manifest or a crate's `CHANGELOG.md`.
+  ([What never happens](CONTRIBUTING.md#what-never-happens))
 - Never write a commit message outside the convention.
-  ([Commit messages](CONTRIBUTING.md#commit-messages))
+  ([What never happens](CONTRIBUTING.md#what-never-happens))
 
 ## Deviations
 
