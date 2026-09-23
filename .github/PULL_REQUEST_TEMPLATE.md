@@ -4,7 +4,7 @@
 
 ## The gate
 
-Paste the summary block from `cargo xtask check`.
+Paste the last line the gate prints. `CONTRIBUTING.md` names the command.
 
 ```text
 
@@ -18,6 +18,9 @@ Paste the summary block from `cargo xtask check`.
 
 ## Every change
 
+- [ ] Each commit follows Conventional Commits, with a scope from `.github/commit-scopes.json` or none.
+- [ ] The documentation says what a user sees, where this changes it.
+- [ ] A deviation from the handbook is recorded at its drift site.
 - [ ] Nothing recovered from a Keen binary is in the diff. The extractors are
       committed and what they produce is not.
 

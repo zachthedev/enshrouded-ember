@@ -1,18 +1,18 @@
+# http://editorconfig.org
 root = true
 
 [*]
-charset = utf-8
-end_of_line = lf
-insert_final_newline = true
-trim_trailing_whitespace = true
 indent_style = space
-indent_size = 4
-
-# The files prettier owns here, its own configuration file included. Prettier
-# reads this file for the options .prettierrc leaves unset, and a file outside
-# this section takes the indent width the [*] section sets.
-[{*.{md,json,yml,yaml,js,mjs,cjs,ts},.prettierrc}]
 indent_size = 2
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# Four spaces where the formatter or the files already use them: Rust
+# (rustfmt), TOML (taplo) and Java.
+[*.{rs,toml,java}]
+indent_size = 4
 
 # A markdown line break is two trailing spaces.
 [*.md]

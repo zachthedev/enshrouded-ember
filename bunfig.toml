@@ -1,17 +1,9 @@
-# Bun's install gate for this repository.
-#
-# A version published minutes ago is the shape a compromised package arrives
-# in, and most are pulled within hours. Three days is the window this project
-# refuses to install inside.
-#
-# It costs continuous integration nothing, because the workflows run
-# `bun install --frozen-lockfile`, which replays the lockfile and resolves
-# nothing. What it covers is a human running `bun add` or `bun install` after
-# editing package.json, on any machine. A user-level bunfig governs one laptop;
-# this one travels with the clone.
-#
-# Renovate's lock file maintenance runs `bun install` in a container with no
-# user-level bunfig, so this file is the only gate that run sees.
-
+# Bun waits three days before resolving a newly published version, the window
+# in which a malicious release is usually pulled. The maintainer's own
+# ~/.bunfig.toml carries the same value and stays outside the repository. This
+# copy exists because Renovate's weekly lock file maintenance runs `bun install`
+# inside a container that has no user-level config, and Renovate applies no
+# cooldown to that update type. Without this file a transitive dependency
+# published minutes ago lands in bun.lock there.
 [install]
-minimumReleaseAge = 259200
+minimumReleaseAge = 259200 # 3 days

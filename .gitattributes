@@ -1,6 +1,5 @@
-# Line endings are the same on every machine, whatever a contributor's
-# core.autocrlf says. The git hooks run under sh, which rejects a carriage
-# return at the end of a line.
+# Line endings are the same on every machine, whatever a contributor's core.autocrlf says. The gate's
+# format check requires LF, so a CRLF checkout fails it on every file.
 * text=auto eol=lf
 
 # Recovered artifacts, if one is ever forced in by hand.
