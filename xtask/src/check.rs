@@ -15,7 +15,7 @@
 //! argument is its own subcommand name, so a child that inherits it scans
 //! nothing and exits zero.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 use anyhow::{Context, Result};
@@ -312,13 +312,13 @@ pub fn run(ui: &Ui) -> Result<bool> {
 /// The command a row runs, or the sentence its row carries when it cannot.
 fn prepare(root: &Path, step: &Step) -> Result<Command, String> {
     let program = match step.program {
-        Program::Mise(tool) => mise_which(root, tool)
-            .ok_or_else(|| format!("mise resolves no {tool}: {}", step.install))?,
+        Program::Mise(tool) => crate::spawn::mise_which(root, tool)
+            .map_err(|reason| format!("{reason}: {}", step.install))?,
         Program::Path(name) => {
-            which::which(name).map_err(|_| format!("{name} is not installed: {}", step.install))?
+            crate::spawn::resolve(name).map_err(|reason| format!("{reason}: {}", step.install))?
         }
     };
-    let mut command = Command::new(program);
+    let mut command = crate::spawn::command(&program)?;
     command.args(step.args).current_dir(root);
     for name in CRATE_ENV {
         command.env_remove(name);
@@ -331,8 +331,10 @@ fn prepare(root: &Path, step: &Step) -> Result<Command, String> {
             // mise resolved goes on the command line, and a workflow with one
             // known finding has to come back with that finding before the real
             // run is trusted.
-            let analyzer = mise_which(root, "shellcheck").ok_or_else(|| {
-                format!("mise resolves no shellcheck, and actionlint would skip the analysis in silence: {MISE_INSTALL}")
+            let analyzer = crate::spawn::mise_which(root, "shellcheck").map_err(|reason| {
+                format!(
+                    "{reason}, and actionlint would skip the analysis in silence: {MISE_INSTALL}"
+                )
             })?;
             let flag = format!("-shellcheck={}", analyzer.display());
             let heard = canary(command.get_program(), step.args, &flag)?;
@@ -368,7 +370,7 @@ fn canary(program: &std::ffi::OsStr, args: &[&str], analyzer_flag: &str) -> Resu
     let workflow = dir.path().join("canary.yml");
     std::fs::write(&workflow, CANARY)
         .map_err(|err| format!("writing the canary workflow: {err}"))?;
-    let output = Command::new(program)
+    let output = crate::spawn::command(Path::new(program))?
         .args(args)
         .arg(analyzer_flag)
         .arg(&workflow)
@@ -389,36 +391,14 @@ fn canary_passed(heard: &str) -> bool {
 
 /// The token `gh` holds for github.com, or `None` when nobody is logged in.
 fn gh_token() -> Option<String> {
-    let output = Command::new("gh").args(["auth", "token"]).output().ok()?;
-    let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    (output.status.success() && !token.is_empty()).then_some(token)
-}
-
-/// The path mise installs for `tool`, or `None` when mise resolves none.
-///
-/// `mise which` exits non-zero for a tool it does not install, and prints one
-/// path on the first line when it does.
-fn mise_which(root: &Path, tool: &str) -> Option<PathBuf> {
-    // mise.toml alone: no .tool-versions, no environment file and no
-    // per-platform file, so a committed mise.local.toml, mise.<env>.toml or
-    // .tool-versions cannot choose the binary. On Windows a name set here
-    // replaces any spelling of it this process inherited, because the child
-    // environment matches names without case.
-    let output = Command::new("mise")
-        .env("MISE_OVERRIDE_CONFIG_FILENAMES", crate::pins::PINS)
-        .env("MISE_OVERRIDE_TOOL_VERSIONS_FILENAMES", "none")
-        .env("MISE_ENV", "")
-        .env("MISE_AUTO_ENV", "false")
-        .args(["which", tool])
-        .current_dir(root)
+    let gh = crate::spawn::resolve("gh").ok()?;
+    let output = crate::spawn::command(&gh)
+        .ok()?
+        .args(["auth", "token"])
         .output()
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let printed = String::from_utf8_lossy(&output.stdout).into_owned();
-    let line = printed.lines().next()?.trim();
-    (!line.is_empty()).then(|| PathBuf::from(line))
+    let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (output.status.success() && !token.is_empty()).then_some(token)
 }
 
 /// What one row did.

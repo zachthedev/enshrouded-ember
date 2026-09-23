@@ -29,6 +29,7 @@ mod schema;
 )]
 mod server;
 mod sig;
+mod spawn;
 mod steam;
 #[cfg(test)]
 mod testutil;
@@ -106,7 +107,9 @@ fn members(metadata: &str) -> anyhow::Result<Vec<(String, String)>> {
 /// `--no-deps` keeps the read to the workspace, so no dependency is resolved
 /// and no network is reached.
 fn workspace_metadata() -> anyhow::Result<String> {
-    let output = std::process::Command::new("cargo")
+    let cargo = spawn::resolve("cargo").map_err(anyhow::Error::msg)?;
+    let output = spawn::command(&cargo)
+        .map_err(anyhow::Error::msg)?
         .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
         .current_dir(workspace_root())
         .output()

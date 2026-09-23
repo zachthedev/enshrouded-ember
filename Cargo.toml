@@ -46,6 +46,9 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 which = "8.0.6"
 windows-link = "0.100.0"
+# One Win32 call in xtask: the known folders a mise child is given in place of
+# the inherited ones.
+windows-sys = "0.61.2"
 # Decoding only, so the dictionary builder, the legacy frame formats and the
 # array helpers stay out of the C build.
 zstd = { version = "0.14.0", default-features = false }

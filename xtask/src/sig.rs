@@ -329,7 +329,8 @@ fn read(
     side: &str,
     moved: u32,
 ) -> Result<bool> {
-    let bun = which::which("bun")
+    let bun = crate::spawn::resolve("bun")
+        .map_err(anyhow::Error::msg)
         .context("bun is not installed, and `sig read` reads the result database with it")?;
     let pair = root.bindiff_pair_dir(old, new)?;
     let result = result_path(&pair, old, new);
@@ -362,7 +363,8 @@ fn read(
     }
     args.extend(address.iter().cloned());
 
-    let status = Command::new(&bun)
+    let status = crate::spawn::command(&bun)
+        .map_err(anyhow::Error::msg)?
         .args(&args)
         .current_dir(&workspace)
         .status()

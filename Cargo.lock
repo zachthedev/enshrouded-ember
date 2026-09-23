@@ -947,6 +947,7 @@ dependencies = [
  "toml",
  "which",
  "windows-link 0.100.0",
+ "windows-sys",
 ]
 
 [[package]]
