@@ -201,9 +201,23 @@ pub(crate) fn pin_problems(root: &Path) -> Vec<String> {
     let read = |path: &str| {
         std::fs::read_to_string(root.join(path)).map_err(|err| format!("reading {path}: {err}"))
     };
-    match (read(crate::pins::PINS), read(crate::pins::LOCK)) {
-        (Ok(pins), Ok(lock)) => crate::pins::problems(&pins, &lock),
-        (first, second) => [first, second]
+    let (main, semver) = (crate::pins::MAIN, crate::pins::SEMVER);
+    match (
+        read(main.pins),
+        read(main.lock),
+        read(semver.pins),
+        read(semver.lock),
+    ) {
+        (Ok(pins), Ok(lock), Ok(semver_pins), Ok(semver_lock)) => {
+            let mut found = crate::pins::problems(&pins, &lock);
+            found.extend(crate::pins::semver_problems(
+                &pins,
+                &semver_pins,
+                &semver_lock,
+            ));
+            found
+        }
+        (first, second, third, fourth) => [first, second, third, fourth]
             .into_iter()
             .filter_map(Result::err)
             .collect(),
@@ -214,7 +228,7 @@ pub(crate) fn pin_problems(root: &Path) -> Vec<String> {
 pub fn rows(ui: &Ui) {
     let mut table = vec![
         Row::new(Mark::Note, PINS_STEP, "")
-            .note("mise.toml and mise.lock against the rules in pins.rs, before any tool runs"),
+            .note("both mise pin files and their lockfiles against pins.rs, before any tool runs"),
     ];
     table.extend(
         STEPS
@@ -243,15 +257,17 @@ pub fn run(ui: &Ui) -> Result<bool> {
         for problem in &problems {
             ui.line(problem);
         }
-        // The relock is the remedy only when a problem is about the lockfile; an
-        // unreadable or malformed mise.toml needs an edit, not a relock.
-        let remedy = if problems
+        // The relock is the remedy only when a problem is about a lockfile; an
+        // unreadable or malformed pin file needs an edit, not a relock.
+        let relocks: Vec<&str> = crate::pins::PAIRS
             .iter()
-            .any(|problem| problem.contains(crate::pins::LOCK))
-        {
-            format!("rewrite the lockfile with: {}", crate::pins::RELOCK)
-        } else {
+            .filter(|pair| problems.iter().any(|problem| problem.contains(pair.lock)))
+            .map(|pair| pair.relock)
+            .collect();
+        let remedy = if relocks.is_empty() {
             format!("fix {}", crate::pins::PINS)
+        } else {
+            format!("rewrite the lockfile with: {}", relocks.join(", then "))
         };
         rows.push(Row::new(Mark::Fail, PINS_STEP, "did not pass").note(remedy));
         return Ok(report(ui, &rows, Some(PINS_STEP), None));

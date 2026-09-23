@@ -1,12 +1,13 @@
-//! The files that pin every tool the gate runs, and the rules they meet.
+//! The files that pin every tool mise installs here, and the rules they meet.
 //!
 //! `mise.toml` holds one version per tool and `mise.lock` holds a checksum, a
-//! url and a backend per platform for each of them. These rules run before the
-//! gate runs any tool, because a lockfile entry decides what an install
-//! downloads: mise's locked mode fetches the url the entry records rather than
-//! asking the backend, and it compares the checksum the entry records. A rule
-//! that runs after the install reports a finding about a binary that already
-//! executed.
+//! url and a backend per platform for each of them. `mise.semver.toml` and
+//! `mise.semver.lock` are the same pair for cargo-semver-checks alone, which
+//! mise loads only where `MISE_ENV=semver`. These rules run before the gate
+//! runs any tool, because a lockfile entry decides what an install downloads:
+//! mise's locked mode fetches the url the entry records rather than asking the
+//! backend, and it compares the checksum the entry records. A rule that runs
+//! after the install reports a finding about a binary that already executed.
 //!
 //! A checksum rule alone holds the lockfile to itself. The url, the backend and
 //! the checksum all sit in the generated file, so an edit that moves all three
@@ -27,6 +28,41 @@ pub const LOCK: &str = "mise.lock";
 /// The command that rewrites [`LOCK`] after an edit to [`PINS`], for the
 /// platforms `lockfile_platforms` names there.
 pub const RELOCK: &str = "mise lock";
+
+/// A pin file, the lockfile mise writes for it, and the command that rewrites
+/// that lockfile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pair {
+    /// The file pinning one version per tool.
+    pub pins: &'static str,
+    /// The file holding a checksum, a url and a backend per platform for each.
+    pub lock: &'static str,
+    /// The command that rewrites `lock` after an edit to `pins`.
+    pub relock: &'static str,
+}
+
+/// [`PINS`] and [`LOCK`], which every job loads.
+pub const MAIN: Pair = Pair {
+    pins: PINS,
+    lock: LOCK,
+    relock: RELOCK,
+};
+
+/// The pair holding cargo-semver-checks, which mise loads beside [`MAIN`] only
+/// where `MISE_ENV=semver`.
+///
+/// A mise shim installs any configured tool the first time another shim's
+/// process looks for it, so a job that must never run the semver check keeps
+/// it out of every configuration it loads. Its platforms and its locked mode
+/// come from [`PINS`].
+pub const SEMVER: Pair = Pair {
+    pins: "mise.semver.toml",
+    lock: "mise.semver.lock",
+    relock: "MISE_ENV=semver mise lock",
+};
+
+/// Every pair, in the order the rules read them.
+pub const PAIRS: &[Pair] = &[MAIN, SEMVER];
 
 /// The host every release artifact [`LOCK`] records is served from.
 pub const RELEASE_HOST: &str = "github.com";
@@ -86,6 +122,8 @@ pub struct Tool {
     /// needing one. That line lives in the generated file, so the expected value
     /// is held here and a line deleted there contradicts this table.
     pub provenance: Option<&'static str>,
+    /// The pair whose pin file holds this tool, and no other.
+    pub pair: Pair,
 }
 
 impl Tool {
@@ -133,7 +171,8 @@ impl Tool {
     }
 }
 
-/// Every tool the gate runs, with the release each one's artifacts come from.
+/// Every tool mise installs here, with the release each one's artifacts come
+/// from and the pair that pins it.
 ///
 /// The owner and the repository are held here rather than read from [`LOCK`],
 /// and that is what gives the rules a second document to hold the first to.
@@ -155,6 +194,7 @@ pub const TOOLS: &[Tool] = &[
         repository: "actionlint",
         tag_prefix: "v",
         provenance: Some(ATTESTED),
+        pair: MAIN,
     },
     Tool {
         key: "cargo-deny",
@@ -164,6 +204,7 @@ pub const TOOLS: &[Tool] = &[
         repository: "cargo-deny",
         tag_prefix: "",
         provenance: None,
+        pair: MAIN,
     },
     Tool {
         key: "github:bnjbvr/cargo-machete",
@@ -173,6 +214,7 @@ pub const TOOLS: &[Tool] = &[
         repository: "cargo-machete",
         tag_prefix: "v",
         provenance: None,
+        pair: MAIN,
     },
     Tool {
         key: "github:nextest-rs/nextest",
@@ -182,6 +224,27 @@ pub const TOOLS: &[Tool] = &[
         repository: "nextest",
         tag_prefix: "cargo-nextest-",
         provenance: Some(ATTESTED),
+        pair: MAIN,
+    },
+    Tool {
+        key: "github:obi1kenobi/cargo-semver-checks",
+        binary: "cargo-semver-checks",
+        backend: Backend::Github,
+        owner: "obi1kenobi",
+        repository: "cargo-semver-checks",
+        tag_prefix: "v",
+        provenance: None,
+        pair: SEMVER,
+    },
+    Tool {
+        key: "release-plz",
+        binary: "release-plz",
+        backend: Backend::Aqua,
+        owner: "release-plz",
+        repository: "release-plz",
+        tag_prefix: "release-plz-v",
+        provenance: None,
+        pair: MAIN,
     },
     Tool {
         key: "shellcheck",
@@ -191,6 +254,7 @@ pub const TOOLS: &[Tool] = &[
         repository: "shellcheck",
         tag_prefix: "v",
         provenance: None,
+        pair: MAIN,
     },
     Tool {
         key: "taplo",
@@ -200,6 +264,7 @@ pub const TOOLS: &[Tool] = &[
         repository: "taplo",
         tag_prefix: "",
         provenance: None,
+        pair: MAIN,
     },
     Tool {
         key: "zizmor",
@@ -209,6 +274,7 @@ pub const TOOLS: &[Tool] = &[
         repository: "zizmor",
         tag_prefix: "v",
         provenance: Some(ATTESTED),
+        pair: MAIN,
     },
 ];
 
@@ -345,18 +411,19 @@ pub fn pinned_version(text: &str, name: &str) -> Option<String> {
 ///
 /// Returns the sentence a result row carries when the text is not TOML or
 /// holds no `[tools]` table.
-pub fn pinned_tools(text: &str) -> Result<Vec<(String, String)>, String> {
+pub fn pinned_tools(pair: Pair, text: &str) -> Result<Vec<(String, String)>, String> {
+    let pins = pair.pins;
     let document: toml::Value =
-        toml::from_str(text).map_err(|err| format!("{PINS} is not TOML: {err}"))?;
+        toml::from_str(text).map_err(|err| format!("{pins} is not TOML: {err}"))?;
     let tools = document
         .get("tools")
         .and_then(toml::Value::as_table)
-        .ok_or_else(|| format!("{PINS} holds no tools table"))?;
+        .ok_or_else(|| format!("{pins} holds no tools table"))?;
     tools
         .keys()
         .map(|name| {
             let version = pinned_version(text, name)
-                .ok_or_else(|| format!("{PINS} pins no version for {name}"))?;
+                .ok_or_else(|| format!("{pins} pins no version for {name}"))?;
             Ok((name.clone(), version))
         })
         .collect()
@@ -415,8 +482,8 @@ pub fn binary_for(name: &str) -> Result<String, String> {
 /// # Errors
 ///
 /// Returns the first sentence [`binary_for`] or [`pinned_tools`] produces.
-pub fn pinned_binaries(text: &str) -> Result<BTreeSet<String>, String> {
-    pinned_tools(text)?
+pub fn pinned_binaries(pair: Pair, text: &str) -> Result<BTreeSet<String>, String> {
+    pinned_tools(pair, text)?
         .into_iter()
         .map(|(name, _)| binary_for(&name))
         .collect()
@@ -434,21 +501,22 @@ pub fn pinned_binaries(text: &str) -> Result<BTreeSet<String>, String> {
 ///
 /// Returns the sentence a result row carries when the text is not TOML or does
 /// not hold the shape mise writes.
-pub fn locked_platforms(text: &str) -> Result<Vec<LockedEntry>, String> {
+pub fn locked_platforms(pair: Pair, text: &str) -> Result<Vec<LockedEntry>, String> {
+    let lock = pair.lock;
     let document: toml::Value =
-        toml::from_str(text).map_err(|err| format!("{LOCK} is not TOML: {err}"))?;
+        toml::from_str(text).map_err(|err| format!("{lock} is not TOML: {err}"))?;
     let tools = document
         .get("tools")
         .and_then(toml::Value::as_table)
-        .ok_or_else(|| format!("{LOCK} holds no tools table"))?;
+        .ok_or_else(|| format!("{lock} holds no tools table"))?;
     let mut found = Vec::new();
     for (name, entries) in tools {
         let entries = entries
             .as_array()
-            .ok_or_else(|| format!("{LOCK} holds {name} as something other than entries"))?;
+            .ok_or_else(|| format!("{lock} holds {name} as something other than entries"))?;
         for entry in entries {
             let table = entry.as_table().ok_or_else(|| {
-                format!("{LOCK} holds a {name} entry as something other than a table")
+                format!("{lock} holds a {name} entry as something other than a table")
             })?;
             let text_at = |key: &str| {
                 table
@@ -494,18 +562,19 @@ pub fn locked_platforms(text: &str) -> Result<Vec<LockedEntry>, String> {
 ///
 /// Returns the sentence a result row carries when the text is not TOML or does
 /// not hold the shape mise writes.
-pub fn locked_tools(text: &str) -> Result<Vec<LockedTool>, String> {
+pub fn locked_tools(pair: Pair, text: &str) -> Result<Vec<LockedTool>, String> {
+    let lock = pair.lock;
     let document: toml::Value =
-        toml::from_str(text).map_err(|err| format!("{LOCK} is not TOML: {err}"))?;
+        toml::from_str(text).map_err(|err| format!("{lock} is not TOML: {err}"))?;
     let tools = document
         .get("tools")
         .and_then(toml::Value::as_table)
-        .ok_or_else(|| format!("{LOCK} holds no tools table"))?;
+        .ok_or_else(|| format!("{lock} holds no tools table"))?;
     let mut found = Vec::new();
     for (name, entries) in tools {
         let entries = entries
             .as_array()
-            .ok_or_else(|| format!("{LOCK} holds {name} as something other than entries"))?;
+            .ok_or_else(|| format!("{lock} holds {name} as something other than entries"))?;
         let platformless = entries
             .iter()
             .filter(|entry| {
@@ -535,6 +604,7 @@ pub fn locked_tools(text: &str) -> Result<Vec<LockedTool>, String> {
 /// starts with it. The tag is split off at the last slash, because a tag is free
 /// to contain one.
 fn url_problems(
+    lock: &str,
     label: &str,
     url: &str,
     expected: &str,
@@ -569,7 +639,7 @@ fn url_problems(
             Some((found_tag, asset)) => {
                 if found_tag != tag {
                     found.push(format!(
-                        "{label} records a url tagged {found_tag}, and {LOCK} records the release {tag}"
+                        "{label} records a url tagged {found_tag}, and {lock} records the release {tag}"
                     ));
                 }
                 if asset.is_empty() {
@@ -585,12 +655,13 @@ fn url_problems(
 }
 
 /// Every way one platform entry falls short, as one sentence each.
-fn entry_problems(tool: &Tool, version: &str, entry: &LockedEntry) -> Vec<String> {
+fn entry_problems(pair: Pair, tool: &Tool, version: &str, entry: &LockedEntry) -> Vec<String> {
+    let (pins, lock) = (pair.pins, pair.lock);
     let label = format!("{} on {}", tool.key, entry.platform);
     let mut found = Vec::new();
 
     match &entry.checksum {
-        None => found.push(format!("{label} carries no checksum in {LOCK}")),
+        None => found.push(format!("{label} carries no checksum in {lock}")),
         Some(checksum) => {
             let digits = checksum.strip_prefix("sha256:").unwrap_or_default();
             let sound = digits.len() == SHA256_DIGITS
@@ -604,7 +675,7 @@ fn entry_problems(tool: &Tool, version: &str, entry: &LockedEntry) -> Vec<String
     }
     if entry.version != version {
         found.push(format!(
-            "{PINS} pins {} {version} and {LOCK} records {}",
+            "{pins} pins {} {version} and {lock} records {}",
             tool.key, entry.version
         ));
     }
@@ -612,7 +683,7 @@ fn entry_problems(tool: &Tool, version: &str, entry: &LockedEntry) -> Vec<String
     let coordinate = tool.coordinate();
     if entry.backend != coordinate {
         found.push(format!(
-            "{label} installs through {}, and {PINS} pins {coordinate}",
+            "{label} installs through {}, and {pins} pins {coordinate}",
             if entry.backend.is_empty() {
                 "no backend"
             } else {
@@ -622,8 +693,9 @@ fn entry_problems(tool: &Tool, version: &str, entry: &LockedEntry) -> Vec<String
     }
 
     match &entry.url {
-        None => found.push(format!("{label} records no url in {LOCK}")),
+        None => found.push(format!("{label} records no url in {lock}")),
         Some(url) => found.extend(url_problems(
+            lock,
             &label,
             url,
             RELEASE_HOST,
@@ -636,8 +708,9 @@ fn entry_problems(tool: &Tool, version: &str, entry: &LockedEntry) -> Vec<String
     // and that is the quiet way to drop the reference an attestation lookup
     // reads.
     match &entry.url_api {
-        None => found.push(format!("{label} records no url_api in {LOCK}")),
+        None => found.push(format!("{label} records no url_api in {lock}")),
         Some(url_api) => found.extend(url_problems(
+            lock,
             &format!("{label} api"),
             url_api,
             API_HOST,
@@ -673,8 +746,9 @@ fn entry_problems(tool: &Tool, version: &str, entry: &LockedEntry) -> Vec<String
 /// two answers is refused rather than judged. The count comes from the array
 /// itself, because an entry with no platform block produces no row for the
 /// other rules to see.
-fn array_problems(lock: &str) -> Vec<String> {
-    let counted = match locked_tools(lock) {
+fn array_problems(pair: Pair, text: &str) -> Vec<String> {
+    let lock = pair.lock;
+    let counted = match locked_tools(pair, text) {
         Ok(counted) => counted,
         Err(problem) => return vec![problem],
     };
@@ -682,13 +756,13 @@ fn array_problems(lock: &str) -> Vec<String> {
     for tool in counted {
         if tool.entries > 1 {
             found.push(format!(
-                "{LOCK} records {} entries for {}, so which one an install takes is undecided",
+                "{lock} records {} entries for {}, so which one an install takes is undecided",
                 tool.entries, tool.tool
             ));
         }
         if tool.platformless > 0 {
             found.push(format!(
-                "{LOCK} records an entry for {} with no platform block, which no rule here reads",
+                "{lock} records an entry for {} with no platform block, which no rule here reads",
                 tool.tool
             ));
         }
@@ -696,24 +770,40 @@ fn array_problems(lock: &str) -> Vec<String> {
     found
 }
 
-/// Every way the pin files fall short, as one sentence each.
+/// Every way the main pin files fall short, as one sentence each.
 ///
 /// The two texts are passed in rather than read here, so the rules run the
 /// same way against the repository and against a case written in a test.
 #[must_use]
 pub fn problems(pins: &str, lock: &str) -> Vec<String> {
+    match lockfile_platforms(pins) {
+        Ok(platforms) => pair_problems(MAIN, &platforms, pins, lock),
+        Err(problem) => vec![problem],
+    }
+}
+
+/// Every way the semver pin files fall short, as one sentence each.
+///
+/// The platforms come from `main_pins`, which mise loads beside this pair.
+#[must_use]
+pub fn semver_problems(main_pins: &str, pins: &str, lock: &str) -> Vec<String> {
+    match lockfile_platforms(main_pins) {
+        Ok(platforms) => pair_problems(SEMVER, &platforms, pins, lock),
+        Err(problem) => vec![problem],
+    }
+}
+
+/// Every way one pair falls short, for the platforms mise locks.
+fn pair_problems(pair: Pair, platforms: &[String], pins: &str, lock: &str) -> Vec<String> {
+    let (pin_file, lock_file) = (pair.pins, pair.lock);
     let mut found: Vec<String> = Vec::new();
 
-    let platforms = match lockfile_platforms(pins) {
-        Ok(platforms) => platforms,
-        Err(problem) => return vec![problem],
-    };
-    let tools = match pinned_tools(pins) {
+    let tools = match pinned_tools(pair, pins) {
         Ok(tools) => tools,
         Err(problem) => return vec![problem],
     };
     if tools.is_empty() {
-        return vec![format!("{PINS} pins nothing")];
+        return vec![format!("{pin_file} pins nothing")];
     }
     for (name, version) in &tools {
         let exact = version.split('.').count() == 3
@@ -722,16 +812,27 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
                 .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
         if !exact {
             found.push(format!(
-                "{PINS} pins {name} at {version}, which is not one exact release"
+                "{pin_file} pins {name} at {version}, which is not one exact release"
+            ));
+        }
+        // A tool in the other pair's file loads where its pair does not: the
+        // semver check in a job that holds a credential, which is what the
+        // separate file exists to prevent.
+        if let Some(tool) = tool_for(name)
+            && tool.pair != pair
+        {
+            found.push(format!(
+                "{pin_file} pins {name}, which belongs in {}",
+                tool.pair.pins
             ));
         }
     }
-    if let Err(problem) = pinned_binaries(pins) {
+    if let Err(problem) = pinned_binaries(pair, pins) {
         found.push(problem);
     }
     let pinned: BTreeSet<&str> = tools.iter().map(|(name, _)| name.as_str()).collect();
 
-    let locked_entries = match locked_platforms(lock) {
+    let locked_entries = match locked_platforms(pair, lock) {
         Ok(entries) => entries,
         Err(problem) => {
             found.push(problem);
@@ -739,7 +840,7 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
         }
     };
 
-    found.extend(array_problems(lock));
+    found.extend(array_problems(pair, lock));
 
     // Every platform block is read, not only the ones the list names. A block
     // nothing reads is a url and a checksum nobody checked, and a relock writes
@@ -747,7 +848,7 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
     for entry in &locked_entries {
         if pinned.contains(entry.tool.as_str()) && !platforms.contains(&entry.platform) {
             found.push(format!(
-                "{LOCK} records a {} entry for {}, which is no platform the gate installs on",
+                "{lock_file} records a {} entry for {}, which is no platform the gate installs on",
                 entry.platform, entry.tool
             ));
         }
@@ -757,16 +858,16 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
         let Some(tool) = tool_for(name) else {
             continue;
         };
-        for platform in &platforms {
+        for platform in platforms {
             if !locked_entries
                 .iter()
                 .any(|entry| &entry.tool == name && &entry.platform == platform)
             {
-                found.push(format!("{name} records no {platform} entry in {LOCK}"));
+                found.push(format!("{name} records no {platform} entry in {lock_file}"));
             }
         }
         for entry in locked_entries.iter().filter(|entry| &entry.tool == name) {
-            found.extend(entry_problems(tool, version, entry));
+            found.extend(entry_problems(pair, tool, version, entry));
         }
     }
 
@@ -776,7 +877,9 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
         .collect::<BTreeSet<&String>>()
     {
         if !pinned.contains(name.as_str()) {
-            found.push(format!("{LOCK} locks {name}, which {PINS} no longer pins"));
+            found.push(format!(
+                "{lock_file} locks {name}, which {pin_file} no longer pins"
+            ));
         }
     }
 
@@ -787,7 +890,7 @@ pub fn problems(pins: &str, lock: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, TOOLS, absolute, lockfile_platforms, problems};
+    use super::{Backend, TOOLS, absolute, lockfile_platforms, problems, semver_problems};
     use std::collections::BTreeSet;
 
     /// A pin file every rule accepts, for the cases below to change one thing
@@ -1247,6 +1350,161 @@ mod tests {
                 tool.key
             );
         }
+    }
+
+    /// A semver pin file every rule accepts beside [`SOUND_PINS`].
+    const SOUND_SEMVER_PINS: &str =
+        "[tools]\n\"github:obi1kenobi/cargo-semver-checks\" = \"0.50.0\"\n";
+
+    /// Its lockfile, for the platforms [`SOUND_PINS`] names, shaped as mise
+    /// writes one.
+    const SOUND_SEMVER_LOCK: &str = concat!(
+        "[[tools.\"github:obi1kenobi/cargo-semver-checks\"]]\nversion = \"0.50.0\"\n",
+        "backend = \"github:obi1kenobi/cargo-semver-checks\"\n",
+        "[tools.\"github:obi1kenobi/cargo-semver-checks\".\"platforms.linux-x64\"]\n",
+        "checksum = \"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"\n",
+        "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz\"\n",
+        "url_api = \"https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498085744\"\n",
+        "[tools.\"github:obi1kenobi/cargo-semver-checks\".\"platforms.windows-x64\"]\n",
+        "checksum = \"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"\n",
+        "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-pc-windows-msvc.zip\"\n",
+        "url_api = \"https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498090877\"\n",
+    );
+
+    /// The semver pair passes beside the main one, so every refusal below
+    /// changes one thing from something that worked.
+    #[test]
+    fn the_sound_semver_pair_meets_every_rule() {
+        assert_eq!(
+            semver_problems(SOUND_PINS, SOUND_SEMVER_PINS, SOUND_SEMVER_LOCK),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Run each semver case and assert the rules said the thing it names.
+    fn semver_refuses(cases: &[(&str, String, String, String, &str)]) {
+        for (what, main_pins, pins, lock, wanted) in cases {
+            let found = semver_problems(main_pins, pins, lock);
+            assert!(
+                found.iter().any(|problem| problem.contains(wanted)),
+                "{what}: nothing said {wanted:?}, got {found:?}"
+            );
+        }
+    }
+
+    /// A tool pinned in the other pair's file is refused either way round.
+    ///
+    /// cargo-semver-checks in mise.toml is the case the separate file exists
+    /// for: every job loads mise.toml, so a job holding the releaser token could
+    /// install it and run the check.
+    #[test]
+    fn a_tool_in_the_other_pairs_file_is_refused() {
+        let semver_in_main_pins = SOUND_PINS.replace(
+            "[tools]\n",
+            "[tools]\n\"github:obi1kenobi/cargo-semver-checks\" = \"0.50.0\"\n",
+        );
+        let semver_in_main_lock = format!("{SOUND_LOCK}{SOUND_SEMVER_LOCK}");
+        let found = problems(&semver_in_main_pins, &semver_in_main_lock);
+        assert!(
+            found.iter().any(|problem| problem.contains(
+                "mise.toml pins github:obi1kenobi/cargo-semver-checks, which belongs in mise.semver.toml"
+            )),
+            "cargo-semver-checks in mise.toml: got {found:?}"
+        );
+
+        semver_refuses(&[(
+            "taplo in the semver file",
+            SOUND_PINS.to_string(),
+            format!("{SOUND_SEMVER_PINS}taplo = \"0.10.0\"\n"),
+            SOUND_SEMVER_LOCK.to_string(),
+            "mise.semver.toml pins taplo, which belongs in mise.toml",
+        )]);
+    }
+
+    /// The semver rules name the semver files and read their platforms from
+    /// mise.toml.
+    ///
+    /// Each case would pass unnoticed if the sentence named the main files: a
+    /// reader relocking mise.lock for a problem in mise.semver.lock fixes
+    /// nothing.
+    #[test]
+    fn the_semver_rules_name_the_semver_files() {
+        let main = || SOUND_PINS.to_string();
+        let pins = || SOUND_SEMVER_PINS.to_string();
+        let lock = || SOUND_SEMVER_LOCK.to_string();
+        semver_refuses(&[
+            (
+                "a checksum dropped",
+                main(),
+                pins(),
+                SOUND_SEMVER_LOCK.replace(
+                    "checksum = \"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"\n",
+                    "",
+                ),
+                "carries no checksum in mise.semver.lock",
+            ),
+            (
+                "a platform block dropped",
+                main(),
+                pins(),
+                SOUND_SEMVER_LOCK.replace(
+                    "[tools.\"github:obi1kenobi/cargo-semver-checks\".\"platforms.linux-x64\"]\n",
+                    "",
+                ),
+                "records no linux-x64 entry in mise.semver.lock",
+            ),
+            (
+                "the two files disagreeing on a version",
+                main(),
+                SOUND_SEMVER_PINS.replace("0.50.0", "0.50.1"),
+                lock(),
+                "mise.semver.toml pins github:obi1kenobi/cargo-semver-checks 0.50.1 and mise.semver.lock records 0.50.0",
+            ),
+            (
+                "the url naming another release",
+                main(),
+                pins(),
+                SOUND_SEMVER_LOCK.replace(
+                    "download/v0.50.0/cargo-semver-checks-x86_64-unknown",
+                    "download/v0.49.0/cargo-semver-checks-x86_64-unknown",
+                ),
+                "records a url tagged v0.49.0, and mise.semver.lock records the release v0.50.0",
+            ),
+            (
+                "a lockfile entry the semver file no longer names",
+                main(),
+                pins(),
+                format!("{SOUND_SEMVER_LOCK}{SOUND_LOCK}"),
+                "mise.semver.lock locks taplo, which mise.semver.toml no longer pins",
+            ),
+            (
+                "the semver file pinning nothing",
+                main(),
+                "[tools]\n".to_string(),
+                lock(),
+                "mise.semver.toml pins nothing",
+            ),
+            (
+                "a key naming no binary",
+                main(),
+                SOUND_SEMVER_PINS.replace(
+                    "github:obi1kenobi/cargo-semver-checks",
+                    "github:obi1kenobi/elsewhere",
+                ),
+                SOUND_SEMVER_LOCK.replace(
+                    "github:obi1kenobi/cargo-semver-checks",
+                    "github:obi1kenobi/elsewhere",
+                ),
+                "github:obi1kenobi/elsewhere is a key no entry names a binary and a release for",
+            ),
+            (
+                "a platform mise.toml no longer lists",
+                SOUND_PINS.replace("[\"linux-x64\", \"windows-x64\"]", "[\"linux-x64\"]"),
+                pins(),
+                lock(),
+                "mise.semver.lock records a windows-x64 entry for github:obi1kenobi/cargo-semver-checks, which is no platform the gate installs on",
+            ),
+        ]);
     }
 
     /// The platform list is read from the settings table alone, in order.

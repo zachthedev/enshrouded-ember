@@ -1,0 +1,19 @@
+# cargo-semver-checks, the one tool kept out of mise.toml. mise loads this file
+# only where MISE_ENV=semver, which cd.yml's release-update job sets and no job
+# holding a credential does.
+#
+# The file exists because a mise shim installs a configured tool the first time
+# another shim's process looks for it. With cargo-semver-checks in mise.toml,
+# running release-plz in the release-pr job would install it and run the semver
+# check beside the releaser token, and the check builds every dependency's build
+# script and proc macro. Outside every configuration that job loads, the check
+# cannot run there at all.
+#
+# mise.semver.lock holds its checksums, written by `MISE_ENV=semver mise lock`.
+# The platforms and the locked mode come from mise.toml, which mise loads beside
+# this file: its [tool_config] lock refuses a version here that
+# mise.semver.lock does not record.
+
+[tools]
+# checksum recorded at lock time
+"github:obi1kenobi/cargo-semver-checks" = "0.50.0"

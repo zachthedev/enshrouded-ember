@@ -152,7 +152,8 @@ enum Command {
         #[arg(long)]
         rows: bool,
     },
-    /// Hold mise.toml and mise.lock to their rules, which the gate does first.
+    /// Hold both mise pin files and their lockfiles to their rules, which the gate
+    /// does first.
     Pins,
     /// Fetch, seed, launch, tail and stop a dedicated server build.
     #[command(subcommand)]
