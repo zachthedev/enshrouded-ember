@@ -33,7 +33,8 @@ One command, and the only one:
 cargo xtask check
 ```
 
-It runs its rows in order and stops at the first failure. The rows, and what
+It runs its rows in order and stops at the first failure. The rows that read
+files run before the rows that build and run repository code. The rows, and what
 each one covers, are printed by the same table the gate runs:
 
 ```sh
@@ -64,7 +65,9 @@ Such a file is refused on disk, tracked or not, so a local run agrees with
 continuous integration. A personal file, such as an env file, an `.npmrc` or a
 `lefthook-local` config, is refused only when tracked, and `.gitignore` lists
 it. The rules run again before every later row, since the build and test rows
-run repository code.
+run repository code. They read the tree through git, and refuse to when the
+work tree git names is not the root: a `.git` that holds no repository sends
+git to the repository above, and a `core.worktree` setting sends it elsewhere.
 
 What a config holds is for a reviewer to judge, and CODEOWNERS sends every
 change to one to a code owner. The rules refuse only a key that runs or
@@ -81,7 +84,8 @@ redirects code from a file that reads as data:
 
 Every JavaScript tool a row or a hook starts runs under Bun by its path in
 `node_modules`. A checkout missing the package stops there, where `bunx` would
-run a copy found on `PATH` or in its cache. The opening row also refuses a
+run a copy found on `PATH` or in its cache. Every Bun a row starts carries
+`--no-env-file`, so an untracked env file reaches none of them. The opening row also refuses a
 `package.json` carrying `patchedDependencies`, since a patch changes an
 installed package away from the release `bun.lock` pins. No child gets
 `BUN_OPTIONS`, which Bun reads into every process as flags, a preload or a test
@@ -105,7 +109,9 @@ strips types rather than checking them, so without `typecheck` the gate would
 run TypeScript whose types nothing reads. tsc must list every tracked
 TypeScript file, so one outside `tools/` fails the row rather than going
 unchecked. `bun test` is handed every tracked test file by path, wherever it
-sits, and runs with `CI` set, so a committed `test.only` fails.
+sits, and runs with `CI` set, so a committed `test.only` fails. The row also
+fails a file where no test ran: bun test exits zero when every test in one
+was skipped, a todo or held back by its condition.
 
 `actionlint` checks workflow syntax, runner labels and every expression,
 including whether a `needs.<job>.outputs.<name>` names an output that job
@@ -146,6 +152,10 @@ pass with no config and no ignores fails unless every job passing `secrets:
 inherit` calls a workflow under `zachthedev/.github/.github/workflows/`. That
 hold is what lets `zizmor.yml` waive the audit by file.
 
+`tests` fails when no test ran, a run that skipped every test included, and
+reads no nextest user config. No child gets a `NEXTEST_` variable, since one
+can pass such a run or retry a failing test into a pass.
+
 `doctests` runs beside `tests`, because `cargo nextest` runs none of them and a
 doctest that stops compiling would otherwise pass the gate in silence. `doc`
 builds every crate's documentation with warnings denied, so a broken link is a
@@ -184,6 +194,12 @@ The subject is imperative and lowercase with no trailing period.
 A pull request's title takes the type of its most user-facing commit, and `!`
 when any commit breaks something users see. A squash lands the title alone,
 and release-plz cannot recover a break the title dropped.
+
+github.com cuts a commit subject at 73 characters, so the 72 applies to the
+header that lands. A squash appends ` (#N)` to the title, and the `commits`
+job lints the title with it appended. A Dependabot pull request whose landed
+header runs past 72 fails that job. It is closed, and its bump is taken by
+hand.
 
 A revert is `revert(<scope>): <what is undone, in fresh words>`, with a
 `Refs: <sha>` footer naming each reverted commit. git's own

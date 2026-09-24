@@ -105,6 +105,18 @@ const BUN_INSTALL: &str = "bun install";
 /// `node_modules` or in its own cache, where a path fails instead.
 const PRETTIER: &str = "./node_modules/prettier/bin/prettier.cjs";
 
+/// The flag every Bun a row starts carries. Bun loads an env file beside it
+/// into every `bun <file>` and `bun test`, an untracked one included.
+const NO_ENV_FILE: &str = "--no-env-file";
+
+/// The command that runs `script` under Bun, reading the paths it is handed
+/// on standard input.
+fn bun_script(script: &str) -> Vec<String> {
+    ["bun", NO_ENV_FILE, "-e", script]
+        .map(str::to_string)
+        .to_vec()
+}
+
 /// tsc's command-line entry in the checkout, which Bun runs by its path for the
 /// same reason.
 const TSC: &str = "./node_modules/typescript/bin/tsc";
@@ -122,7 +134,8 @@ const TEST_ENV: &[(&str, &str)] = if cfg!(windows) {
 /// completed inputs, set so a contributor's own `RUST_LOG` cannot hide them.
 const REPORTING: &[(&str, &str)] = &[("RUST_LOG", "info")];
 
-/// Every row, in the order they run.
+/// Every row, in the order they run. The rows that read files come before
+/// the rows that build and run repository code.
 pub const STEPS: &[Step] = &[
     Step {
         name: "fmt",
@@ -150,50 +163,6 @@ pub const STEPS: &[Step] = &[
         install: MISE_INSTALL,
         env: REPORTING,
         proof: Proof::Taplo,
-    },
-    Step {
-        name: "clippy",
-        covers: "Lints on every target, warnings denied, with clippy.toml read from the root alone",
-        program: Program::Path("cargo"),
-        args: &[
-            "clippy",
-            "--workspace",
-            "--all-targets",
-            "--locked",
-            "--",
-            "-D",
-            "warnings",
-        ],
-        install: "rustup component add clippy",
-        env: &[],
-        proof: Proof::Exit,
-    },
-    Step {
-        name: "tests",
-        covers: "The test suites, under cargo-nextest",
-        program: Program::Mise("cargo-nextest"),
-        args: &["nextest", "run", "--workspace", "--locked"],
-        install: MISE_INSTALL,
-        env: TEST_ENV,
-        proof: Proof::Exit,
-    },
-    Step {
-        name: "doctests",
-        covers: "Every documented example, which nextest runs none of",
-        program: Program::Path("cargo"),
-        args: &["test", "--workspace", "--doc", "--locked"],
-        install: RUSTUP,
-        env: TEST_ENV,
-        proof: Proof::Exit,
-    },
-    Step {
-        name: "doc",
-        covers: "rustdoc over every crate, warnings denied",
-        program: Program::Path("cargo"),
-        args: &["doc", "--workspace", "--no-deps", "--locked"],
-        install: RUSTUP,
-        env: &[("RUSTDOCFLAGS", "-D warnings")],
-        proof: Proof::Exit,
     },
     Step {
         name: "deny",
@@ -232,6 +201,7 @@ pub const STEPS: &[Step] = &[
         // narrows the list, --config stops the search for another config, and
         // --no-editorconfig keeps any .editorconfig from setting an option.
         args: &[
+            NO_ENV_FILE,
             PRETTIER,
             "--check",
             "--config",
@@ -243,29 +213,6 @@ pub const STEPS: &[Step] = &[
         install: BUN_INSTALL,
         env: &[],
         proof: Proof::Prettier,
-    },
-    Step {
-        name: "typecheck",
-        covers: "The types in tools/, which Bun strips rather than checks, under tsconfig.json alone, every file proven read",
-        program: Program::Path("bun"),
-        // --project names the one config, so tsc never searches past the
-        // checkout, and --listFiles names every file it read.
-        args: &[TSC, "--noEmit", "--project", "tsconfig.json", "--listFiles"],
-        install: BUN_INSTALL,
-        env: &[],
-        proof: Proof::Typecheck,
-    },
-    Step {
-        name: "tools",
-        covers: "The tests in tools/, every tracked test file handed by path and proven run",
-        program: Program::Path("bun"),
-        // Each tracked test file goes by its ./ path, since a bare argument is
-        // a substring filter over every path. CI makes a committed test.only
-        // fail rather than skip the file's other tests.
-        args: &["test"],
-        install: "install Bun from https://bun.sh",
-        env: &[("CI", "true")],
-        proof: Proof::BunTest,
     },
     Step {
         name: "actionlint",
@@ -297,6 +244,90 @@ pub const STEPS: &[Step] = &[
         install: MISE_INSTALL,
         env: REPORTING,
         proof: Proof::Zizmor,
+    },
+    Step {
+        name: "typecheck",
+        covers: "The types in tools/, which Bun strips rather than checks, under tsconfig.json alone, every file proven read",
+        program: Program::Path("bun"),
+        // --project names the one config, so tsc never searches past the
+        // checkout, and --listFiles names every file it read.
+        args: &[
+            NO_ENV_FILE,
+            TSC,
+            "--noEmit",
+            "--project",
+            "tsconfig.json",
+            "--listFiles",
+        ],
+        install: BUN_INSTALL,
+        env: &[],
+        proof: Proof::Typecheck,
+    },
+    Step {
+        name: "tools",
+        covers: "The tests in tools/, every tracked test file handed by path and proven run",
+        program: Program::Path("bun"),
+        // Each tracked test file goes by its ./ path, since a bare argument is
+        // a substring filter over every path. CI makes a committed test.only
+        // fail rather than skip the file's other tests.
+        args: &[NO_ENV_FILE, "test"],
+        install: "install Bun from https://bun.sh",
+        env: &[("CI", "true")],
+        proof: Proof::BunTest,
+    },
+    Step {
+        name: "clippy",
+        covers: "Lints on every target, warnings denied, with clippy.toml read from the root alone",
+        program: Program::Path("cargo"),
+        args: &[
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--locked",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        install: "rustup component add clippy",
+        env: &[],
+        proof: Proof::Exit,
+    },
+    Step {
+        name: "tests",
+        covers: "The test suites, under cargo-nextest, failing when no test ran",
+        program: Program::Mise("cargo-nextest"),
+        // --no-tests=fail fails a run that skipped every test, and no user
+        // config reaches the run.
+        args: &[
+            "nextest",
+            "run",
+            "--workspace",
+            "--locked",
+            "--no-tests=fail",
+            "--user-config-file",
+            "none",
+        ],
+        install: MISE_INSTALL,
+        env: TEST_ENV,
+        proof: Proof::Exit,
+    },
+    Step {
+        name: "doctests",
+        covers: "Every documented example, which nextest runs none of",
+        program: Program::Path("cargo"),
+        args: &["test", "--workspace", "--doc", "--locked"],
+        install: RUSTUP,
+        env: TEST_ENV,
+        proof: Proof::Exit,
+    },
+    Step {
+        name: "doc",
+        covers: "rustdoc over every crate, warnings denied",
+        program: Program::Path("cargo"),
+        args: &["doc", "--workspace", "--no-deps", "--locked"],
+        install: RUSTUP,
+        env: &[("RUSTDOCFLAGS", "-D warnings")],
+        proof: Proof::Exit,
     },
 ];
 
@@ -580,8 +611,8 @@ impl<'a> Gate<'a> {
         };
         if let Some(entry) = step
             .args
-            .first()
-            .and_then(|arg| arg.strip_prefix("./"))
+            .iter()
+            .find_map(|arg| arg.strip_prefix("./"))
             .filter(|entry| entry.starts_with("node_modules/"))
             && !self.runner.exists(entry)
         {
@@ -868,11 +899,7 @@ impl<'a> Gate<'a> {
             .cloned()
             .collect();
         if !workflows.is_empty() {
-            let ask = vec![
-                "bun".to_string(),
-                "-e".to_string(),
-                shellcheck::WORKFLOW_SHELLS.to_string(),
-            ];
+            let ask = bun_script(shellcheck::WORKFLOW_SHELLS);
             let captured = match self.capture(out, &ask, &[], Some(&workflows.join("\0")))? {
                 Ok(captured) => captured,
                 Err(sentence) => return Ok(Err(format!("{sentence}: {BUN_INSTALL}"))),
@@ -957,11 +984,7 @@ impl<'a> Gate<'a> {
         prepared: &Prepared,
         tracked: &[String],
     ) -> io::Result<Result<String, String>> {
-        let ask = vec![
-            "bun".to_string(),
-            "-e".to_string(),
-            proof::PRETTIER_FILES.to_string(),
-        ];
+        let ask = bun_script(proof::PRETTIER_FILES);
         let listed = tracked.join("\0");
         let captured = match self.capture(out, &ask, &[], Some(&listed))? {
             Ok(captured) => captured,
@@ -1169,8 +1192,20 @@ impl<'a> Gate<'a> {
             ));
         };
         let ran = junit_files(&written);
-        Ok(proof::prove("bun test", proof::FILES, &handed, &ran, root)
-            .map(|()| proof::count(handed.len(), "file", "files")))
+        let idle = junit_idle(&written);
+        Ok(
+            proof::prove("bun test", proof::FILES, &handed, &ran, root).and_then(|()| {
+                if idle.is_empty() {
+                    Ok(proof::count(handed.len(), "file", "files"))
+                } else {
+                    let named: Vec<String> = idle.iter().map(|file| format!("{file:?}")).collect();
+                    Err(format!(
+                        "bun test ran no test in {}: each one there was skipped, a todo or held back by its condition",
+                        named.join(", ")
+                    ))
+                }
+            }),
+        )
     }
 
     /// Print the summary table.
@@ -1257,19 +1292,45 @@ fn tsc_listed(printed: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every distinct file a `bun test` junit report names on a test suite, in
-/// the order the report names them.
-fn junit_files(report: &str) -> Vec<String> {
-    let mut files: Vec<String> = Vec::new();
+/// Each file a `bun test` junit report names, with the start tag of the first
+/// suite naming it, in the order the report names them. That suite is the
+/// file's outermost, and its counts take in every suite nested in it.
+fn junit_suites(report: &str) -> Vec<(String, &str)> {
+    let mut suites: Vec<(String, &str)> = Vec::new();
     for (at, _) in report.match_indices("<testsuite ") {
         let tag = &report[at..report[at..].find('>').map_or(report.len(), |end| at + end)];
         if let Some(file) = xml_attribute(tag, "file")
-            && !files.contains(&file)
+            && !suites.iter().any(|(seen, _)| *seen == file)
         {
-            files.push(file);
+            suites.push((file, tag));
         }
     }
-    files
+    suites
+}
+
+/// Every distinct file a `bun test` junit report names on a test suite, in
+/// the order the report names them.
+fn junit_files(report: &str) -> Vec<String> {
+    junit_suites(report)
+        .into_iter()
+        .map(|(file, _)| file)
+        .collect()
+}
+
+/// Every file a `bun test` junit report names where no test ran. Bun counts a
+/// skipped test, a todo and one whose condition kept it from running as
+/// skipped, and a suite carrying no count ran nothing either.
+fn junit_idle(report: &str) -> Vec<String> {
+    let count = |tag: &str, name: &str| {
+        xml_attribute(tag, name)
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    junit_suites(report)
+        .into_iter()
+        .filter(|(_, tag)| count(tag, "tests") <= count(tag, "skipped"))
+        .map(|(file, _)| file)
+        .collect()
 }
 
 /// The value of the attribute `name` in the XML start tag `tag`, its five
@@ -1342,7 +1403,7 @@ mod tests {
 
     use super::{
         Gate, MISE_INSTALL, Outcome, PRETTIER, Program, Row, STEPS, TSC, canary_passed,
-        directive_refused, junit_files,
+        directive_refused, junit_files, junit_idle,
     };
     use crate::runner::{Captured, Exit, Runner};
     use crate::{pins, proof, shellcheck, tree};
@@ -1383,6 +1444,8 @@ mod tests {
         failing: Vec<&'static str>,
         /// Paths a fake tool leaves out of its report, by the tool's basename.
         unreported: Vec<(&'static str, &'static str)>,
+        /// Test files whose every test the junit report counts as skipped.
+        skipping: Vec<&'static str>,
         /// The tracked files the listing answers with.
         tracked: Vec<&'static str>,
         /// The untracked files the listing answers with.
@@ -1423,6 +1486,7 @@ mod tests {
                 unresolvable: Vec::new(),
                 failing: Vec::new(),
                 unreported: Vec::new(),
+                skipping: Vec::new(),
                 tracked: TRACKED.to_vec(),
                 untracked: Vec::new(),
                 callee: "zachthedev/.github/.github/workflows/deps.yml@c53d09e393028ceddee0d761f2a7963394289a72",
@@ -1463,6 +1527,11 @@ mod tests {
 
         fn unreported(mut self, tool: &'static str, path: &'static str) -> Self {
             self.unreported.push((tool, path));
+            self
+        }
+
+        fn skipping(mut self, path: &'static str) -> Self {
+            self.skipping.push(path);
             self
         }
 
@@ -1525,7 +1594,7 @@ mod tests {
         fn running(&self, entry: &str) -> Option<Vec<String>> {
             self.ran()
                 .into_iter()
-                .find(|command| command.get(1).map(String::as_str) == Some(entry))
+                .find(|command| command.iter().any(|arg| arg == entry))
         }
 
         fn ran(&self) -> Vec<Vec<String>> {
@@ -1614,18 +1683,18 @@ mod tests {
                     };
                     (lines(&analyzed, shape), lines(&self.unreadable, failed))
                 }
-                "bun" if command.get(1) == Some(&"test") => (String::new(), String::new()),
-                "bun" if command.get(1) == Some(&TSC) => {
+                "bun" if command.get(2) == Some(&"test") => (String::new(), String::new()),
+                "bun" if command.get(2) == Some(&TSC) => {
                     let mut printed = self.tsc();
                     if self.failing.contains(&"tsc") {
                         printed.push_str(TSC_ERROR);
                     }
                     (printed, String::new())
                 }
-                "bun" if command.get(2) == Some(&shellcheck::WORKFLOW_SHELLS) => {
+                "bun" if script(command) == Some(shellcheck::WORKFLOW_SHELLS) => {
                     (self.shells(input), String::new())
                 }
-                "bun" if command.get(2) == Some(&proof::PRETTIER_FILES) => {
+                "bun" if script(command) == Some(proof::PRETTIER_FILES) => {
                     let kept: Vec<&str> = input
                         .unwrap_or("")
                         .split('\0')
@@ -1695,7 +1764,7 @@ mod tests {
         fn junit(&self) -> Option<String> {
             let ran = self.ran();
             let test = ran.iter().rev().find(|command| {
-                basename(&command[0]) == "bun" && command.get(1).map(String::as_str) == Some("test")
+                basename(&command[0]) == "bun" && command.get(2).map(String::as_str) == Some("test")
             })?;
             let handed: Vec<&str> = test
                 .iter()
@@ -1706,7 +1775,10 @@ mod tests {
                 .iter()
                 .map(|path| {
                     let name = path.replace('/', "\\");
-                    format!("<testsuite name=\"{name}\" file=\"{name}\" tests=\"1\"></testsuite>")
+                    let skipped = u8::from(self.skipping.contains(path));
+                    format!(
+                        "<testsuite name=\"{name}\" file=\"{name}\" tests=\"1\" skipped=\"{skipped}\"></testsuite>"
+                    )
                 })
                 .collect();
             Some(format!(
@@ -1747,6 +1819,12 @@ mod tests {
     /// The file name a command runs, without its directory.
     fn basename(program: &str) -> &str {
         program.rsplit(['/', '\\']).next().unwrap_or(program)
+    }
+
+    /// The script a `bun -e` command evaluates.
+    fn script<'a>(command: &[&'a str]) -> Option<&'a str> {
+        let at = command.iter().position(|arg| *arg == "-e")?;
+        command.get(at + 1).copied()
     }
 
     /// The pin file and lockfile for `pair` the fake reads, built from
@@ -1839,7 +1917,7 @@ mod tests {
             self.record(command, env);
             let program = basename(command[0]);
             let (stdout, stderr) = self.answer(program, command, input);
-            let tsc = program == "bun" && command.get(1) == Some(&TSC);
+            let tsc = program == "bun" && command.get(2) == Some(&TSC);
             Ok(Captured {
                 exit: if self.failing.contains(&program) || (tsc && self.failing.contains(&"tsc")) {
                     Exit::Err
@@ -1965,17 +2043,17 @@ mod tests {
             [
                 "fmt",
                 "taplo",
-                "clippy",
-                "tests",
-                "doctests",
-                "doc",
                 "deny",
                 "machete",
                 "prettier",
+                "actionlint",
+                "zizmor",
                 "typecheck",
                 "tools",
-                "actionlint",
-                "zizmor"
+                "clippy",
+                "tests",
+                "doctests",
+                "doc"
             ]
         );
         let runner = FakeRunner::all_installed();
@@ -2090,9 +2168,10 @@ mod tests {
         );
         carries("taplo", " --config .taplo.toml -- ");
         carries("zizmor", " --config .github/zizmor.yml ");
+        carries("cargo-nextest", " --no-tests=fail --user-config-file none");
         let prettier = runner.running(PRETTIER).expect("prettier ran").join(" ");
         let wanted = format!(
-            "bun {PRETTIER} --check --config .prettierrc --ignore-path .prettierignore --no-editorconfig -- "
+            "bun --no-env-file {PRETTIER} --check --config .prettierrc --ignore-path .prettierignore --no-editorconfig -- "
         );
         assert!(
             prettier.starts_with(&wanted),
@@ -2108,6 +2187,27 @@ mod tests {
             env.contains(&("CLIPPY_CONF_DIR".to_string(), ROOT.to_string())),
             "clippy ran with {env:?}, and it must set CLIPPY_CONF_DIR to {ROOT}"
         );
+    }
+
+    /// Every Bun the gate starts skips env files, a script it evaluates and
+    /// the rows it runs alike, so no untracked env file reaches one.
+    #[test]
+    fn every_bun_the_gate_starts_skips_env_files() {
+        let runner = FakeRunner::all_installed();
+        gate(&runner);
+        let buns: Vec<Vec<String>> = runner
+            .ran()
+            .into_iter()
+            .filter(|command| basename(&command[0]) == "bun")
+            .collect();
+        assert!(buns.len() >= 3, "the gate started {} Buns", buns.len());
+        for command in buns {
+            assert_eq!(
+                command.get(1).map(String::as_str),
+                Some("--no-env-file"),
+                "Bun ran as {command:?}"
+            );
+        }
     }
 
     /// cargo-machete is handed each tracked crate's directory, and never the
@@ -2130,17 +2230,17 @@ mod tests {
         let runner = FakeRunner::all_installed();
         gate(&runner);
         let ask = runner.command("bun").expect("bun asked Prettier");
-        assert_eq!(ask[1], "-e");
-        assert!(ask[2].contains("resolveConfig: false"), "{}", ask[2]);
+        assert_eq!(ask[1..3], ["--no-env-file", "-e"]);
+        assert!(ask[3].contains("resolveConfig: false"), "{}", ask[3]);
         assert!(
-            ask[2].contains("ignorePath: '.prettierignore'"),
+            ask[3].contains("ignorePath: '.prettierignore'"),
             "{}",
-            ask[2]
+            ask[3]
         );
         assert!(
-            ask[2].contains("import('./node_modules/prettier/index.mjs')"),
+            ask[3].contains("import('./node_modules/prettier/index.mjs')"),
             "the file-info script imports Prettier from outside the checkout: {}",
-            ask[2]
+            ask[3]
         );
         let bunx = runner.running(PRETTIER).expect("prettier ran");
         let handed = &bunx[bunx.iter().position(|arg| arg == "--").expect("--") + 1..];
@@ -2226,6 +2326,19 @@ mod tests {
         }
     }
 
+    /// A test file bun test reports with every test skipped fails the tools
+    /// row, naming the file, though bun test exits zero over it.
+    #[test]
+    fn a_test_file_whose_every_test_was_skipped_fails_the_tools_row() {
+        let runner = FakeRunner::all_installed().skipping("tools/a.test.ts");
+        let (rows, text) = gate(&runner);
+        let last = rows.last().expect("one row");
+        assert_eq!(last.step, "tools");
+        assert_eq!(last.outcome, Outcome::Failed);
+        let sentence = "bun test ran no test in \"tools\\\\a.test.ts\": each one there was skipped, a todo or held back by its condition";
+        assert!(text.contains(sentence), "{text}");
+    }
+
     /// A failing tsc prints its errors without the files it listed, and the
     /// row names the failure.
     #[test]
@@ -2281,7 +2394,7 @@ mod tests {
         let at = ran
             .iter()
             .position(|command| {
-                basename(&command[0]) == "bun" && command.get(1).map(String::as_str) == Some("test")
+                basename(&command[0]) == "bun" && command.get(2).map(String::as_str) == Some("test")
             })
             .expect("bun test ran");
         let test = &ran[at];
@@ -2313,6 +2426,47 @@ mod tests {
             ["tools\\a.test.ts", "tools\\b & c.test.ts"],
             "a report names each file once, its entities decoded"
         );
+    }
+
+    /// A file ran nothing when its outermost suite counts no more tests than
+    /// skipped ones, nested suites taken in, or carries no count at all. The
+    /// reports are the shapes bun test 1.4.2 writes.
+    #[test]
+    fn a_file_whose_every_test_was_skipped_ran_nothing() {
+        for (what, report, idle) in [
+            (
+                "a skipped test",
+                r#"<testsuite name="s.test.ts" file="s.test.ts" tests="1" assertions="0" failures="0" skipped="1">"#,
+                vec!["s.test.ts"],
+            ),
+            (
+                "one test runs beside skipped ones",
+                r#"<testsuite name="m.test.ts" file="m.test.ts" tests="3" assertions="1" failures="0" skipped="2"><testsuite name="group" file="m.test.ts" line="4" tests="1" assertions="0" failures="0" skipped="1">"#,
+                vec![],
+            ),
+            (
+                "every test sits in a skipped group",
+                r#"<testsuite name="n.test.ts" file="n.test.ts" tests="2" assertions="0" failures="0" skipped="2"><testsuite name="outer" file="n.test.ts" line="2" tests="2" assertions="0" failures="0" skipped="2">"#,
+                vec!["n.test.ts"],
+            ),
+            (
+                "a suite with no count",
+                r#"<testsuite name="c.test.ts" file="c.test.ts">"#,
+                vec!["c.test.ts"],
+            ),
+            (
+                "a count that is not a number",
+                r#"<testsuite name="x.test.ts" file="x.test.ts" tests="many" skipped="0">"#,
+                vec!["x.test.ts"],
+            ),
+            (
+                "every test ran",
+                r#"<testsuite name="r.test.ts" file="r.test.ts" tests="2" skipped="0">"#,
+                vec![],
+            ),
+        ] {
+            assert_eq!(junit_idle(report), idle, "{what}");
+        }
     }
 
     /// The root `tsconfig.json` this repository keeps passes the tree rules.

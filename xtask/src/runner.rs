@@ -4,6 +4,7 @@
 //! and spawns nothing, so no test formats the tree, installs a git hook or
 //! reaches the network.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -313,20 +314,41 @@ fn command_for(program: &str) -> io::Result<Command> {
     Ok(command)
 }
 
-/// Drop this crate's own build metadata, and every variable in
-/// [`WITHHELD_ENV`], from a child's environment.
+/// The prefix every cargo-nextest option read from the environment carries.
+/// `NEXTEST_NO_TESTS=pass` passes a run that skipped every test,
+/// `NEXTEST_RETRIES` passes a test that fails before it passes, and
+/// `NEXTEST_USER_CONFIG_FILE` names a config the tests row never reads.
+const WITHHELD_PREFIX: &str = "NEXTEST_";
+
+/// Drop this crate's own build metadata, every variable in [`WITHHELD_ENV`],
+/// and every inherited one [`WITHHELD_PREFIX`] opens, from a child's
+/// environment.
 fn scrub(command: &mut Command) {
+    scrub_inherited(command, std::env::vars_os().map(|(name, _)| name));
+}
+
+/// [`scrub`] over the variable names this process holds, `inherited`.
+fn scrub_inherited(command: &mut Command, inherited: impl Iterator<Item = OsString>) {
     for name in CRATE_ENV.iter().chain(WITHHELD_ENV) {
         command.env_remove(name);
+    }
+    for name in inherited {
+        if name
+            .to_string_lossy()
+            .to_ascii_uppercase()
+            .starts_with(WITHHELD_PREFIX)
+        {
+            command.env_remove(&name);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
+    use std::ffi::{OsStr, OsString};
     use std::process::Command;
 
-    use super::{CRATE_ENV, scrub};
+    use super::{CRATE_ENV, scrub, scrub_inherited};
 
     /// `cargo-machete` reads `CARGO_PKG_NAME`, and inheriting it makes the tool
     /// scan a directory named after its own subcommand.
@@ -377,6 +399,42 @@ mod tests {
             assert!(
                 removed.contains(&OsStr::new(name)),
                 "a child keeps {name}: the scrub removes only {removed:?}"
+            );
+        }
+    }
+
+    /// A child loses every inherited variable that opens with `NEXTEST_`, in
+    /// any case, and keeps the rest, a name that merely starts alike included.
+    #[test]
+    fn a_child_never_gets_a_nextest_option() {
+        let mut command = Command::new("child");
+        let inherited = [
+            "NEXTEST_NO_TESTS",
+            "nextest_retries",
+            "NEXTEST_USER_CONFIG_FILE",
+            "NEXTESTER",
+            "PATH",
+        ];
+        scrub_inherited(&mut command, inherited.into_iter().map(OsString::from));
+        let removed: Vec<&OsStr> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name)
+            .collect();
+        for name in [
+            "NEXTEST_NO_TESTS",
+            "nextest_retries",
+            "NEXTEST_USER_CONFIG_FILE",
+        ] {
+            assert!(
+                removed.contains(&OsStr::new(name)),
+                "a child keeps {name}: the scrub removes only {removed:?}"
+            );
+        }
+        for name in ["NEXTESTER", "PATH"] {
+            assert!(
+                !removed.contains(&OsStr::new(name)),
+                "a child loses {name}, which no nextest option reads"
             );
         }
     }

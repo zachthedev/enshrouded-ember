@@ -15,7 +15,8 @@
     "@types/bun": "1.4.2",
     "lefthook": "2.1.14",
     "prettier": "3.9.8",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "yaml": "2.9.1"
   },
   "dependencies": {
     "vdf-parser": "1.2.1",

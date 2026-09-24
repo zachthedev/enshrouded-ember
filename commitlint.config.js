@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { parse } from 'yaml';
 
 // .github/commit-scopes.json lists each scope and what it covers. CONTRIBUTING.md points at it
 // rather than restating it, so a new scope is one edit. The path resolves against this file,
@@ -12,25 +13,25 @@ if (scopes.length === 0) {
   throw new Error(`${vocabularyPath.href} must list at least one scope.`);
 }
 
-// The headers Dependabot starts a commit with: each commit-message prefix
-// .github/dependabot.yml sets, then a colon and a space. A prefix is set per
-// updates entry, so every prefix and prefix-development line counts. The lines
-// are read as text, in block style, since no YAML parser is a pinned dependency
-// here. A repository without the file has no Dependabot header.
+// The headers Dependabot starts a commit with: the commit-message prefix and
+// prefix-development of each updates entry in .github/dependabot.yml, then a
+// colon and a space. A prefix is set per entry, so every entry counts, and a
+// prefix anywhere else in the file does not. A repository without the file has
+// no Dependabot header. A file that does not parse throws, so the lint fails
+// rather than skipping.
 const dependabotPath = new URL('.github/dependabot.yml', import.meta.url);
-let dependabotConfig = '';
+let dependabotText = '';
 try {
-  dependabotConfig = readFileSync(dependabotPath, 'utf8');
+  dependabotText = readFileSync(dependabotPath, 'utf8');
 } catch (error) {
   if (error.code !== 'ENOENT') {
     throw error;
   }
 }
-const dependabotHeaders = [
-  ...dependabotConfig.matchAll(/^[ \t]*prefix(?:-development)?:[ \t]*(['"]?)([^'"#\r\n]*?)\1[ \t]*(?:#.*)?$/gm),
-]
-  .map((match) => match[2])
-  .filter((prefix) => prefix.length > 0)
+const dependabotUpdates = parse(dependabotText)?.updates;
+const dependabotHeaders = (Array.isArray(dependabotUpdates) ? dependabotUpdates : [])
+  .flatMap((entry) => [entry?.['commit-message']?.prefix, entry?.['commit-message']?.['prefix-development']])
+  .filter((prefix) => typeof prefix === 'string' && prefix.length > 0)
   .map((prefix) => `${prefix}: `);
 
 export default {
