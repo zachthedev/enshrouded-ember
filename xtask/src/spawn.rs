@@ -63,10 +63,6 @@ fn inherited_names() -> Vec<&'static str> {
 
 /// The Windows directories a mise child needs, read from the known folders.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    all(not(windows), not(test)),
-    expect(dead_code, reason = "only Windows reads the known folders")
-)]
 pub struct Folders {
     /// The Windows directory, `SYSTEMROOT` in the child.
     pub windows: PathBuf,
