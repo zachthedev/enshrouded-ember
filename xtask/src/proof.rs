@@ -348,12 +348,7 @@ mod tests {
         }
         let root = Path::new(r"Z:\repos\mods");
         let printed = r"\\?\Z:\repos\mods\crates\a\src\lib.rs";
-        let wanted = if cfg!(any(windows, target_os = "macos")) {
-            "crates/a/src/lib.rs"
-        } else {
-            "Z:/repos/mods/crates/a/src/lib.rs"
-        };
-        assert_eq!(comparable(printed, root), wanted);
+        assert_eq!(comparable(printed, root), "crates/a/src/lib.rs");
     }
 
     /// Every handed file must be reported, and a report of a file nobody
