@@ -24,26 +24,24 @@ authors = ["ZachTheDev <hey@zachthe.dev>"]
 ember-enshrouded = { version = "0.1.0", path = "crates/ember-enshrouded" }
 ember-holistic = { version = "0.1.0", path = "crates/ember-holistic" }
 ember-kfc = { version = "0.1.0", path = "crates/ember-kfc" }
-ember-platform = { version = "0.1.0", path = "crates/ember-platform" }
-ember-sdk = { version = "0.1.0", path = "crates/ember-sdk" }
-ember-sigs = { version = "0.1.0", path = "crates/ember-sigs" }
 
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 comfy-table = { version = "8.0.0", default-features = false }
-getrandom = "0.4.3"
 goblin = "0.10.7"
 minhook = "0.9.0"
-owo-colors = "4.4.0"
+owo-colors = { version = "4.4.0", features = ["supports-colors"] }
 pelite = "0.10.0"
-semver = "1.0.28"
+# Rust's tokenizer outside a procedural macro. The gate reads every lint waiver
+# in a tracked .rs file from its tokens, with line numbers from span-locations.
+proc-macro2 = { version = "1.0.107", default-features = false, features = [
+    "span-locations",
+] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.20"
 time = { version = "0.3.55", features = ["formatting"] }
 toml = "1.1.6"
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 which = "8.0.6"
 windows-link = "0.100.0"
 # One Win32 call in xtask: the known folders a mise child is given in place of
@@ -57,14 +55,21 @@ tempfile = "3.27.0"
 
 [workspace.lints.rust]
 missing_docs = "warn"
-# A module that needs unsafe code takes an allow with a reason on its `mod`
+# A module that needs unsafe code takes an expect with a reason on its `mod`
 # line, so the list of modules that hold any is the list of those attributes.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
-all = "warn"
-pedantic = "warn"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# A lint waiver is an expect that names the lint it waives and says why, so a
+# waiver whose lint stops firing fails the build. The level is deny, since
+# clap's derive generates an allow of clippy::restriction, which rustc refuses
+# under a forbid. `cargo xtask pins` refuses any attribute naming either lint,
+# so no crate-level allow can turn them off.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
 multiple_unsafe_ops_per_block = "warn"
 undocumented_unsafe_blocks = "warn"
 unnecessary_safety_comment = "warn"

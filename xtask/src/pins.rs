@@ -29,6 +29,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
+use crate::tree::printable;
+
 /// The file pinning a version for every tool mise installs.
 pub const PINS: &str = "mise.toml";
 
@@ -101,16 +103,22 @@ const SHA256_DIGITS: usize = 64;
 const PIN_TABLES: &[&str] = &["tools", "tool_config", "settings"];
 
 /// The settings [`PINS`] sets true, each a refusal mise makes: the locked mode,
-/// the lockfile itself, the attestation check and its failure mode.
+/// the lockfile itself, the attestation checks and their failure mode.
 const SETTINGS_ON: &[&str] = &[
     "locked",
     "lockfile",
     "locked_verify_provenance",
     "provenance_api_failures_fatal",
+    "github_attestations",
 ];
 
 /// The settings [`PINS`] holds beside [`SETTINGS_ON`], each read by a rule here.
-const SETTINGS_READ: &[&str] = &["lockfile_platforms", "url_replacements"];
+const SETTINGS_READ: &[&str] = &["lockfile_platforms", "url_replacements", "aqua"];
+
+/// The settings [`PINS`] sets true under `[settings.aqua]`: the attestation
+/// check for a tool the aqua backend installs. It defaults on, and the file
+/// names it so a changed default cannot turn it off under the repository.
+const AQUA_SETTINGS_ON: &[&str] = &["github_attestations"];
 
 /// The keys mise writes at a lockfile's top level.
 const LOCK_KEYS: &[&str] = &["lockfile_version", "tools"];
@@ -1026,42 +1034,6 @@ pub fn stray_config_problems(entries: &[TreeEntry]) -> Vec<String> {
         .collect()
 }
 
-/// Whether `character` changes how the text around it displays without
-/// showing itself: a control, a bidirectional or zero-width format mark, or a
-/// line or paragraph separator.
-fn hidden(character: char) -> bool {
-    character.is_control()
-        || matches!(
-            character,
-            '\u{061C}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{2028}'..='\u{202E}'
-                | '\u{2060}'..='\u{206F}'
-                | '\u{FEFF}'
-                | '\u{FFF9}'..='\u{FFFB}'
-        )
-}
-
-/// `finding` with every [`hidden`] character written as its escape, so a
-/// value read from a committed file reaches no terminal or CI log raw, and no
-/// reader sees a sentence reordered or cut short.
-fn printable(finding: String) -> String {
-    if !finding.chars().any(hidden) {
-        return finding;
-    }
-    finding
-        .chars()
-        .flat_map(|character| {
-            let escaped: Vec<char> = if hidden(character) {
-                character.escape_default().collect()
-            } else {
-                vec![character]
-            };
-            escaped
-        })
-        .collect()
-}
-
 /// Every way the main pin files fall short, as one sentence each.
 ///
 /// The two texts are passed in rather than read here, so the rules run the
@@ -1105,13 +1077,25 @@ fn table_problems(pins: &str) -> Vec<String> {
         SETTINGS_ON,
         SETTINGS_READ,
     ));
+    if document.get("settings").is_some_and(toml::Value::is_table) {
+        found.extend(section_problems(
+            &document,
+            "settings.aqua",
+            AQUA_SETTINGS_ON,
+            &[],
+        ));
+    }
     found
 }
 
 /// Every way the `[name]` table of [`PINS`] falls short of setting each of `on`
-/// true and holding `read`, with nothing else beside them.
+/// true and holding `read`, with nothing else beside them. `name` is the dotted
+/// path of the table, as the findings name it.
 fn section_problems(document: &toml::Table, name: &str, on: &[&str], read: &[&str]) -> Vec<String> {
-    let Some(table) = document.get(name).and_then(toml::Value::as_table) else {
+    let found = name.split('.').try_fold(document, |table, segment| {
+        table.get(segment).and_then(toml::Value::as_table)
+    });
+    let Some(table) = found else {
         return vec![format!("{PINS} holds no [{name}] table")];
     };
     let mut found: Vec<String> = table
@@ -1392,9 +1376,10 @@ fn pair_problems(pair: Pair, platforms: &[String], pins: &str, lock: &str) -> Ve
 #[cfg(test)]
 mod tests {
     use super::{
-        Backend, TOOLS, TreeEntry, config_paths, hidden, lockfile_platforms, problems,
-        semver_problems, stray_config_problems,
+        Backend, TOOLS, TreeEntry, config_paths, lockfile_platforms, problems, semver_problems,
+        stray_config_problems,
     };
+    use crate::tree::hidden;
     use std::collections::BTreeSet;
     use std::path::Path;
 
@@ -1417,7 +1402,7 @@ mod tests {
     /// in.
     fn sound_pins() -> String {
         format!(
-            "[tools]\ntaplo = \"0.10.0\"\n\"github:nextest-rs/nextest\" = {{ version = \"0.9.145\", version_prefix = \"cargo-nextest-\" }}\n\n[tool_config]\n{TOOL_CONFIG}\n\n[settings]\n{SOUND_SETTINGS}\nlockfile_platforms = {PLATFORMS}\n{RULE}\n"
+            "[tools]\ntaplo = \"0.10.0\"\n\"github:nextest-rs/nextest\" = {{ version = \"0.9.145\", version_prefix = \"cargo-nextest-\" }}\n\n[tool_config]\n{TOOL_CONFIG}\n\n[settings]\n{SOUND_SETTINGS}\nlockfile_platforms = {PLATFORMS}\n{RULE}\n\n[settings.aqua]\ngithub_attestations = true\n"
         )
     }
 
@@ -1425,7 +1410,7 @@ mod tests {
     const TOOL_CONFIG: &str = "locked = true";
 
     /// The refusals the sound pin file turns on under `[settings]`.
-    const SOUND_SETTINGS: &str = "locked = true\nlockfile = true\nlocked_verify_provenance = true\nprovenance_api_failures_fatal = true";
+    const SOUND_SETTINGS: &str = "locked = true\nlockfile = true\nlocked_verify_provenance = true\nprovenance_api_failures_fatal = true\ngithub_attestations = true";
 
     /// Two digests of the right shape, for the cases that name one.
     const DIGEST_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -2529,6 +2514,50 @@ mod tests {
                 sound_pins().replace("[settings]\n", "[settings]\nexperimental = true\n"),
                 lock(),
                 "mise.toml sets \"experimental\" under [settings], which no rule here reads",
+            ),
+        ];
+        refuses(cases);
+    }
+
+    /// Both attestation checks are set true, the aqua one alone in its table,
+    /// so a changed default cannot turn either off under the repository.
+    #[test]
+    fn the_pin_file_holds_both_attestation_checks() {
+        let lock = || SOUND_LOCK.to_string();
+        let cases: &[(&str, String, String, &str)] = &[
+            (
+                "the github attestation check off",
+                sound_pins().replacen(
+                    "github_attestations = true",
+                    "github_attestations = false",
+                    1,
+                ),
+                lock(),
+                "mise.toml does not set github_attestations = true under [settings]",
+            ),
+            (
+                "the aqua table deleted",
+                sound_pins().replace("\n[settings.aqua]\ngithub_attestations = true\n", ""),
+                lock(),
+                "mise.toml holds no [settings.aqua] table",
+            ),
+            (
+                "the aqua attestation check off",
+                sound_pins().replace(
+                    "[settings.aqua]\ngithub_attestations = true",
+                    "[settings.aqua]\ngithub_attestations = false",
+                ),
+                lock(),
+                "mise.toml does not set github_attestations = true under [settings.aqua]",
+            ),
+            (
+                "a setting beside the aqua attestation check",
+                sound_pins().replace(
+                    "[settings.aqua]\ngithub_attestations = true",
+                    "[settings.aqua]\ngithub_attestations = true\ncosign = false",
+                ),
+                lock(),
+                "mise.toml sets \"cosign\" under [settings.aqua], which no rule here reads",
             ),
         ];
         refuses(cases);

@@ -142,8 +142,9 @@ jobs:
       # the same bypass, which makes adding one a decision about main rather
       # than a decision about reading.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # This job pushes, so the key stays in the checkout for the push.
-        with: # zizmor: ignore[artipacked]
+        # This job pushes, so the key stays in the checkout for the push, and
+        # .github/zizmor.yml waives artipacked on this step by its line.
+        with:
           ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
 
       # packageManager in package.json is the one Bun pin. The action verifies
@@ -209,10 +210,8 @@ jobs:
           MANIFEST_ID: ${{ steps.server.outputs.manifest_id }}
           CHANGE_NUMBER: ${{ steps.server.outputs.change_number }}
         run: |
-          # Every backtick below opens a markdown code span in the issue body,
-          # so these formats are single quoted on purpose and no expansion is
-          # wanted inside them. Each directive sits on the line it excuses,
-          # which is the one placement that cannot widen to the whole script.
+          # A backtick opens a markdown code span in the issue body, so a format
+          # holding one is double quoted with the backtick escaped.
           {
             printf '### Steam build id\n\n%s\n\n' "$BUILD_ID"
             printf '### How this build turned up\n\n'
@@ -223,18 +222,13 @@ jobs:
             printf 'Nothing has extracted this build yet.\n\n'
             printf '### Anything else\n\n'
             printf 'App %s moved on its public branch.\n\n' "$APP_SERVER"
-            # shellcheck disable=SC2016
-            printf -- '- depot %s manifest `%s`\n' "$DEPOT_SERVER" "$MANIFEST_ID"
-            # shellcheck disable=SC2016
-            printf -- '- change number `%s`\n\n' "$CHANGE_NUMBER"
-            # shellcheck disable=SC2016
-            printf 'The archive job stores the build under `build/%s/`.\n\n' "$MANIFEST_ID"
+            printf -- "- depot %s manifest \`%s\`\n" "$DEPOT_SERVER" "$MANIFEST_ID"
+            printf -- "- change number \`%s\`\n\n" "$CHANGE_NUMBER"
+            printf "The archive job stores the build under \`build/%s/\`.\n\n" "$MANIFEST_ID"
             printf '### Before a row ships\n\n'
             printf -- '- [ ] The build is archived, or its manifest already rolled\n'
-            # shellcheck disable=SC2016
-            printf -- '- [ ] `cargo xtask schema extract` ran against it\n'
-            # shellcheck disable=SC2016
-            printf -- '- [ ] `cargo xtask schema diff <old> <new>` is in a comment below\n'
+            printf -- "- [ ] \`cargo xtask schema extract\` ran against it\n"
+            printf -- "- [ ] \`cargo xtask schema diff <old> <new>\` is in a comment below\n"
             printf -- '- [ ] Every signature row resolves against the real binary\n'
             printf -- '- [ ] The support window moved, so its oldest build left it\n'
           } > issue-body.md
@@ -467,8 +461,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # This job pushes, so the key stays in the checkout for the push.
-        with: # zizmor: ignore[artipacked]
+        # This job pushes, so the key stays in the checkout for the push, and
+        # .github/zizmor.yml waives artipacked on this step by its line.
+        with:
           ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -597,15 +592,14 @@ jobs:
           MANIFEST_ID: ${{ needs.watch.outputs.server_manifest_id }}
           PREVIOUS_ID: ${{ steps.previous.outputs.previous_manifest_id }}
         run: |
-          # Every backtick below opens a markdown code span in the comment, so
-          # these formats are single quoted on purpose.
-          # shellcheck disable=SC2016
+          # A backtick opens a markdown code span in the comment, so a format
+          # holding one is double quoted with the backtick escaped.
           {
-            printf '### `cargo xtask schema diff %s %s`\n\n' "$PREVIOUS_ID" "$MANIFEST_ID"
+            printf "### \`cargo xtask schema diff %s %s\`\n\n" "$PREVIOUS_ID" "$MANIFEST_ID"
             printf 'Recovered from the archived builds. Watchlist hits come first.\n\n'
-            printf '```text\n'
+            printf "\`\`\`text\n"
             head -c 50000 diff.txt
-            printf '\n```\n'
+            printf "\n\`\`\`\n"
             if [ "$(wc -c < diff.txt)" -gt 50000 ]; then
               printf '\nCut to fit a comment, from %s lines. The rest is in the run log.\n' \
                 "$(wc -l < diff.txt)"

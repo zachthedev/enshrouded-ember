@@ -16,7 +16,7 @@
 //! mise unless this module sets it. On Windows the directories come from the
 //! known folders, so an inherited variable cannot point mise at installs
 //! somebody else chose. On Unix mise finds its installs through the inherited
-//! home and XDG directories, which whoever sets them already controls.
+//! home directory, which whoever sets it already controls.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -46,16 +46,11 @@ const PROXIES: &[&str] = &[
     "no_proxy",
 ];
 
-/// The directories a mise child keeps on Unix, where mise finds its data,
-/// cache and state through them. `XDG_CONFIG_HOME` is not among them, because
-/// mise reads a global configuration file from it.
-const UNIX_DIRS: &[&str] = &[
-    "HOME",
-    "TMPDIR",
-    "XDG_DATA_HOME",
-    "XDG_CACHE_HOME",
-    "XDG_STATE_HOME",
-];
+/// The directories a mise child keeps on Unix. mise finds its data, cache and
+/// state under `HOME` when no `XDG_*` name is set, so none is kept: an env
+/// file a shell autoloads could point `XDG_DATA_HOME` into the checkout, and
+/// mise reads a global configuration file from `XDG_CONFIG_HOME`.
+const UNIX_DIRS: &[&str] = &["HOME", "TMPDIR"];
 
 /// The inherited variables a mise child keeps on this platform.
 fn inherited_names() -> Vec<&'static str> {
@@ -68,10 +63,6 @@ fn inherited_names() -> Vec<&'static str> {
 
 /// The Windows directories a mise child needs, read from the known folders.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    not(windows),
-    allow(dead_code, reason = "only Windows reads the known folders")
-)]
 pub struct Folders {
     /// The Windows directory, `SYSTEMROOT` in the child.
     pub windows: PathBuf,
@@ -250,7 +241,7 @@ fn search_entries(path: Option<&OsStr>, excluded: &[PathBuf]) -> Vec<PathBuf> {
 /// its environment cleared and rebuilt by [`mise_environment`].
 #[cfg_attr(
     not(windows),
-    allow(
+    expect(
         clippy::unnecessary_wraps,
         reason = "only Windows reads the known folders, the one step that fails"
     )
@@ -305,7 +296,7 @@ fn mise_environment(
 
 /// The one call that reads a Windows known folder.
 #[cfg(windows)]
-#[allow(
+#[expect(
     unsafe_code,
     reason = "SHGetKnownFolderPath, the one Win32 call that reads a known folder"
 )]
@@ -569,9 +560,7 @@ mod tests {
         let value = match name {
             "HTTPS_PROXY" | "https_proxy" | "HTTP_PROXY" | "http_proxy" | "NO_PROXY"
             | "no_proxy" => format!("{name}-value"),
-            "HOME" | "TMPDIR" | "XDG_DATA_HOME" | "XDG_CACHE_HOME" | "XDG_STATE_HOME" => {
-                format!("/probe/{name}")
-            }
+            "HOME" | "TMPDIR" => format!("/probe/{name}"),
             "LOCALAPPDATA"
             | "SYSTEMROOT"
             | "TEMP"
@@ -584,6 +573,9 @@ mod tests {
             | "MISE_GITHUB_TOKEN"
             | "SSL_CERT_FILE"
             | "XDG_CONFIG_HOME"
+            | "XDG_DATA_HOME"
+            | "XDG_CACHE_HOME"
+            | "XDG_STATE_HOME"
             | "PATH" => "/attacker/chosen".to_string(),
             _ => return None,
         };
@@ -669,16 +661,7 @@ mod tests {
                 "no_proxy",
             ]
         );
-        assert_eq!(
-            UNIX_DIRS,
-            [
-                "HOME",
-                "TMPDIR",
-                "XDG_DATA_HOME",
-                "XDG_CACHE_HOME",
-                "XDG_STATE_HOME",
-            ]
-        );
+        assert_eq!(UNIX_DIRS, ["HOME", "TMPDIR"]);
     }
 
     /// `resolve` searches the narrowed entries: the running test binary sits
@@ -751,7 +734,14 @@ mod tests {
         for name in UNIX_DIRS {
             assert_eq!(names.contains(name), cfg!(unix), "{name}");
         }
-        assert!(!names.contains(&"XDG_CONFIG_HOME"));
+        for name in [
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_STATE_HOME",
+        ] {
+            assert!(!names.contains(&name), "{name}");
+        }
     }
 
     /// Windows answers both known folders with absolute directories that

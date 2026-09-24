@@ -10,9 +10,12 @@ bun install
 
 `lefthook.yml` holds them: `commit-msg` runs commitlint, and `pre-push` runs
 the gate. [lefthook](https://lefthook.dev) installs them into `.git/hooks` when
-`bun install` runs the `prepare` script. Each hook resolves its tool through
-`bunx --no-install`, so a tool that is not installed fails the commit or the
-push rather than letting it through. The hooks themselves need `node_modules`:
+`bun install` runs the `prepare` script. Each hook runs its tool under Bun by
+its path in `node_modules`, so a tool that is not installed fails the commit or
+the push rather than letting it through. The commitlint hook first unsets every
+spelling of the Bun variables that add flags or run a module, and starts Bun
+with `--no-env-file`, so nothing in your environment or an env file reaches
+it. The hooks themselves need `node_modules`:
 in a fresh clone before `bun install`, or once `node_modules` is gone, no hook
 runs and every commit and push goes through unchecked. Continuous integration's
 `commits` job and gate are the control that holds either way. If
@@ -48,27 +51,81 @@ lockfile over the pair the rules read, and follow a link to whatever it names.
 tool entry holds its version and tag prefix alone. mise runs hooks, tasks and
 postinstall commands from that file, and no rule reads them.
 
+The same row runs the tree rules in `xtask/src/tree.rs`. rustfmt,
+cargo-deny, taplo, zizmor, Prettier and commitlint each run with their one
+config named, and none of them reads another under that flag. clippy searches
+upward from the root, where the committed `clippy.toml` stops it, and a root
+`.clippy.toml`, which would win beside it, is refused. A program that
+finds its config by name with no flag naming one has every other name refused:
+a second lefthook config, an actionlint config, a nested `.cargo/config` or
+toolchain file, and a root `.config` directory, which commitlint's cosmiconfig
+reads even under `--config`. `tree.rs` lists every name.
+Such a file is refused on disk, tracked or not, so a local run agrees with
+continuous integration. A personal file, such as an env file, an `.npmrc` or a
+`lefthook-local` config, is refused only when tracked, and `.gitignore` lists
+it. The rules run again before every later row, since the build and test rows
+run repository code.
+
+What a config holds is for a reviewer to judge, and CODEOWNERS sends every
+change to one to a code owner. The rules refuse only a key that runs or
+redirects code from a file that reads as data:
+
+- `bunfig.toml` holds `[install] minimumReleaseAge`, and nothing else.
+- `.prettierrc` is JSON and names no `plugins`, at its top level or in an
+  override.
+- No `package.json` carries a `cosmiconfig` key, which commitlint's cosmiconfig
+  reads even under `--config`.
+- `rust-toolchain.toml` names a channel and its components, and nothing else.
+- No TypeScript project config sets `paths`, `baseUrl` or `noCheck`, and
+  one the gate does not name is refused.
+
+Every JavaScript tool a row or a hook starts runs under Bun by its path in
+`node_modules`. A checkout missing the package stops there, where `bunx` would
+run a copy found on `PATH` or in its cache. The opening row also refuses a
+`package.json` carrying `patchedDependencies`, since a patch changes an
+installed package away from the release `bun.lock` pins. No child gets
+`BUN_OPTIONS`, which Bun reads into every process as flags, a preload or a test
+filter among them, or `BUN_INSPECT_PRELOAD`, `BUN_INSPECT` and
+`BUN_INSPECT_CONNECT_TO`, which run a module or open Bun's inspector.
+
 `cargo xtask` runs `--locked`, and so does every cargo row, so a manifest edit
 with no relock is refused before the gate starts rather than rewriting
-`Cargo.lock`. `taplo` reads `.taplo.toml` for the files it covers.
+`Cargo.lock`. Every row that walks the tree hands its tool the tracked files it
+reads, fails when none was handed, and prints the count. Where the tool names
+what it read, as rustfmt, taplo, tsc, actionlint and zizmor do, and as `bun
+test`'s junit report does, the row reads that back and fails on a file it
+skipped. Prettier is handed exactly the files its own file info keeps.
+cargo-machete names each crate directory it visited, and the row fails when it
+says it could not read one. A tool whose output a row
+reads runs with `NO_COLOR` set, and the row strips any color code before it
+reads.
 
 `typecheck` and `tools` cover `tools/`, the repository's own TypeScript. Bun
 strips types rather than checking them, so without `typecheck` the gate would
-run TypeScript whose types nothing reads.
+run TypeScript whose types nothing reads. tsc must list every tracked
+TypeScript file, so one outside `tools/` fails the row rather than going
+unchecked. `bun test` is handed every tracked test file by path, wherever it
+sits, and runs with `CI` set, so a committed `test.only` fails.
 
 `actionlint` checks workflow syntax, runner labels and every expression,
 including whether a `needs.<job>.outputs.<name>` names an output that job
 declares. `build-watch.yml` hands every decision between its jobs through those
 outputs, and a misspelled one reads as an empty string rather than an error.
 
-Its shellcheck pass is on, and `mise.toml` holds the version every host
-installs. actionlint shells out to an analyzer it finds on `PATH` and says
-nothing at all when it does not, and no flag changes that, so the gate hands it
-the path mise resolved and first runs it over a canary workflow with one
-unquoted expansion. The row is refused unless that run reports `SC2086`. Both
-matrix legs then read the shell in a `run:` block the same way. pyflakes stays
-off, because no Windows package manager ships it and leaving it on would have
-the quiet leg report a pass for an analysis it never ran.
+actionlint shells out to an analyzer it finds on `PATH` and says nothing at all
+when it does not, and no flag changes that. ShellCheck runs through a stand-in.
+`-shellcheck` names this xtask under a hidden subcommand, which reads each
+`run:` script as actionlint decoded it. The stand-in refuses any line holding a
+ShellCheck directive, and otherwise runs the ShellCheck mise resolved over the
+same bytes. actionlint looks the whole value up as one path before it splits
+it, so the opening row refuses a root entry named `'`. A directive drops a finding from the report, and YAML escapes and
+folding hide one from any reading of the workflow file. The row first runs two
+canary workflows. One must come back with `SC2086`, and the other, which carries
+a directive, must come back refused. actionlint hands only a bash or sh script
+to ShellCheck, so the row also reads every step's `shell:` through Bun's YAML
+parser and refuses any shell but bash, sh and pwsh. pyflakes stays off, because
+no Windows package manager ships it and leaving it on would have the quiet leg
+report a pass for an analysis it never ran.
 
 `zizmor` audits the same files for supply chain and credential problems: an
 action not pinned to a commit, a checkout that leaves a credential behind, a
@@ -82,9 +139,12 @@ otherwise. The row's note says which. In CI it always runs offline and holds no
 token. Those audits catch an impostor commit, an advisory against a pinned
 action and a version comment naming the wrong tag, and they run in CI's shared
 `workflows` job on every pull request. `--config` names `.github/zizmor.yml`, which holds the hash-pin
-policy and the Dependabot cooldown threshold, so the environment cannot swap it
-for another. The inline markers in the workflows answer the findings this
-repository accepts.
+policy, the Dependabot cooldown threshold and every waiver, so the environment
+cannot swap it for another. The opening row refuses an inline `zizmor: ignore`
+comment under `.github`, so nothing waives an audit outside that file. A second
+pass with no config and no ignores fails unless every job passing `secrets:
+inherit` calls a workflow under `zachthedev/.github/.github/workflows/`. That
+hold is what lets `zizmor.yml` waive the audit by file.
 
 `doctests` runs beside `tests`, because `cargo nextest` runs none of them and a
 doctest that stops compiling would otherwise pass the gate in silence. `doc`
@@ -166,15 +226,35 @@ crate's own manifest.
 
 ## Code
 
+- A lint waiver is an `expect` naming the one lint it waives, with a reason
+  holding a letter or a digit, so a waiver whose lint stops firing fails the
+  build. clippy refuses an `allow` wherever its cfg holds, and
+  `cargo xtask pins` refuses one on every platform. It refuses a waiver naming
+  a lint group, and `rustfmt::skip` in any form, `rustfmt_skip` and a raw
+  identifier included. It also
+  refuses any attribute naming `allow_attributes` or
+  `allow_attributes_without_reason`, and a crate whose `[lints]` holds anything
+  but `workspace = true`. The scan reads each tracked `.rs` file as Rust
+  tokens, so it refuses an attribute built from a macro argument, a module file
+  set by `#[path]` even under `cfg_attr`, `include!`, and a `use` that
+  imports `include` under another name.
+- A crate declares only the dependencies its code uses. `cargo xtask pins`
+  refuses a cargo-machete ignore list in any `Cargo.toml`.
+- A TypeScript file keeps tsc's checking on. `cargo xtask pins` refuses
+  `@ts-nocheck`, `@ts-ignore`, an `@ts-expect-error` with no reason, and a
+  tracked declaration file, which tsc never checks under `skipLibCheck`.
 - Code behind `cfg(windows)` builds on Windows alone and code behind its
   inverse on Linux alone. The resolution path carries no `cfg(windows)`, and
   every Linux backend is a stub that returns `Unsupported`, so both hold on a
   host with no Windows API.
-- A module that needs unsafe code takes an `allow(unsafe_code)` with a reason
-  on its `mod` line, so the list of those attributes is the list of modules
-  that hold any.
-- Every line a command prints goes through `xtask/src/ui.rs`, so the color
-  policy and the column math live in one place.
+- A module that needs unsafe code takes an `expect(unsafe_code)` with a
+  reason on its `mod` line, so the list of those attributes is the list of
+  modules that hold any. A module whose unsafe code builds on Windows alone
+  takes it as `cfg_attr(windows, expect(...))`, since an expect that goes
+  unfulfilled on the Linux leg fails there.
+- Every line a command other than the gate prints goes through
+  `xtask/src/ui.rs`, so the color policy and the column math live in one place.
+  The gate prints to the writer it is handed, so its tests read what it printed.
 - A comment explains a constraint the reader can verify today. What was wrong
   before, and why an earlier approach failed, goes in the commit message.
 

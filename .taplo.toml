@@ -15,11 +15,8 @@ exclude = [
 ]
 
 [formatting]
-# A cargo-machete ignore list stays one name per line, which reads and edits
-# more easily than a collapsed array. This does not make two edits to one list
-# independent: two deletions are two adjacent lines, and a three-way merge reads
-# adjacent deletions as one hunk. One owner prunes a whole phase's names in one
-# commit, so only one edit ever reaches a list.
+# An array stays one entry per line, which reads and edits more easily than a
+# collapsed array, and a change to one entry is one line of a diff.
 array_auto_collapse = false
 # .editorconfig sets four spaces for Rust and TOML, and `cargo add` writes
 # manifests the same way.

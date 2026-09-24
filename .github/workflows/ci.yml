@@ -109,7 +109,9 @@ jobs:
       # pwsh on windows, so one line would execute under two dialects while
       # actionlint reads it as one. Each line below is the same in either
       # shell, so bash is the one that leaves actionlint reading what runs.
-      - run: bun install --frozen-lockfile
+      # No install script runs: the gate needs none, and the prepare script
+      # installs the git hooks, which no CI job runs.
+      - run: bun install --frozen-lockfile --ignore-scripts
         shell: bash
       # zizmor runs offline here, since CI is set and the gate holds no token.
       # Its online audits run in the shared workflows job.

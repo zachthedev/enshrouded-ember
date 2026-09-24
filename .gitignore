@@ -9,6 +9,14 @@
 /.claude/settings.local.json
 /.claude/worktrees/
 
+# Personal overrides a contributor keeps on their own machine. The gate refuses
+# each one tracked: an env file Bun loads, a registry bun install reads, and a
+# lefthook config merged over lefthook.yml.
+.env*
+.npmrc
+/lefthook-local*
+/.lefthook-local*
+
 # Recovered artifacts, never committed. The template below covers *.pdb.
 *.BinExport
 *.gzf

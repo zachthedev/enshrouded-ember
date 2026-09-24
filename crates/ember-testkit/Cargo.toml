@@ -9,33 +9,8 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
-[package.metadata.cargo-machete]
-# Dependencies this crate declares and no module references yet. Listing them
-# keeps `cargo machete` quiet without dropping the declaration, and a name
-# leaves the list when code starts using it.
-ignored = [
-    "ember-enshrouded",
-    "ember-holistic",
-    "ember-sdk",
-    "getrandom",
-    "serde",
-    "serde_json",
-    "thiserror",
-    "tracing",
-]
-
 [lib]
 crate-type = ["cdylib", "rlib"]
-
-[dependencies]
-ember-enshrouded.workspace = true
-ember-holistic.workspace = true
-ember-sdk.workspace = true
-getrandom.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
 
 [lints]
 workspace = true
