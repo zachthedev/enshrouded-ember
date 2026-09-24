@@ -61,8 +61,9 @@ jobs:
       # bypasses that rule. This job's own GITHUB_TOKEN has no bypass, so a
       # push over HTTPS is refused.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # This job pushes, so the key stays in the checkout for the push.
-        with: # zizmor: ignore[artipacked]
+        # This job pushes, so the key stays in the checkout for the push, and
+        # .github/zizmor.yml waives artipacked on this step by its line.
+        with:
           ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
 
       # packageManager in package.json is the one Bun pin. The action verifies

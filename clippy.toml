@@ -1,0 +1,4 @@
+# clippy searches upward from CLIPPY_CONF_DIR, which the gate sets to this
+# directory, and reads the first clippy.toml it finds. This file stops that
+# search here, so no config above the checkout loosens a lint. Lint levels live
+# in Cargo.toml under [workspace.lints].

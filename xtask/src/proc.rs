@@ -138,7 +138,7 @@ pub fn same_executable(left: &Path, right: &Path) -> bool {
 mod platform {
     use std::os::windows::process::CommandExt;
     use std::path::{Path, PathBuf};
-    use std::process::{Child, Command, Stdio};
+    use std::process::{Child, Stdio};
 
     use anyhow::{Context, Result, bail};
 
@@ -340,7 +340,8 @@ mod platform {
         let errors = file
             .try_clone()
             .with_context(|| format!("opening a second handle on {}", log.display()))?;
-        Command::new(exe)
+        crate::spawn::command(exe)
+            .map_err(anyhow::Error::msg)?
             .args(args)
             .current_dir(working_dir)
             .stdin(Stdio::null())

@@ -29,7 +29,7 @@
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -626,7 +626,11 @@ fn spawn(program: &Path, args: &[String], working_dir: &Path, log: &Path) -> Res
     let error_path = error_log(log);
     let err = std::fs::File::create(&error_path)
         .with_context(|| format!("creating {}", error_path.display()))?;
-    Command::new(program)
+    // The Ghidra launcher is a batch file, and cmd.exe runs the bare java it
+    // names from the working directory ahead of PATH unless this is set.
+    crate::spawn::command(program)
+        .map_err(anyhow::Error::msg)?
+        .env("NoDefaultCurrentDirectoryInExePath", "1")
         .args(args)
         .current_dir(working_dir)
         .stdin(Stdio::null())

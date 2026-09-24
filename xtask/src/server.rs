@@ -19,7 +19,7 @@
 //! A pid that is alive and is something else is a stale file, deleted and named.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -123,7 +123,8 @@ fn fetch(root: &DevRoot, ui: &Ui, expected: Option<&str>) -> Result<bool> {
 
     ui.section("server fetch");
     ui.line(&format!("app {APP_ID} into {}", staging.display()));
-    let status = Command::new(&steamcmd)
+    let status = crate::spawn::command(&steamcmd)
+        .map_err(anyhow::Error::msg)?
         .args([
             "+force_install_dir".into(),
             staging.as_os_str().to_os_string(),
@@ -543,7 +544,7 @@ fn stop(root: &DevRoot, ui: &Ui, build: Option<&str>, timeout: u64, force: bool)
 /// says about a refusal reaches this process.
 fn request_stop(pid: u32, quiet: bool) -> Result<()> {
     let me = std::env::current_exe().context("finding this executable")?;
-    let mut command = Command::new(me);
+    let mut command = crate::spawn::command(&me).map_err(anyhow::Error::msg)?;
     if quiet {
         command.arg("--quiet");
     }

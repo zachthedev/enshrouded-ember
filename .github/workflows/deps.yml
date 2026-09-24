@@ -36,4 +36,4 @@ jobs:
     # resolve from this repository's environment of that name. This job runs
     # in no environment, so it cannot pass an environment secret by name.
     # inherit is the one form that reaches it.
-    secrets: inherit # zizmor: ignore[secrets-inherit]
+    secrets: inherit

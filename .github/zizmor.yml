@@ -16,3 +16,21 @@ rules:
   dependabot-cooldown:
     config:
       days: 3
+  # The build-watch jobs that commit check out with the ember-ci deploy key and
+  # push over SSH, so the key stays in the checkout for the push. Each entry is
+  # the file and line of one checkout step, so a step that moves loses its
+  # waiver and the audit reports it again.
+  artipacked:
+    ignore:
+      - build-watch.yml:144
+      - build-watch.yml:463
+      - client-build-watch.yml:63
+  # deps.yml's deps job hands its called workflow every secret. The called job
+  # names the deps environment, and a caller that runs in no environment cannot
+  # pass that environment's secret by name. The waiver takes the whole file,
+  # because the gate's zizmor row holds the control: a second pass with no
+  # config and no ignores fails unless every job passing secrets: inherit calls
+  # a workflow under zachthedev/.github/.github/workflows/.
+  secrets-inherit:
+    ignore:
+      - deps.yml

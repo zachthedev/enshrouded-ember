@@ -16,23 +16,33 @@ mod image;
 mod kfc;
 mod loca;
 pub mod pins;
-#[allow(
-    unsafe_code,
-    reason = "Win32 process control for the development server"
+#[cfg_attr(
+    windows,
+    expect(
+        unsafe_code,
+        reason = "Win32 process control for the development server"
+    )
 )]
 mod proc;
+mod proof;
 mod root;
+mod runner;
 mod schema;
-#[allow(
-    unsafe_code,
-    reason = "the Win32 random source, for the server password"
+#[cfg_attr(
+    windows,
+    expect(
+        unsafe_code,
+        reason = "the Win32 random source, for the server password"
+    )
 )]
 mod server;
+mod shellcheck;
 mod sig;
 mod spawn;
 mod steam;
 #[cfg(test)]
 mod testutil;
+mod tree;
 mod ui;
 
 use std::path::{Path, PathBuf};
@@ -138,7 +148,8 @@ struct GlobalArgs {
     /// workspace root.
     #[arg(long, global = true, value_name = "PATH")]
     root: Option<PathBuf>,
-    /// Print only failures, and emit no color.
+    /// Print only failures, and emit no color. `check` and `pins` print their
+    /// rows either way.
     #[arg(long, global = true)]
     quiet: bool,
 }
@@ -155,8 +166,8 @@ enum Command {
         #[arg(long)]
         rows: bool,
     },
-    /// Hold both mise pin files and their lockfiles to their rules, which the gate
-    /// does first.
+    /// Hold both mise pin files, their lockfiles and the configs the gate's
+    /// tools read to their rules, which the gate does first.
     Pins,
     /// Fetch, seed, launch, tail and stop a dedicated server build.
     #[command(subcommand)]
@@ -170,6 +181,14 @@ enum Command {
     /// Write a client build's localization tables out, for looking up tag ids.
     #[command(subcommand)]
     Loca(LocaCommand),
+    /// Stand in for `ShellCheck` under actionlint, which the gate's actionlint
+    /// row names.
+    #[command(name = shellcheck::SUBCOMMAND, hide = true)]
+    ShellcheckStandIn {
+        /// The `ShellCheck` path, then the arguments actionlint passes.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -381,6 +400,10 @@ fn workspace_root() -> PathBuf {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // The stand-in passes ShellCheck's own exit code through to actionlint.
+    if let Command::ShellcheckStandIn { args } = &cli.command {
+        return shellcheck::stand_in(args);
+    }
     let ui = ui::Ui::new(cli.global.quiet);
     match run(&cli, &ui) {
         Ok(true) => ExitCode::SUCCESS,
@@ -405,6 +428,13 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
     {
         return proc::send_break(*pid).map(|()| true);
     }
+    // The gate reads the tree and starts every tool from the repository root,
+    // whichever directory it was started in.
+    if matches!(cli.command, Command::Check { .. } | Command::Pins) {
+        std::env::set_current_dir(workspace_root()).context("entering the repository root")?;
+    }
+    let runner = runner::Processes;
+    let mut out = std::io::stdout();
     match &cli.command {
         Command::Scopes => {
             for Scope { scope, covers } in scopes()? {
@@ -419,17 +449,14 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
             Ok(true)
         }
         Command::Check { rows: true } => {
-            check::rows(ui);
+            check::Gate::new(check::STEPS, &runner).rows(&mut out)?;
             Ok(true)
         }
-        Command::Check { rows: false } => check::run(ui),
-        Command::Pins => {
-            let problems = check::pin_problems(&workspace_root());
-            for problem in &problems {
-                ui.line(problem);
-            }
-            Ok(problems.is_empty())
+        Command::Check { rows: false } => {
+            let rows = check::Gate::new(check::STEPS, &runner).run(&mut out)?;
+            Ok(rows.iter().all(check::Row::passed))
         }
+        Command::Pins => Ok(!check::Gate::new(check::STEPS, &runner).pins(&mut out)?),
         Command::Server(command) => {
             let root = root::DevRoot::resolve(cli.global.root.as_deref())?;
             server::run(command, &root, ui)
@@ -446,6 +473,7 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
             let root = root::DevRoot::resolve(cli.global.root.as_deref())?;
             loca::run(command, &root, ui)
         }
+        Command::ShellcheckStandIn { args } => Ok(shellcheck::stand_in(args) == ExitCode::SUCCESS),
     }
 }
 

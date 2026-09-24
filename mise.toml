@@ -73,6 +73,12 @@ lockfile_platforms = ["linux-x64", "macos-arm64", "windows-x64"]
 # check required.
 locked_verify_provenance = true
 
+# mise checks a github-backend tool's GitHub artifact attestations at install,
+# and the setting below does the same for an aqua tool. Both default on, and
+# naming them here keeps a changed default from turning either check off under
+# this repository.
+github_attestations = true
+
 # An attestation lookup that fails is a refusal, not a pass. Without this, an
 # API outage installs an attested tool as if it carried no attestation.
 provenance_api_failures_fatal = true
@@ -84,3 +90,6 @@ provenance_api_failures_fatal = true
 # mise.local.toml can lift a setting made here, so every workflow install also
 # carries the map in MISE_URL_REPLACEMENTS, which no config file overrides.
 url_replacements = { 'regex:^https://api\.github\.com/repos/[^/]+/[^/]+/releases/assets/.*$' = "https://url-api-refused.invalid/" }
+
+[settings.aqua]
+github_attestations = true
