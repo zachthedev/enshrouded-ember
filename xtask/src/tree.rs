@@ -151,26 +151,55 @@ const GIT_ENV: &[(&str, &str)] = &[
 ///
 /// # Errors
 ///
-/// Returns the sentence the pins row carries when git cannot list the tree.
+/// Returns the sentence the pins row carries when git cannot list the tree, or
+/// when the work tree git lists is not `root`.
 pub fn listing(root: &Path) -> Result<Listing, String> {
-    let tracked = git_files(root, &[])?;
-    let untracked = git_files(root, &["--others"])?;
+    listing_by(root, &|args| git(root, args))
+}
+
+/// [`listing`] with `git` answering each git call under `root`.
+fn listing_by(
+    root: &Path,
+    git: &dyn Fn(&[&str]) -> Result<String, String>,
+) -> Result<Listing, String> {
+    let top = git(&["rev-parse", "--show-toplevel"])?;
+    if let Some(finding) = work_tree_finding(top.trim_end_matches(['\r', '\n']), root) {
+        return Err(finding);
+    }
+    let tracked = paths(&git(&["ls-files", "-z"])?);
+    let mut others = vec!["ls-files", "-z", "--others"];
+    others.extend(UNTRACKED_EXCLUDES);
+    let untracked = paths(&git(&others)?);
     Ok(Listing { tracked, untracked })
 }
 
-/// The paths one `git ls-files -z` call lists under `root`.
-fn git_files(root: &Path, args: &[&str]) -> Result<Vec<String>, String> {
+/// Why the listing is refused, when `top`, the work tree `git rev-parse
+/// --show-toplevel` names from `root`, is not `root` itself.
+///
+/// A `.git` that holds no repository, an empty directory among them, sends git
+/// up to the repository above, and a `core.worktree` setting points it at
+/// another directory. git then lists that work tree's files without a word.
+/// Both paths are compared resolved, so no spelling of either decides it.
+fn work_tree_finding(top: &str, root: &Path) -> Option<String> {
+    let same = match (std::fs::canonicalize(top), std::fs::canonicalize(root)) {
+        (Ok(top), Ok(root)) => top == root,
+        _ => false,
+    };
+    (!same).then(|| {
+        format!(
+            "git names the work tree {top:?}, which is not the root, so the tree rules would read another directory's files. The root's .git holds no repository git can open, or its config points the work tree elsewhere"
+        )
+    })
+}
+
+/// What one git call under `root` printed, with an empty environment.
+fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     let git = crate::spawn::resolve("git")?;
     let mut command = crate::spawn::command(&git)?;
     command.env_clear().envs(GIT_ENV.iter().copied());
-    command
-        .current_dir(root)
-        .args(["ls-files", "-z"])
-        .args(args);
-    if !args.is_empty() {
-        command.args(UNTRACKED_EXCLUDES);
-    }
     let output = command
+        .current_dir(root)
+        .args(args)
         .stdin(Stdio::null())
         .output()
         .map_err(|err| format!("git could not list the files the gate refuses: {err}"))?;
@@ -180,12 +209,13 @@ fn git_files(root: &Path, args: &[&str]) -> Result<Vec<String>, String> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let listed: BTreeSet<String> = String::from_utf8_lossy(&output.stdout)
-        .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(str::to_string)
-        .collect();
-    Ok(listed.into_iter().collect())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The paths a `git ls-files -z` call printed, once each and in order.
+fn paths(listed: &str) -> Vec<String> {
+    let listed: BTreeSet<&str> = listed.split('\0').filter(|path| !path.is_empty()).collect();
+    listed.into_iter().map(str::to_string).collect()
 }
 
 // ///////////////////////////////////////////////
@@ -1369,11 +1399,13 @@ pub(crate) fn sound_files() -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
 
     use super::{
-        Listing, findings, fold, has_extension, hidden, parse_json, path_matches, printable,
-        sound_files,
+        Listing, findings, fold, has_extension, hidden, listing_by, parse_json, path_matches,
+        printable, sound_files, work_tree_finding,
     };
 
     /// A repository with no TypeScript project config.
@@ -1751,6 +1783,85 @@ mod tests {
             ],
             "a named base is read along the chain"
         );
+    }
+
+    /// A root and the directory above it, on disk, for the work tree cases.
+    fn nested() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let root = dir.path().join("child");
+        std::fs::create_dir(&root).expect("the root directory");
+        (dir, root)
+    }
+
+    /// `path` as git prints it, with `/` separators.
+    fn slashed(path: &Path) -> String {
+        path.display().to_string().replace('\\', "/")
+    }
+
+    /// A work tree git names other than the root is refused, whatever the
+    /// spelling, and the root itself passes in either spelling.
+    #[test]
+    fn a_work_tree_other_than_the_root_is_refused() {
+        let (dir, root) = nested();
+        let above = slashed(dir.path());
+        let refused = |top: &str| {
+            format!(
+                "git names the work tree {top:?}, which is not the root, so the tree rules would read another directory's files. The root's .git holds no repository git can open, or its config points the work tree elsewhere"
+            )
+        };
+        let missing = slashed(&dir.path().join("elsewhere"));
+        for (what, top, wanted) in [
+            ("the root, as git prints it", slashed(&root), None),
+            (
+                "the root, spelled natively",
+                root.display().to_string(),
+                None,
+            ),
+            ("the repository above", above.clone(), Some(refused(&above))),
+            (
+                "the root, reached through its parent",
+                format!("{above}/child/../child"),
+                None,
+            ),
+            (
+                "a work tree that is not there",
+                missing.clone(),
+                Some(refused(&missing)),
+            ),
+        ] {
+            assert_eq!(work_tree_finding(&top, &root), wanted, "{what}");
+        }
+    }
+
+    /// The listing asks git for its work tree first, and lists nothing when
+    /// the answer is not the root.
+    #[test]
+    fn the_listing_stops_before_git_lists_another_work_tree() {
+        let (dir, root) = nested();
+        for (what, top, refused) in [
+            ("the repository above", slashed(dir.path()), true),
+            ("the root", slashed(&root), false),
+        ] {
+            let asked = RefCell::new(Vec::new());
+            let git = |args: &[&str]| {
+                asked.borrow_mut().push(args.join(" "));
+                Ok(if args[0] == "rev-parse" {
+                    format!("{top}\n")
+                } else {
+                    "b.rs\0a.rs\0".to_string()
+                })
+            };
+            let listed = listing_by(&root, &git);
+            let asked = asked.into_inner();
+            if refused {
+                assert!(listed.is_err(), "{what}: {listed:?}");
+                assert_eq!(asked, ["rev-parse --show-toplevel"], "{what}");
+            } else {
+                let listed = listed.expect("the root lists");
+                assert_eq!(listed.tracked, ["a.rs", "b.rs"], "{what}");
+                assert_eq!(asked.len(), 3, "{what}: {asked:?}");
+            }
+        }
     }
 
     /// A tracked `package.json` carrying a config key a program reads is
