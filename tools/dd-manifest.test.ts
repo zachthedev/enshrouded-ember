@@ -403,14 +403,14 @@ describe('readDdManifest', () => {
 
   test('a manifest that is not there is refused, naming it', async () => {
     const path = join(await sandbox(), 'absent.manifest');
-    expect(readDdManifest(path)).rejects.toThrow(`${path} is not there`);
+    await expect(readDdManifest(path)).rejects.toThrow(`${path} is not there`);
   });
 
   test('a manifest with no checksum beside it is refused, naming it', async () => {
     const dir = await sandbox();
     const path = join(dir, `${DEPOT}_${GID}.manifest`);
     await Bun.write(path, manifest());
-    expect(readDdManifest(path)).rejects.toThrow(`${path}.sha is not there`);
+    await expect(readDdManifest(path)).rejects.toThrow(`${path}.sha is not there`);
   });
 
   /**
@@ -425,8 +425,8 @@ describe('readDdManifest', () => {
     bent[bent.length - 5] = (bent[bent.length - 5] as number) ^ 0xff;
     await Bun.write(path, bent);
     const failure = readDdManifest(path);
-    expect(failure).rejects.toThrow(DdManifestError);
-    expect(failure).rejects.toThrow(/hashes to [0-9a-f]{40}, and .*\.sha says/);
+    await expect(failure).rejects.toThrow(DdManifestError);
+    await expect(failure).rejects.toThrow(/hashes to [0-9a-f]{40}, and .*\.sha says/);
   });
 
   test('a checksum that is not a raw SHA-1 is refused, naming its length', async () => {
@@ -434,7 +434,7 @@ describe('readDdManifest', () => {
     const path = await writeManifest(dir, manifest(), {
       checksum: new Uint8Array(4),
     });
-    expect(readDdManifest(path)).rejects.toThrow(`${path}.sha holds 4 bytes, and a raw SHA-1 is 20`);
+    await expect(readDdManifest(path)).rejects.toThrow(`${path}.sha holds 4 bytes, and a raw SHA-1 is 20`);
   });
 });
 
