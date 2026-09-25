@@ -224,6 +224,12 @@ pub trait Runner {
         Path::new(relative).exists()
     }
 
+    /// Whether `relative` resolves to a regular file. A link counts as the
+    /// entry it names, so a dangling link or a directory answers no.
+    fn is_file(&self, relative: &str) -> bool {
+        Path::new(relative).is_file()
+    }
+
     /// The repository root, as a row compares a path a tool printed against
     /// it.
     fn root(&self) -> PathBuf {
@@ -382,9 +388,44 @@ fn scrub_inherited(command: &mut Command, inherited: impl Iterator<Item = OsStri
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};
+    use std::path::Path;
     use std::process::Command;
 
-    use super::{CRATE_ENV, scrub, scrub_inherited};
+    use super::{CRATE_ENV, Processes, Runner, scrub, scrub_inherited};
+
+    /// Link `link` to the file `target`, which need not exist.
+    fn link_file(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).expect("a link");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(target, link).expect("a link");
+    }
+
+    /// Only a regular file counts as a file, reached directly or through a
+    /// link. A directory, a dangling link and a missing path do not.
+    #[test]
+    fn only_a_regular_file_counts_as_a_file() {
+        let root = tempfile::tempdir().expect("a temporary directory");
+        let file = root.path().join("tool.exe");
+        std::fs::write(&file, "").expect("a file");
+        let directory = root.path().join("directory.exe");
+        std::fs::create_dir(&directory).expect("a directory");
+        let linked = root.path().join("linked.exe");
+        link_file(&file, &linked);
+        let dangling = root.path().join("dangling.exe");
+        link_file(&root.path().join("removed.exe"), &dangling);
+        let missing = root.path().join("missing.exe");
+        for (what, path, wanted) in [
+            ("a regular file", &file, true),
+            ("a link to a regular file", &linked, true),
+            ("a directory", &directory, false),
+            ("a dangling link", &dangling, false),
+            ("a missing path", &missing, false),
+        ] {
+            let path = path.to_str().expect("a unicode path");
+            assert_eq!(Processes.is_file(path), wanted, "{what}");
+        }
+    }
 
     /// `cargo-machete` reads `CARGO_PKG_NAME`, and inheriting it makes the tool
     /// scan a directory named after its own subcommand.

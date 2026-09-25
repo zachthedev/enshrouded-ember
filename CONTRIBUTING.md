@@ -2,11 +2,16 @@
 
 ## Setup
 
-Install the hooks before the first commit:
+Install the packages and the hooks before the first commit:
 
 ```sh
-bun install
+bun install --frozen-lockfile
 ```
+
+In a linked worktree, run `bun install --frozen-lockfile --ignore-scripts`
+instead. The hooks sit in the `.git/hooks` every worktree shares and name the
+installing checkout's `node_modules`, so a worktree's install skips the
+`prepare` script that rewrites them.
 
 `lefthook.yml` holds them: `commit-msg` runs commitlint, and `pre-push` runs
 the gate. [lefthook](https://lefthook.dev) installs them into `.git/hooks` when
@@ -58,8 +63,8 @@ upward from the root, where the committed `clippy.toml` stops it, and a root
 `.clippy.toml`, which would win beside it, is refused. A program that
 finds its config by name with no flag naming one has every other name refused:
 a second lefthook config, an actionlint config, a nested `.cargo/config` or
-toolchain file, and a root `.config` directory, which commitlint's cosmiconfig
-reads even under `--config`. `tree.rs` lists every name.
+toolchain file, and a root `.config` directory or `package.yaml`, which
+commitlint's cosmiconfig reads even under `--config`. `tree.rs` lists every name.
 Such a file is refused on disk, tracked or not, so a local run agrees with
 continuous integration. A personal file, such as an env file Bun loads or a
 `lefthook-local` config, is refused only when tracked, and `.gitignore` lists
@@ -72,22 +77,26 @@ What a config holds is for a reviewer to judge, and CODEOWNERS sends every
 change to one to a code owner. The rules refuse only a key that runs or
 redirects code from a file that reads as data:
 
-- `bunfig.toml` holds `[install] minimumReleaseAge`, and nothing else.
 - `.cargo/config.toml` holds the `xtask` alias, and nothing else.
 - No `package.json` carries a `cosmiconfig` key, which commitlint's cosmiconfig
   reads even under `--config`.
 - `rust-toolchain.toml` names a channel and its components, and nothing else.
-- No TypeScript project config sets `paths`, `baseUrl` or `noCheck`, and
-  one the gate does not name is refused.
+- No TypeScript project config sets `noCheck`, and one the gate does not name
+  is refused.
+- No tracked `package.json` or named TypeScript project config repeats a key
+  within one object, since Bun keeps the first and a JSON parser the last.
+
+The shared `commits` job refuses the data files that run code before a merge,
+reading the committed tree, and the gate does not repeat them: a
+`patchedDependencies` key, a `bunfig.toml` key beyond
+`[install] minimumReleaseAge`, and TypeScript `paths` or `baseUrl`.
 
 Every JavaScript tool a row or a hook starts runs through
 `bunx --bun --no-install`, which fetches nothing. bunx runs a copy from a
 parent directory or `PATH` when the checkout holds none, so a row first checks
-that `node_modules/.bin` holds its tool. Every Bun the gate starts itself, a script
+that `node_modules/.bin` holds its tool as a regular file. Every Bun the gate starts itself, a script
 it evaluates or `bun test`, carries `--no-env-file`. bunx passes that flag to
-no tool it starts, so an untracked env file reaches those. The opening row also refuses a
-`package.json` carrying `patchedDependencies`, since a patch changes an
-installed package away from the release `bun.lock` pins. No child gets
+no tool it starts, so an untracked env file reaches those. No child gets
 `BUN_OPTIONS`, which Bun reads into every process as flags, a preload or a test
 filter among them.
 
@@ -145,10 +154,10 @@ action and a version comment naming the wrong tag, and they run in CI's shared
 `workflows` job on every pull request. `--config` names `.github/zizmor.yml`, which holds the hash-pin
 policy, the Dependabot cooldown threshold and every waiver, so the environment
 cannot swap it for another. The opening row refuses an inline `zizmor: ignore`
-comment under `.github`, so nothing waives an audit outside that file. A second
-pass with no config and no ignores fails unless every job passing `secrets:
-inherit` calls a workflow under `zachthedev/.github/.github/workflows/`. That
-hold is what lets `zizmor.yml` waive the audit by file.
+comment under `.github`, so nothing waives an audit outside that file. The
+shared `workflows` job fails unless every job passing `secrets: inherit` calls
+a workflow under `zachthedev/.github/.github/workflows/`. That hold is what
+lets `zizmor.yml` waive the audit by file.
 
 `tests` fails when no test ran, a run that skipped every test included, and
 reads no nextest user config. No child gets a `NEXTEST_` variable, since one

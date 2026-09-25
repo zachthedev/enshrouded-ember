@@ -7,7 +7,10 @@
 //! so a local gate agrees with continuous integration. A personal file is
 //! refused only when tracked, and `.gitignore` lists it. What a config holds is
 //! CODEOWNERS' to review, so the rules here refuse only a key that runs or
-//! redirects code from a file that reads as data.
+//! redirects code from a file that reads as data. The shared `commits` job
+//! refuses a `patchedDependencies` key, a `bunfig.toml` key and TypeScript
+//! `paths` before a merge, reading the committed tree, and the rules here do
+//! not repeat them.
 //!
 //! `cargo xtask pins`, the gate's opening row, runs these rules before any
 //! tool starts. Names compare through [`fold`].
@@ -293,10 +296,6 @@ const SEARCHES: &[Search] = &[
 /// The names Bun and TypeScript read a project's options from.
 const PROJECT_CONFIG_NAMES: &[&str] = &["tsconfig.json", "jsconfig.json"];
 
-/// The compiler options that send a bare import somewhere other than
-/// `node_modules`, folded.
-const REDIRECTING_OPTIONS: &[&str] = &["paths", "baseurl"];
-
 /// The directory GitHub reads workflows from, where actionlint and zizmor read
 /// a lowercase `.yml` name alone.
 const WORKFLOWS: &str = ".github/workflows";
@@ -391,53 +390,6 @@ pub fn parse_json(text: &str) -> Result<serde_json::Value, String> {
                 .join(", ")
         ))
     }
-}
-
-// ///////////////////////////////////////////////
-// Keys that run or redirect code
-// ///////////////////////////////////////////////
-
-/// Every key `bunfig.toml` carries beyond `[install] minimumReleaseAge`.
-///
-/// Bun reads the file on every `bun <file>`, `bun run`, `bunx` and `bun test`
-/// started in the checkout, and no flag turns that off. A top-level `preload`
-/// runs a module before any script, a `[test]` preload runs one before every
-/// test, a `[define]` table rewrites values in the code Bun runs, and an
-/// `[install]` registry changes where every package comes from. The file is
-/// committed because Renovate's lock file maintenance runs `bun install` in a
-/// container with no user-level config, and the cooldown it sets is a
-/// reviewer's to judge.
-fn bunfig_findings(read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
-    const PATH: &str = "bunfig.toml";
-    let Some(text) = read(PATH) else {
-        return Vec::new();
-    };
-    let table: toml::Table = match toml::from_str(&text) {
-        Ok(table) => table,
-        Err(err) => {
-            return vec![format!(
-                "{PATH} does not parse: {}",
-                one_line(&err.to_string())
-            )];
-        }
-    };
-    let mut found = Vec::new();
-    for key in table.keys().filter(|key| *key != "install") {
-        found.push(format!(
-            "{PATH} carries {key:?}, and Bun applies it before any script it starts. It holds [install] minimumReleaseAge alone"
-        ));
-    }
-    let install = table.get("install").and_then(toml::Value::as_table);
-    for key in install
-        .into_iter()
-        .flat_map(toml::Table::keys)
-        .filter(|key| *key != "minimumReleaseAge")
-    {
-        found.push(format!(
-            "{PATH} [install] carries {key:?}, and it holds minimumReleaseAge alone. A registry or scope there changes where every package comes from"
-        ));
-    }
-    found
 }
 
 // ///////////////////////////////////////////////
@@ -891,7 +843,6 @@ pub fn findings(
 ) -> Vec<String> {
     let mut found = listing_findings(listing, project_configs, read);
     found.extend(root_findings(root_names));
-    found.extend(bunfig_findings(read));
     found.extend(toolchain_findings(read));
     found.extend(cargo_config_findings(read));
     found.extend(workspace_lint_findings(read));
@@ -899,9 +850,12 @@ pub fn findings(
 }
 
 /// Every finding against the listed paths: a config a program reads in place
-/// of the one the gate names, a project config, a `package.json` config key, a
-/// tracked path under `node_modules`, and a tracked file outside what the rows
-/// read.
+/// of the one the gate names, a project config, a `package.json` that runs
+/// code or reads two ways, a tracked path under `node_modules`, and a tracked
+/// file outside what the rows read.
+///
+/// A path under `node_modules` compares folded, so a name NTFS or APFS could
+/// open as `node_modules` counts as one.
 fn listing_findings(
     listing: &Listing,
     project_configs: &[&str],
@@ -948,7 +902,7 @@ fn listing_findings(
         }
         if is_tracked {
             if base == "package.json" {
-                found.extend(package_key_findings(path, read));
+                found.extend(package_json_findings(path, read));
             }
             if base == "cargo.toml" {
                 found.extend(machete_findings(path, read));
@@ -998,18 +952,15 @@ fn project_config_findings(
             "{path:?} is a TypeScript project config the gate does not name, and tsc reads the nearest one to each file while Bun applies its paths and baseUrl to every import below it. Name it in PROJECT_CONFIGS in xtask/src/check.rs, or remove it"
         )];
     }
-    redirect_findings(path, path, project_configs, read, &mut BTreeSet::new())
+    extends_findings(path, path, project_configs, read, &mut BTreeSet::new())
 }
 
-/// Every way the named project config `file`, reached from `config`, sets an
-/// option in [`REDIRECTING_OPTIONS`] or extends a config the gate does not name.
+/// Every way the named project config `file`, reached from `config`, turns
+/// tsc's checking off or extends a config the gate does not name.
 ///
-/// Bun applies `paths` and `baseUrl` to every import in the directory below the
-/// config, `node_modules` code included, so a bare package name a tool Bun
-/// runs imports would resolve to repository code. `extends` is one
-/// path or a list, and every entry must be a named config, so no base file the
-/// rule never reads can carry an option the named one lacks.
-fn redirect_findings(
+/// `extends` is one path or a list, and every entry must be a named config, so
+/// no base file the rule never reads can carry an option the named one lacks.
+fn extends_findings(
     config: &str,
     file: &str,
     project_configs: &[&str],
@@ -1037,23 +988,13 @@ fn redirect_findings(
     if let Some(options) = parsed
         .get("compilerOptions")
         .and_then(serde_json::Value::as_object)
-    {
-        for key in options
-            .keys()
-            .filter(|key| REDIRECTING_OPTIONS.contains(&fold(key).as_str()))
-        {
-            found.push(format!(
-                "{shown} sets compilerOptions.{key}, and Bun applies it to every import below it, node_modules code included, so a bare package name can resolve to repository code. Alias through package.json imports (# names)"
-            ));
-        }
-        if options
+        && options
             .iter()
             .any(|(key, value)| fold(key) == "nocheck" && value.as_bool() == Some(true))
-        {
-            found.push(format!(
-                "{shown} sets compilerOptions.noCheck, and tsc then reports no type error while it still lists every file, so the typecheck row passes unchecked. Remove it"
-            ));
-        }
+    {
+        found.push(format!(
+            "{shown} sets compilerOptions.noCheck, and tsc then reports no type error while it still lists every file, so the typecheck row passes unchecked. Remove it"
+        ));
     }
     if let Some(extended) = parsed.get("extends") {
         let targets: Vec<&serde_json::Value> = match extended {
@@ -1063,7 +1004,7 @@ fn redirect_findings(
         for target in targets {
             match extended_config(file, target) {
                 Some(next) if project_configs.contains(&next.as_str()) => {
-                    found.extend(redirect_findings(config, &next, project_configs, read, seen));
+                    found.extend(extends_findings(config, &next, project_configs, read, seen));
                 }
                 _ => found.push(format!(
                     "{shown} extends {target}, and every config a named one extends must itself be named in PROJECT_CONFIGS"
@@ -1100,40 +1041,37 @@ fn extended_config(from: &str, target: &serde_json::Value) -> Option<String> {
     })
 }
 
-/// Every key the tracked `package.json` at `path` carries that runs code from
-/// a file that reads as data.
+/// Every way the tracked `package.json` at `path` runs code or reads two
+/// ways.
 ///
-/// commitlint's cosmiconfig reads its own search settings from a `cosmiconfig`
-/// key even under `--config`, and they can name a module it loads.
-fn package_key_findings(path: &str, read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
-    let parsed = match read(path).map(|text| parse_json(&text)) {
-        Some(Ok(parsed)) => parsed,
-        Some(Err(why)) => {
-            return vec![format!(
-                "{path:?} is not JSON the gate reads one way, so the keys the gate refuses in it are unknown: {why}"
-            )];
-        }
-        None => return Vec::new(),
-    };
-    parsed
-        .get("cosmiconfig")
-        .map(|_| {
-            format!(
-                "{path:?} carries a cosmiconfig key, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it"
-            )
-        })
-        .into_iter()
-        .chain(parsed.get("patchedDependencies").map(|_| {
-            format!(
-                "{path:?} carries a patchedDependencies key, and bun install rewrites each package it names with a patch, so what runs is not the release bun.lock pins. Remove it"
-            )
-        }))
-        .collect()
+/// commitlint's cosmiconfig reads its own settings from a `cosmiconfig` key
+/// before it looks at `--config`, and a `$import` there loads a module. Bun
+/// keeps the first of two equal keys where a JSON parser keeps the last, so a
+/// check that reads the file as JSON can pass a key Bun applies.
+fn package_json_findings(path: &str, read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+    match read(path).map(|text| parse_json(&text)) {
+        Some(Ok(parsed)) => parsed
+            .get("cosmiconfig")
+            .map(|_| {
+                format!(
+                    "{path:?} carries a cosmiconfig key, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it"
+                )
+            })
+            .into_iter()
+            .collect(),
+        Some(Err(why)) => vec![format!(
+            "{path:?} is not plain JSON every reader reads one way: {why}"
+        )],
+        None => Vec::new(),
+    }
 }
 
 /// Every way the tracked file at `path` falls outside what the rows read: a
 /// workflow not named `.github/workflows/<name>.yml` exactly, and an inline
 /// zizmor waiver under `.github`.
+///
+/// The waiver scan reads the bytes, so no `.gitattributes` entry marking the
+/// file binary hides a waiver from it.
 fn scope_findings(
     path: &str,
     segments: &[String],
@@ -1164,15 +1102,20 @@ fn scope_findings(
     found
 }
 
-/// Every root entry the gate refuses: a `.config` in any case.
+/// Every root entry the gate refuses, in any case: a `.config`, and a
+/// `package.yaml`, which cosmiconfig searches for its own settings beside
+/// `package.json`.
 fn root_findings(root_names: &[String]) -> Vec<String> {
     root_names
         .iter()
-        .filter(|name| fold(name) == ".config")
-        .map(|name| {
-            format!(
+        .filter_map(|name| match fold(name).as_str() {
+            ".config" => Some(format!(
                 "{name:?} is at the root, and mise, lefthook, commitlint's cosmiconfig and cargo-nextest each read a config from it that no row names. Remove it"
-            )
+            )),
+            "package.yaml" => Some(format!(
+                "{name:?} is at the root, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it"
+            )),
+            _ => None,
         })
         .collect()
 }
@@ -1321,7 +1264,6 @@ pub fn hidden(character: char) -> bool {
 #[cfg(test)]
 pub(crate) fn sound_files() -> Vec<(String, String)> {
     [
-        ("bunfig.toml", "[install]\nminimumReleaseAge = 259200\n"),
         (".prettierrc", "{ \"singleQuote\": true, \"printWidth\": 120 }"),
         (
             "rust-toolchain.toml",
@@ -1643,8 +1585,9 @@ mod tests {
         }
     }
 
-    /// A tracked path as or under `node_modules`, in any case, is one finding
-    /// naming each, and an untracked one is left to the install.
+    /// A tracked path as or under `node_modules`, in any case or folded
+    /// spelling, is one finding naming each, and no other rule reads it. An
+    /// untracked one is left to the install.
     #[test]
     fn a_tracked_node_modules_path_is_refused() {
         let reads = "tracked as or under a node_modules directory. bun install keeps what it finds there, the gate and the hooks run each JavaScript tool from it, and Bun resolves an import from the nearest node_modules first. Remove each from the index with git rm -r --cached";
@@ -1661,17 +1604,29 @@ mod tests {
                     .tracked("a/NODE_MODULES"),
                 format!("\"node_modules/.bin/prettier\", \"a/NODE_MODULES\" are {reads}"),
             ),
+            (
+                "a long s that folds to node_modules",
+                Tree::new().tracked("node_module\u{17f}/.bin/prettier"),
+                format!("\"node_module\u{17f}/.bin/prettier\" is {reads}"),
+            ),
+            (
+                "a config name under node_modules draws this finding alone",
+                Tree::new().tracked("node_modules/x/rust-toolchain"),
+                format!("\"node_modules/x/rust-toolchain\" is {reads}"),
+            ),
         ];
         finds(cases, PLAIN);
-        let untracked = Tree::new().untracked("node_modules/x/index.js");
+        let untracked = Tree::new()
+            .untracked("node_modules/x/index.js")
+            .untracked("node_modules/y/lefthook.yaml");
         assert_eq!(untracked.run(PLAIN), Vec::<String>::new());
     }
 
     /// A project config the repository does not name is refused on disk at any
-    /// depth, and a named one may not redirect an import or extend a file the
-    /// repository does not name.
+    /// depth, and a named one may not turn tsc's checking off or extend a file
+    /// the repository does not name.
     #[test]
-    fn a_project_config_is_named_and_redirects_nothing() {
+    fn a_project_config_is_named_and_keeps_checking_on() {
         let unheld = "is a TypeScript project config the gate does not name, and tsc reads the nearest one to each file while Bun applies its paths and baseUrl to every import below it. Name it in PROJECT_CONFIGS in xtask/src/check.rs, or remove it";
         finds(
             vec![
@@ -1688,17 +1643,13 @@ mod tests {
             ],
             PLAIN,
         );
-        let redirect = |key: &str| {
+        let unchecked = |shown: &str| {
             format!(
-                "\"tsconfig.json\" sets compilerOptions.{key}, and Bun applies it to every import below it, node_modules code included, so a bare package name can resolve to repository code. Alias through package.json imports (# names)"
+                "{shown} sets compilerOptions.noCheck, and tsc then reports no type error while it still lists every file, so the typecheck row passes unchecked. Remove it"
             )
         };
-        let paths = r#"{ "compilerOptions": { "strict": true, "paths": { "zod": ["./x"] } } }"#;
-        let base_url = r#"{ "compilerOptions": { "strict": true, "BaseURL": "." } }"#;
         let extends = r#"{ "extends": "./base", "compilerOptions": { "strict": true } }"#;
-        let repeated =
-            r#"{ "compilerOptions": { "strict": true }, "compilerOptions": { "strict": false } }"#;
-        // The base exists and redirects nothing, so only the rule that every
+        // The base exists and turns nothing off, so only the rule that every
         // extended config is named refuses it.
         let tree = |text: &str| {
             Tree::new()
@@ -1708,12 +1659,10 @@ mod tests {
                 .file("base", r#"{ "compilerOptions": {} }"#)
         };
         for (label, text, wanted) in [
-            ("paths", paths, redirect("paths")),
-            ("baseUrl in another case", base_url, redirect("BaseURL")),
             (
                 "noCheck",
                 r#"{ "compilerOptions": { "noCheck": true } }"#,
-                "\"tsconfig.json\" sets compilerOptions.noCheck, and tsc then reports no type error while it still lists every file, so the typecheck row passes unchecked. Remove it".to_string(),
+                unchecked("\"tsconfig.json\""),
             ),
             (
                 "an unnamed base",
@@ -1722,23 +1671,29 @@ mod tests {
             ),
             (
                 "a repeated key",
-                repeated,
+                r#"{ "compilerOptions": { "strict": true }, "compilerOptions": { "strict": false } }"#,
                 "\"tsconfig.json\" is not plain JSON the gate reads one way: it repeats \"compilerOptions\" within one object, and Bun reads the first where a JSON parser reads the last".to_string(),
             ),
         ] {
             assert_eq!(tree(text).run(TYPED), vec![wanted], "{label}");
         }
+        let broken = tree("{ \"compilerOptions\": ").run(TYPED);
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(
+            broken[0].starts_with(
+                "\"tsconfig.json\" is not plain JSON the gate reads one way: it does not parse: "
+            ),
+            "{broken:?}"
+        );
         let named_base = Tree::new()
             .tracked("tsconfig.json")
             .tracked("base.json")
             .file("tsconfig.json", extends)
-            .file("base.json", r#"{ "compilerOptions": { "paths": {} } }"#)
+            .file("base.json", r#"{ "compilerOptions": { "noCheck": true } }"#)
             .run(&["tsconfig.json", "base.json"]);
         assert_eq!(
             named_base,
-            vec![
-                "\"tsconfig.json\", through \"base.json\", sets compilerOptions.paths, and Bun applies it to every import below it, node_modules code included, so a bare package name can resolve to repository code. Alias through package.json imports (# names)".to_string(),
-            ],
+            vec![unchecked("\"tsconfig.json\", through \"base.json\",")],
             "a named base is read along the chain"
         );
     }
@@ -1822,28 +1777,70 @@ mod tests {
         }
     }
 
-    /// A tracked `package.json` carrying a config key a program reads is
-    /// refused, and so is one read two ways.
+    /// A tracked `package.json` that runs code or does not read one way is
+    /// refused: a `cosmiconfig` key, a key repeated within one object at any
+    /// depth, or text that does not parse. An untracked one is the install's.
     #[test]
-    fn a_package_json_config_key_is_refused() {
+    fn a_package_json_that_runs_code_or_reads_two_ways_is_refused() {
+        let two_ways = "is not plain JSON every reader reads one way: it repeats";
+        let cosmiconfig = "carries a cosmiconfig key, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it";
         let cases = vec![
             (
-                "a nested cosmiconfig key",
-                Tree::new().tracked("a/package.json").file("a/package.json", r#"{ "cosmiconfig": {} }"#),
-                "\"a/package.json\" carries a cosmiconfig key, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it".to_string(),
+                "a cosmiconfig key",
+                Tree::new().tracked("package.json").file(
+                    "package.json",
+                    r#"{ "cosmiconfig": { "$import": ["./probe.mjs"] } }"#,
+                ),
+                format!("\"package.json\" {cosmiconfig}"),
             ),
             (
-                "patched dependencies",
-                Tree::new().tracked("tools/package.json").file("tools/package.json", r#"{ "patchedDependencies": { "prettier@3.9.8": "patches/p.patch" } }"#),
-                "\"tools/package.json\" carries a patchedDependencies key, and bun install rewrites each package it names with a patch, so what runs is not the release bun.lock pins. Remove it".to_string(),
+                "a nested cosmiconfig key",
+                Tree::new()
+                    .tracked("a/package.json")
+                    .file("a/package.json", r#"{ "cosmiconfig": {} }"#),
+                format!("\"a/package.json\" {cosmiconfig}"),
             ),
             (
                 "a repeated key",
-                Tree::new().tracked("package.json").file("package.json", r#"{ "name": "a", "name": "b" }"#),
-                "\"package.json\" is not JSON the gate reads one way, so the keys the gate refuses in it are unknown: it repeats \"name\" within one object, and Bun reads the first where a JSON parser reads the last".to_string(),
+                Tree::new()
+                    .tracked("package.json")
+                    .file("package.json", r#"{ "name": "a", "name": "b" }"#),
+                format!("\"package.json\" {two_ways} \"name\" within one object, and Bun reads the first where a JSON parser reads the last"),
+            ),
+            (
+                "a nested package repeating a key the shared job refuses",
+                Tree::new().tracked("tools/package.json").file(
+                    "tools/package.json",
+                    r#"{ "patchedDependencies": { "a@1.0.0": "p.patch" }, "patchedDependencies": {} }"#,
+                ),
+                format!("\"tools/package.json\" {two_ways} \"patchedDependencies\" within one object, and Bun reads the first where a JSON parser reads the last"),
             ),
         ];
         finds(cases, PLAIN);
+        let broken = Tree::new()
+            .tracked("package.json")
+            .file("package.json", "{ \"name\": ")
+            .run(PLAIN);
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(
+            broken[0].starts_with(
+                "\"package.json\" is not plain JSON every reader reads one way: it does not parse: "
+            ),
+            "{broken:?}"
+        );
+        let untracked = Tree::new()
+            .untracked("package.json")
+            .file("package.json", r#"{ "name": "a", "name": "b" }"#);
+        assert_eq!(untracked.run(PLAIN), Vec::<String>::new());
+        let plain = Tree::new().tracked("package.json").file(
+            "package.json",
+            r#"{ "name": "a", "x": { "cosmiconfig": 1 } }"#,
+        );
+        assert_eq!(
+            plain.run(PLAIN),
+            Vec::<String>::new(),
+            "a cosmiconfig key below the top level is no setting cosmiconfig reads"
+        );
     }
 
     /// A tracked file outside what the rows read is refused: a workflow named
@@ -1862,20 +1859,6 @@ mod tests {
         };
         let ci = ".github/workflows/ci.yml";
         let cases = vec![
-            (
-                "a workflow in capitals",
-                Tree::new()
-                    .tracked(".github/workflows/ci.YML")
-                    .file(".github/workflows/ci.YML", "on: push\n"),
-                workflow(".github/workflows/ci.YML"),
-            ),
-            (
-                "a .yaml workflow",
-                Tree::new()
-                    .tracked(".github/workflows/ci.yaml")
-                    .file(".github/workflows/ci.yaml", "on: push\n"),
-                workflow(".github/workflows/ci.yaml"),
-            ),
             (
                 "an inline waiver",
                 Tree::new().tracked(ci).file(
@@ -1899,6 +1882,20 @@ mod tests {
                 ),
                 waiver(".github/dependabot.yml"),
             ),
+            (
+                "a workflow in capitals",
+                Tree::new()
+                    .tracked(".github/workflows/ci.YML")
+                    .file(".github/workflows/ci.YML", "on: push\n"),
+                workflow(".github/workflows/ci.YML"),
+            ),
+            (
+                "a .yaml workflow",
+                Tree::new()
+                    .tracked(".github/workflows/ci.yaml")
+                    .file(".github/workflows/ci.yaml", "on: push\n"),
+                workflow(".github/workflows/ci.yaml"),
+            ),
         ];
         finds(cases, PLAIN);
         let elsewhere = Tree::new()
@@ -1910,10 +1907,11 @@ mod tests {
         assert_eq!(elsewhere.run(PLAIN), Vec::<String>::new());
     }
 
-    /// A root `.config`, in any case, is refused whole.
+    /// A root `.config` or `package.yaml`, in any case, is refused whole.
     #[test]
-    fn a_root_config_directory_is_refused() {
+    fn a_root_config_directory_or_package_yaml_is_refused() {
         let reads = "is at the root, and mise, lefthook, commitlint's cosmiconfig and cargo-nextest each read a config from it that no row names. Remove it";
+        let yaml = "is at the root, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it";
         let cases = vec![
             (
                 "lower case",
@@ -1925,9 +1923,25 @@ mod tests {
                 Tree::new().root(".CONFIG"),
                 format!("\".CONFIG\" {reads}"),
             ),
+            (
+                "a package.yaml",
+                Tree::new().root("package.yaml"),
+                format!("\"package.yaml\" {yaml}"),
+            ),
+            (
+                "a package.yaml in capitals",
+                Tree::new().root("Package.YAML"),
+                format!("\"Package.YAML\" {yaml}"),
+            ),
         ];
         finds(cases, PLAIN);
-        assert_eq!(Tree::new().root("'").run(PLAIN), Vec::<String>::new());
+        for name in ["'", "package.yml", "package.json"] {
+            assert_eq!(
+                Tree::new().root(name).run(PLAIN),
+                Vec::<String>::new(),
+                "{name} is no name cosmiconfig searches for its own settings"
+            );
+        }
     }
 
     /// A tracked TypeScript file cannot turn tsc's checking off: no
@@ -1979,53 +1993,6 @@ mod tests {
             Vec::<String>::new(),
             "a reasoned waiver"
         );
-    }
-
-    /// `bunfig.toml` holds `[install] minimumReleaseAge` and nothing else, since
-    /// every other key runs or redirects code before any script Bun starts.
-    /// The cooldown's value is a reviewer's to judge.
-    #[test]
-    fn bunfig_holds_the_install_cooldown_alone() {
-        let bunfig = |text: &str| Tree::new().file("bunfig.toml", text);
-        let foreign = |key: &str| {
-            format!(
-                "bunfig.toml carries {key:?}, and Bun applies it before any script it starts. It holds [install] minimumReleaseAge alone"
-            )
-        };
-        let cases = vec![
-            (
-                "a top-level preload",
-                bunfig("preload = [\"./x.ts\"]\n[install]\nminimumReleaseAge = 259200\n"),
-                foreign("preload"),
-            ),
-            (
-                "a test preload",
-                bunfig("[install]\nminimumReleaseAge = 259200\n[test]\npreload = [\"./x.ts\"]\n"),
-                foreign("test"),
-            ),
-            (
-                "a define table",
-                bunfig("[define]\nx = \"1\"\n[install]\nminimumReleaseAge = 259200\n"),
-                foreign("define"),
-            ),
-            (
-                "an install registry",
-                bunfig("[install]\nminimumReleaseAge = 259200\nregistry = \"https://registry.example/\"\n"),
-                "bunfig.toml [install] carries \"registry\", and it holds minimumReleaseAge alone. A registry or scope there changes where every package comes from".to_string(),
-            ),
-        ];
-        finds(cases, PLAIN);
-        for (label, tree) in [
-            (
-                "a shorter cooldown",
-                bunfig("[install]\nminimumReleaseAge = 1\n"),
-            ),
-            ("no cooldown", bunfig("[install]\n")),
-            ("an empty file", bunfig("")),
-            ("no bunfig.toml", Tree::new().missing("bunfig.toml")),
-        ] {
-            assert_eq!(tree.run(PLAIN), Vec::<String>::new(), "{label}");
-        }
     }
 
     /// `rust-toolchain.toml` names a channel and its components and nothing
@@ -2163,8 +2130,8 @@ mod tests {
         assert!(!found[0].contains('\u{1b}'), "{found:?}");
         let found = Tree::new()
             .file(
-                "bunfig.toml",
-                "\"\u{202E}x\" = 1\n[install]\nminimumReleaseAge = 259200\n",
+                ".cargo/config.toml",
+                "\"\u{202E}x\" = 1\n[alias]\nxtask = \"run --locked --package xtask --quiet --\"\n",
             )
             .run(PLAIN);
         assert_eq!(found.len(), 1, "{found:?}");

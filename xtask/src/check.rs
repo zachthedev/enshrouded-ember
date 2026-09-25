@@ -61,8 +61,7 @@ pub enum Proof {
     /// workflows handed to it.
     Actionlint,
     /// zizmor names every input it completed, which must cover the tracked
-    /// workflows. A second pass with no config and no ignores holds every job
-    /// passing `secrets: inherit` to the shared workflows.
+    /// workflows.
     Zizmor,
     /// tsc names every file it read, which must be the tracked TypeScript
     /// files `tsconfig.json` includes.
@@ -106,7 +105,7 @@ pub const MISE_INSTALL: &str = "mise install --locked";
 const RUSTUP: &str = "rustup toolchain install";
 
 /// What to run when the Bun packages a row starts are absent.
-const BUN_INSTALL: &str = "bun install";
+const BUN_INSTALL: &str = "run bun install --frozen-lockfile, or bun install --frozen-lockfile --ignore-scripts in a worktree (CONTRIBUTING.md#setup).";
 
 /// Prettier's command-line name, which `bunx --bun --no-install` runs once the
 /// row finds it in the checkout's `node_modules/.bin`.
@@ -246,7 +245,7 @@ pub const STEPS: &[Step] = &[
     },
     Step {
         name: "zizmor",
-        covers: "Workflow pinning, credentials, permissions and injection, every tracked workflow proven audited, and every secrets: inherit held to the shared workflows",
+        covers: "Workflow pinning, credentials, permissions and injection, with every tracked workflow proven audited",
         program: Program::Mise("zizmor"),
         // .github whole, with ignore handling off. A directory input honors
         // .gitignore files, .git/info/exclude and the global excludes, so a
@@ -529,9 +528,9 @@ impl<'a> Gate<'a> {
         let mut rows = Vec::new();
 
         // The pin and tree rules run before any tool. A lockfile entry carrying
-        // a url and no checksum installs whatever that url serves, and Bun runs
-        // a preload bunfig.toml names before any script, so a rule that ran
-        // later would report a finding about code that already executed.
+        // a url and no checksum installs whatever that url serves, so a rule
+        // that ran later would report a finding about code that already
+        // executed.
         let problems = self.pin_problems();
         if problems.is_empty() {
             rows.push(Row {
@@ -631,14 +630,16 @@ impl<'a> Gate<'a> {
             Program::Path(name) => name.to_string(),
         };
         // bunx runs a copy from a parent directory or PATH when the checkout
-        // holds none, so a row it starts needs the checkout's own first.
+        // holds none, so a row it starts needs the checkout's own first. A
+        // directory or a dangling link there holds none either.
         if step.program == Program::Path("bunx")
             && let Some(tool) = step.args.iter().find(|arg| !arg.starts_with("--"))
+            && !self.runner.is_file(&installed_bin(tool))
         {
-            let bin = installed_bin(tool);
-            if !self.runner.exists(&bin) {
-                return Err(format!("{bin} is not in the checkout: {}", step.install));
-            }
+            return Err(format!(
+                "{tool} is not installed in this checkout: {}",
+                step.install
+            ));
         }
         let mut command = vec![program];
         command.extend(step.args.iter().map(|arg| (*arg).to_string()));
@@ -1068,9 +1069,7 @@ impl<'a> Gate<'a> {
         Ok(Ok(proof::count(checked.len(), "file", "files")))
     }
 
-    /// The zizmor row: every tracked workflow must be an input zizmor completed,
-    /// and a second pass with nothing waived holds every job passing
-    /// `secrets: inherit` to the shared workflows.
+    /// The zizmor row: every tracked workflow must be an input zizmor completed.
     fn prove_zizmor(
         &self,
         out: &mut dyn Write,
@@ -1097,36 +1096,6 @@ impl<'a> Gate<'a> {
                 .collect();
         if let Err(sentence) = proof::prove("zizmor", proof::FILES, &workflows, &completed, root) {
             return Ok(Err(sentence));
-        }
-        // No config and no ignores, so neither the file-level waiver in
-        // zizmor.yml nor an inline comment hides a job from this pass. Its exit
-        // code reports the audits it ran, and the row reads its JSON alone.
-        let held = vec![
-            prepared.command[0].clone(),
-            "--offline".to_string(),
-            "--no-config".to_string(),
-            "--no-ignores".to_string(),
-            "--strict-collection".to_string(),
-            "--format".to_string(),
-            "json".to_string(),
-            "--collect=all".to_string(),
-            ".github".to_string(),
-        ];
-        writeln!(
-            out,
-            "\n{}",
-            held.join(" ")
-                .if_supports_color(Stream::Stdout, OwoColorize::dimmed)
-        )?;
-        let argv: Vec<&str> = held.iter().map(String::as_str).collect();
-        let report = match self.runner.output(&argv, &[], None) {
-            Ok(captured) => captured.stdout,
-            Err(err) => return Ok(Err(format!("{} could not start: {err}", held[0]))),
-        };
-        match proof::inherit_callees(&report) {
-            Ok(callees) if callees.is_empty() => {}
-            Ok(callees) => return Ok(Err(callees.join("; "))),
-            Err(sentence) => return Ok(Err(sentence)),
         }
         let count = proof::count(workflows.len(), "workflow", "workflows");
         Ok(Ok(format!("{count}, {}", prepared.note)))
@@ -1495,8 +1464,6 @@ mod tests {
         tracked: Vec<&'static str>,
         /// The untracked files the listing answers with.
         untracked: Vec<&'static str>,
-        /// The workflow the held zizmor pass names as a secrets-inherit callee.
-        callee: &'static str,
         /// Whether `gh auth token` answers.
         logged_in: bool,
         /// Whether `CI` reads as set.
@@ -1511,6 +1478,9 @@ mod tests {
         shell: &'static str,
         /// Tools whose command the install left out of `node_modules/.bin`.
         uninstalled: Vec<&'static str>,
+        /// Tools whose `node_modules/.bin` entry exists and is no regular file:
+        /// a directory, or a link whose target is gone.
+        unfiled: Vec<&'static str>,
         /// Crate directories cargo-machete cannot read, which it names on a line
         /// of its own and still reports as clean.
         unreadable: Vec<&'static str>,
@@ -1537,7 +1507,6 @@ mod tests {
                 skipping: Vec::new(),
                 tracked: TRACKED.to_vec(),
                 untracked: Vec::new(),
-                callee: "zachthedev/.github/.github/workflows/deps.yml@c53d09e393028ceddee0d761f2a7963394289a72",
                 logged_in: true,
                 in_ci: false,
                 extra_paths: Vec::new(),
@@ -1545,6 +1514,7 @@ mod tests {
                 unrefused: false,
                 shell: "bash",
                 uninstalled: Vec::new(),
+                unfiled: Vec::new(),
                 unreadable: Vec::new(),
                 plants: Vec::new(),
                 step_at: "jobs.a.steps[0].shell",
@@ -1579,6 +1549,18 @@ mod tests {
             self
         }
 
+        fn unfiled(mut self, tool: &'static str) -> Self {
+            self.unfiled.push(tool);
+            self
+        }
+
+        /// The tool `relative` names under `node_modules/.bin`, if it names one.
+        fn bin_tool(relative: &str) -> Option<&str> {
+            relative
+                .strip_prefix("node_modules/.bin/")
+                .map(|bin| bin.trim_end_matches(".exe"))
+        }
+
         fn unreported(mut self, tool: &'static str, path: &'static str) -> Self {
             self.unreported.push((tool, path));
             self
@@ -1596,11 +1578,6 @@ mod tests {
 
         fn untracked(mut self, path: &'static str) -> Self {
             self.untracked.push(path);
-            self
-        }
-
-        fn calling(mut self, callee: &'static str) -> Self {
-            self.callee = callee;
             self
         }
 
@@ -1780,13 +1757,6 @@ mod tests {
                         |path: &str| format!("verbose: Found total 0 errors in 1 ms for {path}");
                     (String::new(), lines(&linted, shape))
                 }
-                "zizmor" if command.contains(&"--no-config") => (
-                    format!(
-                        r#"[{{"ident":"secrets-inherit","locations":[{{"symbolic":{{"kind":"Primary","key":{{"Local":{{"verbatim_path":".github/workflows/deps.yml"}}}}}},"concrete":{{"feature":"{}"}}}}]}}]"#,
-                        self.callee
-                    ),
-                    String::new(),
-                ),
                 "zizmor" => {
                     let inputs: Vec<&str> = self
                         .tracked
@@ -2077,14 +2047,14 @@ mod tests {
 
         fn exists(&self, relative: &str) -> bool {
             self.tracked.contains(&relative)
-                || relative
-                    .strip_prefix("node_modules/.bin/")
-                    .is_some_and(|bin| {
-                        !self
-                            .uninstalled
-                            .iter()
-                            .any(|tool| bin.trim_end_matches(".exe") == *tool)
-                    })
+                || Self::bin_tool(relative).is_some_and(|bin| !self.uninstalled.contains(&bin))
+        }
+
+        fn is_file(&self, relative: &str) -> bool {
+            self.tracked.contains(&relative)
+                || Self::bin_tool(relative).is_some_and(|bin| {
+                    !self.uninstalled.contains(&bin) && !self.unfiled.contains(&bin)
+                })
         }
 
         fn root(&self) -> PathBuf {
@@ -2617,44 +2587,6 @@ mod tests {
         );
     }
 
-    /// The held zizmor pass runs with no config and no ignores, and a job
-    /// handing its secrets to a workflow outside the shared ones fails the row.
-    #[test]
-    fn a_secrets_inherit_callee_outside_the_shared_workflows_fails() {
-        let runner = FakeRunner::all_installed();
-        gate(&runner);
-        let held = runner
-            .ran()
-            .into_iter()
-            .find(|command| command.contains(&"--no-config".to_string()))
-            .expect("the held pass ran");
-        assert_eq!(
-            held[1..],
-            [
-                "--offline",
-                "--no-config",
-                "--no-ignores",
-                "--strict-collection",
-                "--format",
-                "json",
-                "--collect=all",
-                ".github"
-            ]
-        );
-        let runner =
-            FakeRunner::all_installed().calling("someone/else/.github/workflows/x.yml@main");
-        let (rows, text) = gate(&runner);
-        let last = rows.last().expect("one row");
-        assert_eq!(last.step, "zizmor");
-        assert_eq!(last.outcome, Outcome::Failed);
-        assert!(
-            text.contains(
-                "passes secrets: inherit to \"someone/else/.github/workflows/x.yml@main\""
-            ),
-            "{text}"
-        );
-    }
-
     /// A tool mise resolves nowhere stops the gate at its row, names the install
     /// command, and runs nothing after it.
     #[test]
@@ -2786,24 +2718,32 @@ mod tests {
         assert!(text.contains("jobs.a\\u{1b}[2K.steps[0].shell"), "{text:?}");
     }
 
-    /// A JavaScript tool bunx starts must be in the checkout's own
-    /// `node_modules/.bin`, or its row refuses to run: bunx would run a copy
-    /// from a parent directory or PATH.
+    /// A JavaScript tool bunx starts must be a regular file in the checkout's
+    /// own `node_modules/.bin`, or its row refuses to run: bunx would run a
+    /// copy from a parent directory or PATH. An entry that is a directory or a
+    /// dangling link holds no tool.
     #[test]
     fn a_js_tool_missing_from_the_checkout_stops_its_row() {
         for (tool, step) in [("prettier", "prettier"), ("tsc", "typecheck")] {
-            let runner = FakeRunner::all_installed().uninstalled(tool);
-            let (rows, _) = gate(&runner);
-            let last = rows.last().expect("one row");
-            assert_eq!(last.step, step, "{tool}");
-            assert_eq!(
-                last.outcome,
-                Outcome::Unrun(format!(
-                    "{} is not in the checkout: bun install",
-                    super::installed_bin(tool)
-                )),
-                "{tool}"
-            );
+            for (what, runner) in [
+                ("absent", FakeRunner::all_installed().uninstalled(tool)),
+                ("no regular file", FakeRunner::all_installed().unfiled(tool)),
+            ] {
+                let (rows, _) = gate(&runner);
+                let last = rows.last().expect("one row");
+                assert_eq!(last.step, step, "{tool}, {what}");
+                assert_eq!(
+                    last.outcome,
+                    Outcome::Unrun(format!(
+                        "{tool} is not installed in this checkout: run bun install --frozen-lockfile, or bun install --frozen-lockfile --ignore-scripts in a worktree (CONTRIBUTING.md#setup)."
+                    )),
+                    "{tool}, {what}"
+                );
+                assert!(
+                    runner.running(tool).is_none(),
+                    "{tool}, {what}: it ran from somewhere the checkout does not hold"
+                );
+            }
         }
     }
 
