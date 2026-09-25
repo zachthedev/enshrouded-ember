@@ -2,12 +2,12 @@
 # only where MISE_ENV=semver, which cd.yml's release-update job sets and no job
 # holding a credential does.
 #
-# The file exists because a mise shim installs a configured tool the first time
-# another shim's process looks for it. With cargo-semver-checks in mise.toml,
-# running release-plz in the release-pr job would install it and run the semver
-# check beside the releaser token, and the check builds every dependency's build
-# script and proc macro. Outside every configuration that job loads, the check
-# cannot run there at all.
+# The file keeps cargo-semver-checks out of every configuration the release-pr
+# job loads, because the check builds every dependency's build script and proc
+# macro and that job holds the releaser token. No job puts mise's shims on
+# PATH, and a shim installs a configured tool the first time a process looks
+# for it, so this file is the second layer: outside every configuration that
+# job loads, the check cannot run there at all.
 #
 # mise.semver.lock holds its checksums, written by `MISE_ENV=semver mise lock`.
 # The platforms and the locked mode come from mise.toml, which mise loads beside

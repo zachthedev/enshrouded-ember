@@ -68,10 +68,12 @@ jobs:
         with:
           version: 2026.9.5
           install: false
-          # No mise environment or PATH entry reaches a later step: every tool
-          # runs through its shim or `mise which`.
+          # No mise environment, PATH entry or shim reaches a later step, so a
+          # bare program name never resolves to a tool mise.toml pins. Every
+          # tool runs through the path `mise which` prints.
           env: false
           export_path: false
+          add_shims_to_path: false
           cache: false
           # An empty one keeps the action from exporting the job token to every
           # later step.
@@ -124,14 +126,14 @@ jobs:
   commits:
     permissions:
       contents: read
-    uses: zachthedev/.github/.github/workflows/commits.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+    uses: zachthedev/.github/.github/workflows/commits.yml@09a9a00aae657ea11e5d5979ef3ce5859d9aba3a # v0.2.0
 
   workflows:
     permissions:
       contents: read
-    uses: zachthedev/.github/.github/workflows/workflows.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+    uses: zachthedev/.github/.github/workflows/workflows.yml@09a9a00aae657ea11e5d5979ef3ce5859d9aba3a # v0.2.0
 
   dependency-review:
     permissions:
       contents: read
-    uses: zachthedev/.github/.github/workflows/dependency-review.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+    uses: zachthedev/.github/.github/workflows/dependency-review.yml@09a9a00aae657ea11e5d5979ef3ce5859d9aba3a # v0.2.0

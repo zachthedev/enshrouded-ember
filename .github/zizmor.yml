@@ -25,12 +25,21 @@ rules:
       - build-watch.yml:144
       - build-watch.yml:463
       - client-build-watch.yml:63
+  # An advisory published against an unchanged action pin turns every pull
+  # request's workflows check red until the pin moves. A waiver is one GHSA id
+  # per entry, with a comment beside it naming the advisory, what it blocks, why
+  # shipping is safer and the condition that removes it. No advisory is waived.
+  known-vulnerable-actions:
+    config:
+      allow: []
   # deps.yml's deps job hands its called workflow every secret. The called job
   # names the deps environment, and a caller that runs in no environment cannot
   # pass that environment's secret by name. The waiver takes the whole file,
   # because the gate's zizmor row holds the control: a second pass with no
   # config and no ignores fails unless every job passing secrets: inherit calls
-  # a workflow under zachthedev/.github/.github/workflows/.
+  # a workflow under zachthedev/.github/.github/workflows/. cd.yml passes
+  # secrets: inherit to nothing, since release-plz runs from its mise pin and
+  # not through the shared release-pr workflow, so deps.yml is the one file.
   secrets-inherit:
     ignore:
       - deps.yml

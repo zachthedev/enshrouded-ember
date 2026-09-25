@@ -289,7 +289,7 @@ Advisories are not a row, because an advisory published overnight would turn
 a change red that touched nothing. Two legs read the lockfile for them, and
 they fail in opposite directions: Dependabot alerts read GitHub's database on
 every push, which lacks part of RustSec, and `.github/workflows/audit.yml`
-runs `cargo deny check advisories` against RustSec weekly, reading the
+runs `cargo deny check advisories` against RustSec daily, reading the
 `[advisories]` table in `deny.toml`. A red audit run is a report, never a
 check, and no ruleset requires it.
 
