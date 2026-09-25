@@ -1,6 +1,6 @@
 name: audit
 
-# The whole-tree reports, each on its own clock. A red run is a report, never a
+# The whole-tree reports, on one daily clock. A red run is a report, never a
 # check: it means work to pick up. Nothing merges, releases or deploys through
 # this file, and no ruleset requires it.
 #
@@ -18,10 +18,9 @@ name: audit
 # change with no pull request, so a schedule is what asks again.
 on:
   schedule:
-    # Weekly, Monday. The hour is clear of deps.yml's daily cron.
-    - cron: '41 6 * * 1'
-    # Weekly, Monday, an hour after the advisories run.
-    - cron: '41 7 * * 1'
+    # At least once a day. The hour is clear of deps.yml's cron. Every job runs
+    # on this one clock, so none compares a cron string.
+    - cron: '41 5 * * *'
   workflow_dispatch:
 
 permissions: {}
@@ -42,10 +41,7 @@ env:
   MISE_AUTO_ENV: 'false'
 
 jobs:
-  # The first weekly clock, and every dispatch. The schedule context carries
-  # the cron that fired, so a cron edit changes its twin here.
   advisories:
-    if: github.event_name != 'schedule' || github.event.schedule == '41 6 * * 1'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -62,10 +58,12 @@ jobs:
         with:
           version: 2026.9.5
           install: false
-          # No mise environment or PATH entry reaches a later step: every tool
-          # runs through its shim or `mise which`.
+          # No mise environment, PATH entry or shim reaches a later step, so a
+          # bare program name never resolves to a tool mise.toml pins. Every
+          # tool runs through the path `mise which` prints.
           env: false
           export_path: false
+          add_shims_to_path: false
           cache: false
           # An empty one keeps the action from exporting the job token to every
           # later step.
@@ -83,10 +81,8 @@ jobs:
       # The binary mise resolved is the binary that runs, as in the gate.
       - run: '"$(mise which cargo-deny)" --locked check advisories'
 
-  # The second weekly clock, and every dispatch. The calling job grants what
-  # the called job declares.
+  # The calling job grants what the called job declares.
   workflows:
-    if: github.event_name != 'schedule' || github.event.schedule == '41 7 * * 1'
     permissions:
       contents: read
-    uses: zachthedev/.github/.github/workflows/workflows.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+    uses: zachthedev/.github/.github/workflows/workflows.yml@09a9a00aae657ea11e5d5979ef3ce5859d9aba3a # v0.2.0

@@ -16,8 +16,8 @@ on:
     branches: [main]
   pull_request:
   # At least once a week, so a query published after the last change to this
-  # repository still reports against this tree. Thursday, clear of audit.yml's
-  # Monday cron.
+  # repository still reports against this tree. Thursday, clear of deps.yml's
+  # and audit.yml's daily crons.
   schedule:
     - cron: '37 9 * * 4'
 
@@ -32,6 +32,6 @@ jobs:
       security-events: write
       contents: read
       actions: read
-    uses: zachthedev/.github/.github/workflows/codeql.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+    uses: zachthedev/.github/.github/workflows/codeql.yml@09a9a00aae657ea11e5d5979ef3ce5859d9aba3a # v0.2.0
     with:
       languages: '[{"language": "rust"}, {"language": "actions"}]'

@@ -67,10 +67,12 @@ jobs:
         with:
           version: 2026.9.5
           install: false
-          # No mise environment or PATH entry reaches a later step: every tool
-          # runs through its shim or `mise which`.
+          # No mise environment, PATH entry or shim reaches a later step, so a
+          # bare program name never resolves to a tool mise.toml pins. Every
+          # tool runs through the path `mise which` prints.
           env: false
           export_path: false
+          add_shims_to_path: false
           # An empty one keeps the action from exporting the job token to every
           # later step.
           github_token: ''
@@ -89,7 +91,15 @@ jobs:
       - run: mise install --locked release-plz github:obi1kenobi/cargo-semver-checks
         env:
           MISE_GITHUB_TOKEN: ${{ github.token }}
-      - run: release-plz update
+      # release-plz runs the semver check through cargo, which finds
+      # cargo-semver-checks on PATH. No shim puts it there, so its directory
+      # is prepended for this step alone. Each path resolves in a statement
+      # of its own, where a failed lookup stops the step: release-plz skips
+      # the check, and exits zero, when it cannot find the program.
+      - run: |
+          semver_checks=$(mise which cargo-semver-checks)
+          release_plz=$(mise which release-plz)
+          PATH="${semver_checks%/*}:$PATH" "$release_plz" update
       # Every change release-plz made, a crate's first changelog included,
       # staged so the untracked files are in the diff.
       - run: |
@@ -139,10 +149,12 @@ jobs:
         with:
           version: 2026.9.5
           install: false
-          # No mise environment or PATH entry reaches a later step: every tool
-          # runs through its shim or `mise which`.
+          # No mise environment, PATH entry or shim reaches a later step, so a
+          # bare program name never resolves to a tool mise.toml pins. Every
+          # tool runs through the path `mise which` prints.
           env: false
           export_path: false
+          add_shims_to_path: false
           # An empty one keeps the action from exporting the job token to every
           # later step.
           github_token: ''
@@ -206,7 +218,7 @@ jobs:
       # --allow-dirty takes the applied patch as the release. The token goes
       # through the environment, which release-plz reads as GIT_TOKEN, so it
       # is not on the command line.
-      - run: release-plz release-pr --allow-dirty --forge github --repo-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+      - run: '"$(mise which release-plz)" release-pr --allow-dirty --forge github --repo-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"'
         env:
           GIT_TOKEN: ${{ steps.token.outputs.token }}
 
@@ -240,10 +252,12 @@ jobs:
         with:
           version: 2026.9.5
           install: false
-          # No mise environment or PATH entry reaches a later step: every tool
-          # runs through its shim or `mise which`.
+          # No mise environment, PATH entry or shim reaches a later step, so a
+          # bare program name never resolves to a tool mise.toml pins. Every
+          # tool runs through the path `mise which` prints.
           env: false
           export_path: false
+          add_shims_to_path: false
           # An empty one keeps the action from exporting the job token to every
           # later step.
           github_token: ''
@@ -269,7 +283,7 @@ jobs:
       # `created` says whether the run released anything at all.
       - id: release
         run: |
-          release-plz release --forge github --output json > "$RUNNER_TEMP/release.json"
+          "$(mise which release-plz)" release --forge github --output json > "$RUNNER_TEMP/release.json"
           tag=$(jq --raw-output '.releases[]? | select(.package_name == "ember-loader") | .tag' "$RUNNER_TEMP/release.json")
           created=$(jq --raw-output '(.releases // []) | length > 0' "$RUNNER_TEMP/release.json")
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
@@ -311,7 +325,7 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: zachthedev/.github/.github/workflows/publish.yml@c53d09e393028ceddee0d761f2a7963394289a72 # v0.1.0
+    uses: zachthedev/.github/.github/workflows/publish.yml@09a9a00aae657ea11e5d5979ef3ce5859d9aba3a # v0.2.0
     with:
       tag: ${{ needs.release.outputs.tag }}
       flip: true
