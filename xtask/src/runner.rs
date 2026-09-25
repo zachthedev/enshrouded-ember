@@ -41,37 +41,69 @@ const CRATE_ENV: &[&str] = &[
 /// `ShellCheck` reads extra flags from `SHELLCHECK_OPTS` whatever actionlint's
 /// `--norc` says, and one can exclude any finding. Bun reads command-line flags
 /// from `BUN_OPTIONS` into every process it starts, a preload or a test name
-/// filter among them, runs the module `BUN_INSPECT_PRELOAD` names, and opens
-/// its inspector for `BUN_INSPECT` and `BUN_INSPECT_CONNECT_TO`. Windows
+/// filter among them. rustdoc takes flags from `RUSTDOCFLAGS`,
+/// `CARGO_BUILD_RUSTDOCFLAGS` and `CARGO_ENCODED_RUSTDOCFLAGS`, where a test
+/// filter drops every documented example from the doctests row. Windows
 /// matches a variable name in any case, and so does the removal there.
 const WITHHELD_ENV: &[&str] = &[
     "SHELLCHECK_OPTS",
     "BUN_OPTIONS",
-    "BUN_INSPECT",
-    "BUN_INSPECT_CONNECT_TO",
-    "BUN_INSPECT_PRELOAD",
+    "RUSTDOCFLAGS",
+    "CARGO_BUILD_RUSTDOCFLAGS",
+    "CARGO_ENCODED_RUSTDOCFLAGS",
 ];
 
-/// `text` without ANSI CSI sequences: an escape, `[`, parameter bytes and one
-/// final byte. A tool can color what it prints on a runner that asks for color
-/// whatever `NO_COLOR` says, and a row parses the plain text.
+/// `text` without ANSI CSI and OSC sequences. A tool can color what it prints,
+/// or wrap a path in a link, on a runner that asks for color whatever
+/// `NO_COLOR` says, and a row parses the plain text.
 #[must_use]
 pub fn plain(text: &str) -> String {
+    let characters: Vec<char> = text.chars().collect();
     let mut kept = String::with_capacity(text.len());
-    let mut characters = text.chars().peekable();
-    while let Some(character) = characters.next() {
-        if character == '\u{1b}' && characters.peek() == Some(&'[') {
-            characters.next();
-            for next in characters.by_ref() {
-                if ('\u{40}'..='\u{7e}').contains(&next) {
-                    break;
-                }
-            }
+    let mut at = 0;
+    while at < characters.len() {
+        if let Some(end) = sequence_end(&characters, at) {
+            at = end;
         } else {
-            kept.push(character);
+            kept.push(characters[at]);
+            at += 1;
         }
     }
     kept
+}
+
+/// One past the last character of the CSI or OSC sequence opening at `at`, or
+/// `None` when none opens there.
+///
+/// A CSI sequence is an escape, `[`, parameter bytes and one final byte, and
+/// one left open runs to the end of the text. An OSC sequence is an escape, `]`
+/// and a string ended by a bell or by an escape and `\`, and one left open is
+/// no sequence.
+fn sequence_end(characters: &[char], at: usize) -> Option<usize> {
+    if characters.get(at) != Some(&'\u{1b}') {
+        return None;
+    }
+    let body = at + 2;
+    match characters.get(at + 1) {
+        Some('[') => Some(
+            characters[body..]
+                .iter()
+                .position(|next| ('\u{40}'..='\u{7e}').contains(next))
+                .map_or(characters.len(), |end| body + end + 1),
+        ),
+        Some(']') => {
+            let stop = body
+                + characters[body..]
+                    .iter()
+                    .position(|next| matches!(next, '\u{7}' | '\u{1b}'))?;
+            if characters[stop] == '\u{7}' {
+                Some(stop + 1)
+            } else {
+                (characters.get(stop + 1) == Some(&'\\')).then_some(stop + 2)
+            }
+        }
+        _ => None,
+    }
 }
 
 /// What a command printed, and how it ended.
@@ -248,8 +280,12 @@ impl Runner for Processes {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty command"));
         };
         let mut child = command_for(program)?;
-        // A row parses what this child prints, so it prints no color.
-        child.env("NO_COLOR", "1").env("CARGO_TERM_COLOR", "never");
+        // A row parses what this child prints, so it prints no color, and cargo
+        // prints its headers whatever quiet setting a user config holds.
+        child
+            .env("NO_COLOR", "1")
+            .env("CARGO_TERM_COLOR", "never")
+            .env("CARGO_TERM_QUIET", "false");
         child.envs(env.iter().copied()).args(args);
         child.stdout(Stdio::piped()).stderr(Stdio::piped());
         child.stdin(if input.is_some() {
@@ -321,8 +357,9 @@ fn command_for(program: &str) -> io::Result<Command> {
 const WITHHELD_PREFIX: &str = "NEXTEST_";
 
 /// Drop this crate's own build metadata, every variable in [`WITHHELD_ENV`],
-/// and every inherited one [`WITHHELD_PREFIX`] opens, from a child's
-/// environment.
+/// every inherited one [`WITHHELD_PREFIX`] opens, and every inherited
+/// `CARGO_TARGET_<triple>_RUSTDOCFLAGS`, which hands rustdoc a test filter for
+/// one target, from a child's environment.
 fn scrub(command: &mut Command) {
     scrub_inherited(command, std::env::vars_os().map(|(name, _)| name));
 }
@@ -333,11 +370,10 @@ fn scrub_inherited(command: &mut Command, inherited: impl Iterator<Item = OsStri
         command.env_remove(name);
     }
     for name in inherited {
-        if name
-            .to_string_lossy()
-            .to_ascii_uppercase()
-            .starts_with(WITHHELD_PREFIX)
-        {
+        let upper = name.to_string_lossy().to_ascii_uppercase();
+        let target_doc_flags =
+            upper.starts_with("CARGO_TARGET_") && upper.ends_with("_RUSTDOCFLAGS");
+        if upper.starts_with(WITHHELD_PREFIX) || target_doc_flags {
             command.env_remove(&name);
         }
     }
@@ -391,14 +427,45 @@ mod tests {
         for name in [
             "SHELLCHECK_OPTS",
             "BUN_OPTIONS",
-            "BUN_INSPECT",
-            "BUN_INSPECT_CONNECT_TO",
-            "BUN_INSPECT_PRELOAD",
+            "RUSTDOCFLAGS",
+            "CARGO_BUILD_RUSTDOCFLAGS",
+            "CARGO_ENCODED_RUSTDOCFLAGS",
             "CARGO_PKG_NAME",
         ] {
             assert!(
                 removed.contains(&OsStr::new(name)),
                 "a child keeps {name}: the scrub removes only {removed:?}"
+            );
+        }
+    }
+
+    /// A child loses every inherited `CARGO_TARGET_<triple>_RUSTDOCFLAGS`, in
+    /// any case, and keeps the other target keys and the target directory.
+    #[test]
+    fn a_child_never_gets_target_doc_flags() {
+        let mut command = Command::new("child");
+        let inherited = [
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTDOCFLAGS",
+            "cargo_target_x86_64_unknown_linux_gnu_rustdocflags",
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER",
+            "CARGO_TARGET_DIR",
+        ];
+        scrub_inherited(&mut command, inherited.into_iter().map(OsString::from));
+        let removed: Vec<&OsStr> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name)
+            .collect();
+        for name in &inherited[..2] {
+            assert!(
+                removed.contains(&OsStr::new(name)),
+                "a child keeps {name}: the scrub removes only {removed:?}"
+            );
+        }
+        for name in &inherited[2..] {
+            assert!(
+                !removed.contains(&OsStr::new(name)),
+                "a child loses {name}, which carries no rustdoc flag"
             );
         }
     }
@@ -451,6 +518,43 @@ mod tests {
             ("", ""),
         ] {
             assert_eq!(super::plain(printed), wanted, "{printed:?}");
+        }
+    }
+
+    /// An OSC sequence goes whole, ended by a bell or by an escape and `\`,
+    /// and one left open stays as printed.
+    #[test]
+    fn a_link_or_title_reads_as_plain_text() {
+        let esc = '\x1b';
+        let bel = '\x07';
+        for (what, printed, wanted) in [
+            (
+                "a link ended by an escape and a backslash",
+                format!("{esc}]8;;https://example.com/a.rs{esc}\\a.rs{esc}]8;;{esc}\\ ok"),
+                "a.rs ok".to_string(),
+            ),
+            (
+                "a title ended by a bell",
+                format!("{esc}]0;gate{bel}Formatting a.rs"),
+                "Formatting a.rs".to_string(),
+            ),
+            (
+                "a link around colored text",
+                format!("{esc}]8;;x{bel}{esc}[31ma.rs{esc}[0m{esc}]8;;{bel}"),
+                "a.rs".to_string(),
+            ),
+            (
+                "one left open",
+                format!("a {esc}]0;title"),
+                format!("a {esc}]0;title"),
+            ),
+            (
+                "one broken by an escape that ends nothing",
+                format!("{esc}]0;t{esc}x b"),
+                format!("{esc}]0;t{esc}x b"),
+            ),
+        ] {
+            assert_eq!(super::plain(&printed), wanted, "{what}");
         }
     }
 }

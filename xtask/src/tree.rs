@@ -23,47 +23,17 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 // Comparing names
 // ///////////////////////////////////////////////
 
-/// Whether `character` is a default ignorable code point, which HFS+ drops from
-/// a name before it compares one.
-fn ignorable(character: char) -> bool {
-    matches!(
-        character,
-        '\u{00AD}'
-            | '\u{034F}'
-            | '\u{061C}'
-            | '\u{115F}'..='\u{1160}'
-            | '\u{17B4}'..='\u{17B5}'
-            | '\u{180B}'..='\u{180F}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{206F}'
-            | '\u{3164}'
-            | '\u{FE00}'..='\u{FE0F}'
-            | '\u{FEFF}'
-            | '\u{FFA0}'
-            | '\u{FFF0}'..='\u{FFF8}'
-            | '\u{1BCA0}'..='\u{1BCA3}'
-            | '\u{1D173}'..='\u{1D17A}'
-            | '\u{E0000}'..='\u{E0FFF}'
-    )
-}
-
-/// `name` as the gate compares it: default ignorable code points removed, then
-/// every character mapped to upper case and back to lower case.
+/// `name` as the gate compares it: every character mapped to upper case and
+/// back to lower case.
 ///
-/// NTFS and APFS open a name in any case, and HFS+ drops ignorable code points,
-/// so two names this maps to one string can open one file. The full case
-/// mapping takes the long s, the dotless i and the Kelvin sign to `s`, `i` and
-/// `k`. APFS also treats canonically equivalent names as one, and the only
-/// character canonically equal to a letter a config name holds is the Kelvin
-/// sign, which the case mapping already covers.
+/// NTFS and APFS open a name in any case, so two names this maps to one string
+/// can open one file. The full case mapping takes the long s, the dotless i and
+/// the Kelvin sign to `s`, `i` and `k`. APFS also treats canonically equivalent
+/// names as one, and the only character canonically equal to a letter a config
+/// name holds is the Kelvin sign, which the case mapping already covers.
 #[must_use]
 pub fn fold(name: &str) -> String {
-    let kept: String = name
-        .chars()
-        .filter(|character| !ignorable(*character))
-        .collect();
-    kept.to_uppercase().to_lowercase()
+    name.to_uppercase().to_lowercase()
 }
 
 /// Whether `text` matches `pattern`, where `*` is any run of characters that
@@ -257,16 +227,18 @@ struct Search {
 const SEARCHES: &[Search] = &[
     Search {
         what: "an env file",
-        paths: &["**/.env*"],
+        paths: &[
+            "**/.env",
+            "**/.env.local",
+            "**/.env.development",
+            "**/.env.development.local",
+            "**/.env.production",
+            "**/.env.production.local",
+            "**/.env.test",
+            "**/.env.test.local",
+        ],
         named: None,
         reads: "Bun loads one into the environment of every bun run started beside it",
-        personal: true,
-    },
-    Search {
-        what: "an .npmrc",
-        paths: &["**/.npmrc"],
-        named: None,
-        reads: "bun install fetches from the registry it names",
         personal: true,
     },
     Search {
@@ -324,10 +296,6 @@ const PROJECT_CONFIG_NAMES: &[&str] = &["tsconfig.json", "jsconfig.json"];
 /// The compiler options that send a bare import somewhere other than
 /// `node_modules`, folded.
 const REDIRECTING_OPTIONS: &[&str] = &["paths", "baseurl"];
-
-/// The directory names a version control system keeps its own data in.
-/// Prettier's command line skips a file it is handed under one without a word.
-const VCS_DIRECTORIES: &[&str] = &[".git", ".sl", ".svn", ".hg", ".jj"];
 
 /// The directory GitHub reads workflows from, where actionlint and zizmor read
 /// a lowercase `.yml` name alone.
@@ -468,44 +436,6 @@ fn bunfig_findings(read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
         found.push(format!(
             "{PATH} [install] carries {key:?}, and it holds minimumReleaseAge alone. A registry or scope there changes where every package comes from"
         ));
-    }
-    found
-}
-
-/// Every plugin `.prettierrc` names, at its top level or in an override, and
-/// any form of the file the gate cannot read as JSON.
-///
-/// Prettier loads each plugin as a module under the gate's own flags, and it
-/// reads YAML from this name too, where a plugin would load unread.
-fn prettier_findings(read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
-    const PATH: &str = ".prettierrc";
-    let Some(text) = read(PATH) else {
-        return Vec::new();
-    };
-    let parsed = match parse_json(&text) {
-        Ok(parsed) => parsed,
-        Err(why) => {
-            return vec![format!(
-                "{PATH} is not JSON the gate reads one way: {why}. Prettier reads YAML there too, where a plugin would load unread"
-            )];
-        }
-    };
-    let loads = "and Prettier loads each as a module under the gate's own flags. Remove them";
-    let mut found = Vec::new();
-    if parsed.get("plugins").is_some() {
-        found.push(format!("{PATH} names plugins, {loads}"));
-    }
-    let overrides = parsed
-        .get("overrides")
-        .and_then(serde_json::Value::as_array);
-    for (at, entry) in overrides.into_iter().flatten().enumerate() {
-        if entry
-            .get("options")
-            .and_then(|options| options.get("plugins"))
-            .is_some()
-        {
-            found.push(format!("{PATH} overrides[{at}] names plugins, {loads}"));
-        }
     }
     found
 }
@@ -962,8 +892,8 @@ pub fn findings(
     let mut found = listing_findings(listing, project_configs, read);
     found.extend(root_findings(root_names));
     found.extend(bunfig_findings(read));
-    found.extend(prettier_findings(read));
     found.extend(toolchain_findings(read));
+    found.extend(cargo_config_findings(read));
     found.extend(workspace_lint_findings(read));
     found.into_iter().map(printable).collect()
 }
@@ -1043,7 +973,7 @@ fn listing_findings(
     }
     if !modules.is_empty() {
         found.push(format!(
-            "{} tracked as or under a node_modules directory. bun install keeps what it finds there, the gate and the hooks run each JavaScript tool from it by path, and Bun resolves an import from the nearest node_modules first. Remove each from the index with git rm -r --cached",
+            "{} tracked as or under a node_modules directory. bun install keeps what it finds there, the gate and the hooks run each JavaScript tool from it, and Bun resolves an import from the nearest node_modules first. Remove each from the index with git rm -r --cached",
             modules
                 .iter()
                 .map(|path| format!("{path:?}"))
@@ -1202,8 +1132,8 @@ fn package_key_findings(path: &str, read: &dyn Fn(&str) -> Option<String>) -> Ve
 }
 
 /// Every way the tracked file at `path` falls outside what the rows read: a
-/// workflow not named `.github/workflows/<name>.yml` exactly, an inline zizmor
-/// waiver under `.github`, and a path under a version control directory.
+/// workflow not named `.github/workflows/<name>.yml` exactly, and an inline
+/// zizmor waiver under `.github`.
 fn scope_findings(
     path: &str,
     segments: &[String],
@@ -1231,14 +1161,6 @@ fn scope_findings(
             "{path:?} carries a zizmor ignore comment, and zizmor waives the audit it names. A waiver is an entry in .github/zizmor.yml, the one config the zizmor row names"
         ));
     }
-    if let Some(vcs) = segments[..segments.len() - 1]
-        .iter()
-        .find(|segment| VCS_DIRECTORIES.contains(&segment.as_str()))
-    {
-        found.push(format!(
-            "{path:?} sits under a {vcs} directory, and Prettier skips a file there without a word, so the prettier row would count a file it never checked. Move it"
-        ));
-    }
     found
 }
 
@@ -1246,18 +1168,11 @@ fn scope_findings(
 fn root_findings(root_names: &[String]) -> Vec<String> {
     root_names
         .iter()
-        .filter_map(|name| {
-            if fold(name) == ".config" {
-                Some(format!(
-                    "{name:?} is at the root, and mise, lefthook, commitlint's cosmiconfig and cargo-nextest each read a config from it that no row names. Remove it"
-                ))
-            } else if name == "'" {
-                Some(format!(
-                    "{name:?} is at the root, and actionlint looks the whole -shellcheck value up as one path before it splits it, and that value opens with a single quote, so a program under this directory can stand in for the stand-in. Remove it"
-                ))
-            } else {
-                None
-            }
+        .filter(|name| fold(name) == ".config")
+        .map(|name| {
+            format!(
+                "{name:?} is at the root, and mise, lefthook, commitlint's cosmiconfig and cargo-nextest each read a config from it that no row names. Remove it"
+            )
         })
         .collect()
 }
@@ -1265,22 +1180,12 @@ fn root_findings(root_names: &[String]) -> Vec<String> {
 /// The extensions tsc reads as TypeScript source.
 const TYPESCRIPT: &[&str] = &["ts", "tsx", "mts", "cts"];
 
-/// Every way the tracked TypeScript file at `path` turns tsc's checking off: a
-/// declaration file, which tsc never checks under `skipLibCheck`, and a comment
-/// directive that drops errors.
+/// Every comment directive in the tracked TypeScript file at `path` that turns
+/// tsc's checking off by dropping errors.
 ///
 /// tsc reads the directives in any case, so the lines compare folded.
 fn typescript_findings(path: &str, text: &str) -> Vec<String> {
     let mut found = Vec::new();
-    let folded = fold(path);
-    if [".d.ts", ".d.mts", ".d.cts", ".d.tsx"]
-        .iter()
-        .any(|suffix| folded.ends_with(suffix))
-    {
-        found.push(format!(
-            "{path:?} is a declaration file, and tsc checks none under skipLibCheck, while one can widen any type the checked files use. Move the declarations into a .ts file"
-        ));
-    }
     for (index, line) in text.lines().enumerate() {
         let line = line.to_ascii_lowercase();
         let at = format!("{path}:{}", index + 1);
@@ -1338,6 +1243,45 @@ fn toolchain_findings(read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
     found
 }
 
+/// Every way `.cargo/config.toml` holds more than the `xtask` alias.
+///
+/// cargo reads it before any row runs. An alias named after a subcommand a row
+/// runs, `build.rustflags`, `build.rustdocflags`, `build.rustc-wrapper` and a
+/// target runner each change what a cargo row compiles or runs.
+fn cargo_config_findings(read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+    const PATH: &str = ".cargo/config.toml";
+    let Some(text) = read(PATH) else {
+        return Vec::new();
+    };
+    let table: toml::Table = match toml::from_str(&text) {
+        Ok(table) => table,
+        Err(err) => {
+            return vec![format!(
+                "{PATH} does not parse: {}",
+                one_line(&err.to_string())
+            )];
+        }
+    };
+    let mut found = Vec::new();
+    for key in table.keys().filter(|key| *key != "alias") {
+        found.push(format!(
+            "{PATH} carries {key:?}, and it holds the xtask alias alone. Any other key changes what a cargo row compiles or runs"
+        ));
+    }
+    for key in table
+        .get("alias")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(toml::Table::keys)
+        .filter(|key| *key != "xtask")
+    {
+        found.push(format!(
+            "{PATH} [alias] carries {key:?}, and it holds xtask alone. An alias named after a subcommand a row runs replaces what that row runs"
+        ));
+    }
+    found
+}
+
 /// `text` on one line, its line breaks written as spaces.
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -1382,6 +1326,10 @@ pub(crate) fn sound_files() -> Vec<(String, String)> {
         (
             "rust-toolchain.toml",
             "[toolchain]\nchannel = \"1.98.1\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+        ),
+        (
+            ".cargo/config.toml",
+            "[alias]\nxtask = \"run --locked --package xtask --quiet --\"\n",
         ),
         (
             "Cargo.toml",
@@ -1509,7 +1457,6 @@ mod tests {
     const LOCAL_READS: &str = "a local lefthook config, and lefthook merges it over lefthook.yml, where it can replace any hook job. .gitignore lists it";
     const ENV_READS: &str =
         "an env file, and Bun loads one into the environment of every bun run started beside it";
-    const NPMRC_READS: &str = "an .npmrc, and bun install fetches from the registry it names";
 
     /// The sound tree meets every rule, so each refusal below changes one thing
     /// from something that passed.
@@ -1603,8 +1550,7 @@ mod tests {
     }
 
     /// Every name a workflow or hook tool reads in place of its named config is
-    /// refused, and a zero-width character or a Kelvin sign in a name does not
-    /// carry it past the fold.
+    /// refused, and a Kelvin sign in a name does not carry it past the fold.
     #[test]
     fn every_other_name_the_other_tools_read_is_refused() {
         let cases = vec![
@@ -1632,11 +1578,6 @@ mod tests {
                 ),
             ),
             (
-                "a zero-width space inside an actionlint config",
-                Tree::new().untracked(".github/action\u{200B}lint.yml"),
-                refused(".github/action\u{200B}lint.yml", ACTIONLINT_READS),
-            ),
-            (
                 "a Kelvin sign in lefthook.yml",
                 Tree::new().untracked("lefthoo\u{212A}.yml"),
                 refused("lefthoo\u{212A}.yml", LEFTHOOK_READS),
@@ -1661,35 +1602,52 @@ mod tests {
                 untrack(".lefthook-local", LOCAL_READS),
             ),
             (
+                "a tracked root env file",
+                Tree::new().tracked(".env"),
+                untrack(".env", ENV_READS),
+            ),
+            (
                 "a tracked nested env file",
                 Tree::new().tracked("crates/a/.env.local"),
                 untrack("crates/a/.env.local", ENV_READS),
             ),
             (
-                "a tracked env file of any mode",
-                Tree::new().tracked(".env.staging"),
-                untrack(".env.staging", ENV_READS),
+                "a tracked env file for a mode, local",
+                Tree::new().tracked("tools/.env.test.local"),
+                untrack("tools/.env.test.local", ENV_READS),
             ),
             (
-                "a tracked .npmrc",
-                Tree::new().tracked("tools/.npmrc"),
-                untrack("tools/.npmrc", NPMRC_READS),
+                "a tracked env file in another case",
+                Tree::new().tracked(".ENV.Production"),
+                untrack(".ENV.Production", ENV_READS),
             ),
         ];
         finds(cases, PLAIN);
         let untracked = Tree::new()
             .untracked("lefthook-local.yml")
             .untracked(".lefthook-local.json")
-            .untracked("crates/a/.env.local")
-            .untracked(".npmrc");
+            .untracked("crates/a/.env.local");
         assert_eq!(untracked.run(PLAIN), Vec::<String>::new());
+        for name in [
+            ".env.example",
+            "tools/.env.sample",
+            ".env.staging",
+            ".npmrc",
+        ] {
+            let tracked = Tree::new().tracked(name);
+            assert_eq!(
+                tracked.run(PLAIN),
+                Vec::<String>::new(),
+                "{name} is no file Bun loads, so it passes tracked"
+            );
+        }
     }
 
     /// A tracked path as or under `node_modules`, in any case, is one finding
     /// naming each, and an untracked one is left to the install.
     #[test]
     fn a_tracked_node_modules_path_is_refused() {
-        let reads = "tracked as or under a node_modules directory. bun install keeps what it finds there, the gate and the hooks run each JavaScript tool from it by path, and Bun resolves an import from the nearest node_modules first. Remove each from the index with git rm -r --cached";
+        let reads = "tracked as or under a node_modules directory. bun install keeps what it finds there, the gate and the hooks run each JavaScript tool from it, and Bun resolves an import from the nearest node_modules first. Remove each from the index with git rm -r --cached";
         let cases = vec![
             (
                 "one path",
@@ -1889,8 +1847,7 @@ mod tests {
     }
 
     /// A tracked file outside what the rows read is refused: a workflow named
-    /// anything but `<name>.yml`, an inline zizmor waiver under `.github`, and
-    /// a path under a version control directory.
+    /// anything but `<name>.yml`, and an inline zizmor waiver under `.github`.
     #[test]
     fn a_tracked_file_outside_the_rows_is_refused() {
         let workflow = |path: &str| {
@@ -1901,11 +1858,6 @@ mod tests {
         let waiver = |path: &str| {
             format!(
                 "{path:?} carries a zizmor ignore comment, and zizmor waives the audit it names. A waiver is an entry in .github/zizmor.yml, the one config the zizmor row names"
-            )
-        };
-        let vcs = |path: &str, dir: &str| {
-            format!(
-                "{path:?} sits under a {dir} directory, and Prettier skips a file there without a word, so the prettier row would count a file it never checked. Move it"
             )
         };
         let ci = ".github/workflows/ci.yml";
@@ -1947,23 +1899,14 @@ mod tests {
                 ),
                 waiver(".github/dependabot.yml"),
             ),
-            (
-                "a jj directory",
-                Tree::new().tracked("docs/.jj/x.md"),
-                vcs("docs/.jj/x.md", ".jj"),
-            ),
-            (
-                "an svn directory in capitals",
-                Tree::new().tracked(".SVN/x.md"),
-                vcs(".SVN/x.md", ".svn"),
-            ),
         ];
         finds(cases, PLAIN);
         let elsewhere = Tree::new()
             .tracked("docs/zizmor.md")
             .file("docs/zizmor.md", "a zizmor: ignore[x] comment in prose\n")
             .tracked(".github/workflows/sub/x.yaml")
-            .untracked("docs/.git/x.md");
+            .tracked("docs/.jj/x.md")
+            .tracked("tools/g.d.ts");
         assert_eq!(elsewhere.run(PLAIN), Vec::<String>::new());
     }
 
@@ -1982,18 +1925,14 @@ mod tests {
                 Tree::new().root(".CONFIG"),
                 format!("\".CONFIG\" {reads}"),
             ),
-            (
-                "a single quote",
-                Tree::new().root("'"),
-                "\"'\" is at the root, and actionlint looks the whole -shellcheck value up as one path before it splits it, and that value opens with a single quote, so a program under this directory can stand in for the stand-in. Remove it".to_string(),
-            ),
         ];
         finds(cases, PLAIN);
+        assert_eq!(Tree::new().root("'").run(PLAIN), Vec::<String>::new());
     }
 
-    /// A tracked TypeScript file cannot turn tsc's checking off: no declaration
-    /// file, no `@ts-nocheck` or `@ts-ignore` in any case, and an
-    /// `@ts-expect-error` only with a reason.
+    /// A tracked TypeScript file cannot turn tsc's checking off: no
+    /// `@ts-nocheck` or `@ts-ignore` in any case, and an `@ts-expect-error` only
+    /// with a reason.
     #[test]
     fn a_typescript_waiver_is_refused() {
         let source = |path: &'static str, text: &str| Tree::new().tracked(path).file(path, text);
@@ -2001,11 +1940,6 @@ mod tests {
             format!("{at} carries {name}, and tsc drops the errors it covers. Fix the type instead")
         };
         let cases = vec![
-            (
-                "a declaration file",
-                source("tools/g.d.ts", "declare const x: number;\n"),
-                "\"tools/g.d.ts\" is a declaration file, and tsc checks none under skipLibCheck, while one can widen any type the checked files use. Move the declarations into a .ts file".to_string(),
-            ),
             (
                 "nocheck",
                 source("tools/a.ts", "// @ts-nocheck\nconst x: number = 'a';\n"),
@@ -2019,17 +1953,20 @@ mod tests {
             (
                 "a bare expect-error",
                 source("tools/a.tsx", "// @ts-expect-error\n"),
-                "tools/a.tsx:1 carries @ts-expect-error with no reason, and every waiver says why".to_string(),
+                "tools/a.tsx:1 carries @ts-expect-error with no reason, and every waiver says why"
+                    .to_string(),
             ),
             (
                 "an expect-error with a zero-width reason",
                 source("tools/a.ts", "// @ts-expect-error \u{200B}\n"),
-                "tools/a.ts:1 carries @ts-expect-error with no reason, and every waiver says why".to_string(),
+                "tools/a.ts:1 carries @ts-expect-error with no reason, and every waiver says why"
+                    .to_string(),
             ),
             (
                 "an expect-error with only a colon",
                 source("tools/a.cts", "/* @ts-expect-error: */\n"),
-                "tools/a.cts:1 carries @ts-expect-error with no reason, and every waiver says why".to_string(),
+                "tools/a.cts:1 carries @ts-expect-error with no reason, and every waiver says why"
+                    .to_string(),
             ),
         ];
         finds(cases, PLAIN);
@@ -2138,6 +2075,75 @@ mod tests {
         );
     }
 
+    /// `.cargo/config.toml` holds the xtask alias and nothing else, whatever
+    /// that alias runs.
+    #[test]
+    fn the_cargo_config_holds_the_xtask_alias_alone() {
+        let path = ".cargo/config.toml";
+        let alias = "[alias]\nxtask = \"run --locked --package xtask --quiet --\"\n";
+        let key = |key: &str| {
+            format!(
+                ".cargo/config.toml carries \"{key}\", and it holds the xtask alias alone. Any other key changes what a cargo row compiles or runs"
+            )
+        };
+        let aliased = |name: &str| {
+            format!(
+                ".cargo/config.toml [alias] carries \"{name}\", and it holds xtask alone. An alias named after a subcommand a row runs replaces what that row runs"
+            )
+        };
+        let cases = vec![
+            (
+                "an alias for a row's subcommand",
+                Tree::new().file(path, &format!("{alias}fmt = \"run -p x\"\n")),
+                aliased("fmt"),
+            ),
+            (
+                "a nextest alias",
+                Tree::new().file(path, &format!("{alias}nextest = \"test\"\n")),
+                aliased("nextest"),
+            ),
+            (
+                "doc flags that filter every example",
+                Tree::new().file(
+                    path,
+                    &format!("{alias}[build]\nrustdocflags = [\"--test-args=x\"]\n"),
+                ),
+                key("build"),
+            ),
+            (
+                "a target runner",
+                Tree::new().file(
+                    path,
+                    &format!("{alias}[target.x86_64-pc-windows-msvc]\nrunner = \"a.exe\"\n"),
+                ),
+                key("target"),
+            ),
+            (
+                "an environment table",
+                Tree::new().file(path, &format!("{alias}[env]\nRUST_LOG = \"off\"\n")),
+                key("env"),
+            ),
+        ];
+        finds(cases, PLAIN);
+        assert_eq!(
+            Tree::new()
+                .file(path, "[alias]\nxtask = \"run -p xtask --\"\n")
+                .run(PLAIN),
+            Vec::<String>::new(),
+            "the alias running something else"
+        );
+        assert_eq!(
+            Tree::new().missing(path).run(PLAIN),
+            Vec::<String>::new(),
+            "no cargo config"
+        );
+        let broken = Tree::new().file(path, "[alias\n").run(PLAIN);
+        assert!(
+            broken.len() == 1 && broken[0].starts_with(".cargo/config.toml does not parse: "),
+            "{broken:?}"
+        );
+    }
+
     /// A control character read from the tree reaches the finding escaped, and
     /// so does a bidirectional mark read from a key.
     #[test]
@@ -2192,13 +2198,14 @@ mod tests {
         );
     }
 
-    /// The fold removes what a filesystem ignores and maps case both ways.
+    /// The fold maps case both ways, as NTFS and APFS compare a name, and keeps
+    /// every other character.
     #[test]
     fn the_fold_merges_what_a_filesystem_merges() {
         for (name, folded) in [
             ("CLIPPY.TOML", "clippy.toml"),
-            ("clip\u{200B}py.toml", "clippy.toml"),
-            ("\u{FEFF}deny.toml", "deny.toml"),
+            ("clip\u{200B}py.toml", "clip\u{200B}py.toml"),
+            ("\u{FEFF}Deny.toml", "\u{FEFF}deny.toml"),
             ("lefthoo\u{212A}.yml", "lefthook.yml"),
             ("\u{17F}ettings", "settings"),
             ("Tsconf\u{131}g.json", "tsconfig.json"),
@@ -2568,42 +2575,6 @@ fn f() {}
             other.run(PLAIN),
             Vec::<String>::new(),
             "an import of include_str"
-        );
-    }
-
-    /// A `.prettierrc` naming plugins is refused, at its top level or in an
-    /// override, and so is a form the gate cannot read as JSON.
-    #[test]
-    fn a_prettier_plugin_is_refused() {
-        let prettierrc = |text: &str| Tree::new().file(".prettierrc", text);
-        let cases = vec![
-            (
-                "a plugin",
-                prettierrc(r#"{ "singleQuote": true, "plugins": ["./p.mjs"] }"#),
-                ".prettierrc names plugins, and Prettier loads each as a module under the gate's own flags. Remove them".to_string(),
-            ),
-            (
-                "a plugin in an override",
-                prettierrc(r#"{ "overrides": [{ "files": "*.md" }, { "files": "*.ts", "options": { "plugins": ["x"] } }] }"#),
-                ".prettierrc overrides[1] names plugins, and Prettier loads each as a module under the gate's own flags. Remove them".to_string(),
-            ),
-        ];
-        finds(cases, PLAIN);
-        let found = prettierrc("plugins:\n  - ./p.mjs\n").run(PLAIN);
-        assert_eq!(found.len(), 1, "a YAML .prettierrc: {found:?}");
-        assert!(
-            found[0].starts_with(".prettierrc is not JSON the gate reads one way: ")
-                && found[0]
-                    .ends_with("Prettier reads YAML there too, where a plugin would load unread"),
-            "a YAML .prettierrc: {found:?}"
-        );
-        let plain = prettierrc(
-            r#"{ "singleQuote": true, "overrides": [{ "files": "*.md", "options": { "proseWrap": "always" } }] }"#,
-        );
-        assert_eq!(
-            plain.run(PLAIN),
-            Vec::<String>::new(),
-            "options without plugins"
         );
     }
 

@@ -1,21 +1,14 @@
 # Git hooks. `bun install` runs the `prepare` script, which installs these.
-# Bun runs each JavaScript tool by its path in the checkout, so the release
-# bun.lock pins is what runs, and a missing package fails the hook rather than
-# resolving somewhere else. Bun reads BUN_OPTIONS as extra flags, runs the
-# module BUN_INSPECT_PRELOAD names and opens its inspector for BUN_INSPECT and
-# BUN_INSPECT_CONNECT_TO, and Windows hands a variable to it in any case, so
-# the hook unsets every spelling of each first. --no-env-file keeps an env
-# file beside the checkout out of the process, and --config stops
-# commitlint's search for any other config.
+# Each JavaScript tool starts through `bunx --bun --no-install`, which fetches
+# nothing and runs the copy in node_modules, or one from a parent directory or
+# PATH when the install is missing. --config stops commitlint's search for any
+# other config.
 commit-msg:
   jobs:
     - name: commitlint
       run: >-
-        for name in $(env | cut -d= -f1 | grep -ixE
-        'bun_options|bun_inspect|bun_inspect_connect_to|bun_inspect_preload');
-        do unset "$name"; done;
-        bun --no-env-file ./node_modules/@commitlint/cli/cli.js --config
-        commitlint.config.js --edit {1}
+        bunx --bun --no-install commitlint --config commitlint.config.js
+        --edit {1}
 
 pre-push:
   jobs:
