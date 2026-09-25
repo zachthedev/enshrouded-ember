@@ -100,8 +100,7 @@ game. [docs/install.md](docs/install.md) has the layout.
 | File                               | For                                                                  |
 | ---------------------------------- | -------------------------------------------------------------------- |
 | [docs/install.md](docs/install.md) | Where Ember goes beside a server, and how it is upgraded and removed |
-| [docs/dev.md](docs/dev.md)         | What to install, the first run, the dev server, the tools behind it  |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | The gate, the commit convention, where code goes, what never happens |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, the dev server and its tools, the gate, commits, releases     |
 | [SECURITY.md](SECURITY.md)         | How to report a vulnerability and what is in scope                   |
 | [AGENTS.md](AGENTS.md)             | What an agent reads first, runs to verify, and never does            |
 

@@ -5,8 +5,13 @@ repository. [README.md](README.md) says what it is.
 
 ## Read first
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/dev.md](docs/dev.md) before
-changing anything. They bind an agent as they bind a person.
+Read these before changing anything, in order. They bind an agent as they bind a
+person.
+
+1. [README.md](README.md)
+2. [CONTRIBUTING.md](CONTRIBUTING.md)
+3. [SECURITY.md](SECURITY.md)
+4. [docs/install.md](docs/install.md)
 
 ## Verify
 
@@ -34,8 +39,8 @@ and what the gate does when a tool is missing.
 
 ## Deviations
 
-A comment beside a line that names the handbook records a deliberate
-deviation. It is a decision, not a defect.
+A comment that calls a line a deliberate deviation records a decision, not a
+defect. Leave the line as it is.
 
 ## Where the rest is
 
