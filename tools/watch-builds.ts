@@ -21,7 +21,6 @@
 
 import { appendFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import * as VDF from 'vdf-parser';
 import { z } from 'zod';
 import {
   appendRecord,
@@ -31,18 +30,13 @@ import {
   STEAM_BUILDS_PATH,
   SteamBuildRecord,
 } from './records.ts';
+import { parseVdf, type VdfTable, VdfError, vdfString, vdfTable } from './vdf.ts';
 
 /**
  * ///////////////////////////////////////////////
  * Reading SteamCMD output
  * ///////////////////////////////////////////////
  */
-
-/** A parsed KeyValues node: a leaf string, a table, or a repeated key. */
-type VdfNode = string | { [key: string]: VdfNode | VdfNode[] };
-
-/** A table of KeyValues children, which is what every branch of the walk sees. */
-type VdfTable = Record<string, VdfNode | VdfNode[]>;
 
 /** What one application's block says about its builds. */
 export interface AppInfo {
@@ -86,47 +80,32 @@ export function sliceAppBlock(text: string, appId: number): string {
   return lines.slice(start, end + 1).join('\n');
 }
 
-/** The children of a node, or nothing when it is a leaf or a repeated key. */
-function asTable(node: VdfNode | VdfNode[] | undefined): VdfTable {
-  return typeof node === 'object' && node !== null && !Array.isArray(node) ? node : {};
-}
-
-/** The string a node carries, or null when it is anything else. */
-function asString(node: VdfNode | VdfNode[] | undefined): string | null {
-  return typeof node === 'string' ? node : null;
-}
-
 /**
  * Read one application's build state out of SteamCMD's output.
  *
  * @param text - Raw SteamCMD stdout.
  * @param appId - The application to read.
  * @returns The branches, the depot manifests and the change number.
- * @throws {@link AppInfoError} When the block is absent, carries no branch
- * build id, or carries no depot manifest. An empty answer written as a row
- * would read as a build that moved.
+ * @throws {@link AppInfoError} When the block is absent, is not KeyValues this
+ * tool reads, carries no branch build id, or carries no depot manifest. An
+ * empty answer written as a row would read as a build that moved.
  */
 export function parseAppInfo(text: string, appId: number): AppInfo {
   const block = sliceAppBlock(text, appId);
-  // Both options are load-bearing and neither is a preference.
-  //
-  // types: false keeps Valve's values as strings. Conversion rounds a manifest
-  // gid, which is larger than Number.MAX_SAFE_INTEGER, into a gid Valve never
-  // served.
-  //
-  // arrayify: true is what keeps the parser off Object.prototype. On a key
-  // named `__proto__` the parser finds the slot already occupied and descends
-  // into what is there. With arrayify off that is Object.prototype itself, and
-  // the block's children are written onto it for the life of the process. With
-  // it on, an array is assigned through the setter instead and nothing global
-  // is touched. It also turns a repeated key into an array, which the readers
-  // below refuse rather than silently taking one of the two.
-  const root = VDF.parse<VdfTable>(block, { types: false, arrayify: true });
-  const depots = asTable(asTable(root[String(appId)])['depots']);
+  let root: VdfTable;
+  try {
+    root = parseVdf(block);
+  } catch (error) {
+    if (error instanceof VdfError) {
+      throw new AppInfoError(`SteamCMD's block for app ${appId} is not KeyValues this tool reads: ${error.message}`);
+    }
+    throw error;
+  }
+  const depots = vdfTable(vdfTable(root[String(appId)])['depots']);
 
   const branches: Record<string, string> = {};
-  for (const [name, node] of Object.entries(asTable(depots['branches']))) {
-    const buildId = asString(asTable(node)['buildid']);
+  for (const [name, node] of Object.entries(vdfTable(depots['branches']))) {
+    const buildId = vdfString(vdfTable(node)['buildid']);
     if (buildId !== null) {
       branches[name] = buildId;
     }
@@ -137,8 +116,8 @@ export function parseAppInfo(text: string, appId: number): AppInfo {
     if (!/^\d+$/.test(depotId)) {
       continue;
     }
-    const publicManifest = asTable(asTable(asTable(node)['manifests'])['public']);
-    const gid = asString(publicManifest['gid']);
+    const publicManifest = vdfTable(vdfTable(vdfTable(node)['manifests'])['public']);
+    const gid = vdfString(publicManifest['gid']);
     if (gid !== null) {
       manifests[depotId] = gid;
     }
