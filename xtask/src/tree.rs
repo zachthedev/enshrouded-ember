@@ -18,8 +18,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Stdio;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use regex_syntax::hir::{Class, ClassUnicode, HirKind};
 
 // ///////////////////////////////////////////////
 // Comparing names
@@ -431,8 +433,8 @@ const CLIPPY_GROUPS: &[&str] = &[
 /// what it spells is blank and `"s"` otherwise, a character to `'c'`, and
 /// anything else as written, so no text inside a literal reads as code.
 ///
-/// Blank is holding no letter and no digit once the escapes are decoded, since
-/// clippy accepts a reason no reader can see or read.
+/// Blank is failing [`legible`] once the escapes are decoded, since clippy
+/// accepts a reason no reader can see or read.
 fn literal(text: &str) -> String {
     let prefix: String = text.chars().take_while(char::is_ascii_alphabetic).collect();
     let rest = &text[prefix.len()..];
@@ -449,14 +451,33 @@ fn literal(text: &str) -> String {
         } else {
             unescape(content)
         };
-        return if spelled.chars().any(char::is_alphanumeric) {
-            "\"s\""
-        } else {
-            "\"\""
-        }
-        .to_string();
+        return if legible(&spelled) { "\"s\"" } else { "\"\"" }.to_string();
     }
     text.to_string()
+}
+
+/// Unicode's `Default_Ignorable_Code_Point` set: the code points a renderer
+/// draws as nothing, the Hangul fillers among them, which Unicode counts as
+/// letters.
+static IGNORABLE: LazyLock<ClassUnicode> = LazyLock::new(|| {
+    let hir = regex_syntax::parse(r"\p{Default_Ignorable_Code_Point}")
+        .expect("regex-syntax names the Default_Ignorable_Code_Point property");
+    match hir.into_kind() {
+        HirKind::Class(Class::Unicode(class)) => class,
+        kind => panic!("Default_Ignorable_Code_Point parsed to {kind:?}, not a class"),
+    }
+});
+
+/// Whether `text` holds a letter or a digit a reader can see, one outside the
+/// default-ignorable set.
+fn legible(text: &str) -> bool {
+    text.chars().any(|character| {
+        character.is_alphanumeric()
+            && !IGNORABLE
+                .ranges()
+                .iter()
+                .any(|range| (range.start()..=range.end()).contains(&character))
+    })
 }
 
 /// What the escapes in the body of a string literal that is not raw spell. A
@@ -1148,7 +1169,7 @@ fn typescript_findings(path: &str, text: &str) -> Vec<String> {
             }
         }
         if let Some((_, rest)) = line.split_once("@ts-expect-error")
-            && !rest.chars().any(char::is_alphanumeric)
+            && !legible(rest)
         {
             found.push(format!(
                 "{at} carries @ts-expect-error with no reason, and every waiver says why"
@@ -1982,14 +2003,21 @@ mod tests {
 
     /// A tracked TypeScript file cannot turn tsc's checking off: no
     /// `@ts-nocheck` or `@ts-ignore` in any case, and an `@ts-expect-error` only
-    /// with a reason.
+    /// with a reason a reader can see.
     #[test]
     fn a_typescript_waiver_is_refused() {
         let source = |path: &'static str, text: &str| Tree::new().tracked(path).file(path, text);
         let directive = |at: &str, name: &str| {
             format!("{at} carries {name}, and tsc drops the errors it covers. Fix the type instead")
         };
-        let cases = vec![
+        let unreasoned = |reason: &str| {
+            (
+                source("tools/a.ts", &format!("// @ts-expect-error {reason}\n")),
+                "tools/a.ts:1 carries @ts-expect-error with no reason, and every waiver says why"
+                    .to_string(),
+            )
+        };
+        let mut cases = vec![
             (
                 "nocheck",
                 source("tools/a.ts", "// @ts-nocheck\nconst x: number = 'a';\n"),
@@ -2019,16 +2047,34 @@ mod tests {
                     .to_string(),
             ),
         ];
+        for (label, reason) in [
+            ("a Hangul choseong filler", "\u{115F}"),
+            ("a Hangul jungseong filler", "\u{1160}"),
+            ("a Hangul filler", "\u{3164}"),
+            ("a halfwidth Hangul filler", "\u{FFA0}"),
+            ("a braille blank", "\u{2800}"),
+            ("a dash alone", "-"),
+        ] {
+            let (tree, expected) = unreasoned(reason);
+            cases.push((label, tree, expected));
+        }
         finds(cases, PLAIN);
-        let reasoned = source(
-            "tools/a.ts",
-            "// @ts-expect-error the fixture is a malformed record\nparse(1);\n",
-        );
-        assert_eq!(
-            reasoned.run(PLAIN),
-            Vec::<String>::new(),
-            "a reasoned waiver"
-        );
+        for (label, text) in [
+            (
+                "a reasoned waiver",
+                "// @ts-expect-error the fixture is a malformed record\nparse(1);\n",
+            ),
+            (
+                "a letter beside a Hangul filler",
+                "// @ts-expect-error a\u{3164}\n",
+            ),
+        ] {
+            assert_eq!(
+                source("tools/a.ts", text).run(PLAIN),
+                Vec::<String>::new(),
+                "{label}"
+            );
+        }
     }
 
     /// `rust-toolchain.toml` names a channel and its components and nothing
@@ -2451,8 +2497,9 @@ fn f() {}
     }
 
     /// A reason no reader can see is blank however it is spelled: a zero-width
-    /// space or a soft hyphen, raw or escaped, an escaped line break, or a line
-    /// continuation. A raw string spells its backslashes as written.
+    /// space or a soft hyphen, raw or escaped, an escaped line break, a line
+    /// continuation, a Hangul filler, which Unicode counts as a letter, or a
+    /// mark alone. A raw string spells its backslashes as written.
     #[test]
     fn an_invisible_reason_is_blank() {
         let blank =
@@ -2488,10 +2535,34 @@ fn f() {}
             ),
             ("a line continuation", waiver("\\\n    "), blank.to_string()),
             ("a braille blank", waiver("\u{2800}"), blank.to_string()),
+            (
+                "a Hangul choseong filler",
+                waiver("\u{115F}"),
+                blank.to_string(),
+            ),
+            (
+                "a Hangul jungseong filler",
+                waiver("\u{1160}"),
+                blank.to_string(),
+            ),
+            ("a Hangul filler", waiver("\u{3164}"), blank.to_string()),
+            (
+                "a halfwidth Hangul filler",
+                waiver("\u{FFA0}"),
+                blank.to_string(),
+            ),
+            (
+                "an escaped Hangul filler",
+                waiver("\\u{3164}"),
+                blank.to_string(),
+            ),
+            ("a dash alone", waiver("-"), blank.to_string()),
         ];
         finds(cases, PLAIN);
         for (label, tree) in [
             ("a letter between invisible marks", waiver("a\u{200B}b")),
+            ("a letter beside a Hangul filler", waiver("a\u{3164}")),
+            ("a digit beside a Hangul filler", waiver("\u{FFA0}1")),
             ("an escaped letter", waiver("\\u{61}")),
             (
                 "a raw string",

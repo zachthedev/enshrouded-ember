@@ -35,6 +35,12 @@ owo-colors = { version = "4.4.0", features = ["supports-colors"] }
 proc-macro2 = { version = "1.0.107", default-features = false, features = [
     "span-locations",
 ] }
+# Unicode's Default_Ignorable_Code_Point set, which the gate strips from a
+# waiver's reason before it looks for a letter or a digit. The boolean property
+# tables alone.
+regex-syntax = { version = "0.8.11", default-features = false, features = [
+    "unicode-bool",
+] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.20"
