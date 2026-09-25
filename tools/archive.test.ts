@@ -529,8 +529,8 @@ describe('fetchedManifests', () => {
     const dir = await sandbox();
     await Bun.write(join(dir, '.DepotDownloader'), 'not a directory');
     const failure = fetchedManifests(dir, 2278520, 2278521);
-    expect(failure).rejects.toThrow(DdManifestError);
-    expect(failure).rejects.toThrow(/\.DepotDownloader could not be listed/);
+    await expect(failure).rejects.toThrow(DdManifestError);
+    await expect(failure).rejects.toThrow(/\.DepotDownloader could not be listed/);
   });
 });
 
