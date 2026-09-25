@@ -29,9 +29,7 @@ anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 comfy-table = { version = "8.0.0", default-features = false }
 goblin = "0.10.7"
-minhook = "0.9.0"
 owo-colors = { version = "4.4.0", features = ["supports-colors"] }
-pelite = "0.10.0"
 # Rust's tokenizer outside a procedural macro. The gate reads every lint waiver
 # in a tracked .rs file from its tokens, with line numbers from span-locations.
 proc-macro2 = { version = "1.0.107", default-features = false, features = [
