@@ -35,9 +35,9 @@ rules:
   # deps.yml's deps job hands its called workflow every secret. The called job
   # names the deps environment, and a caller that runs in no environment cannot
   # pass that environment's secret by name. The waiver takes the whole file,
-  # because the gate's zizmor row holds the control: a second pass with no
-  # config and no ignores fails unless every job passing secrets: inherit calls
-  # a workflow under zachthedev/.github/.github/workflows/. cd.yml passes
+  # because the shared workflows job holds the control: its secrets-inherit
+  # step fails unless every job passing secrets: inherit calls a workflow under
+  # zachthedev/.github/.github/workflows/. cd.yml passes
   # secrets: inherit to nothing, since release-plz runs from its mise pin and
   # not through the shared release-pr workflow, so deps.yml is the one file.
   secrets-inherit:

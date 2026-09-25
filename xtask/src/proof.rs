@@ -14,9 +14,6 @@ use std::path::Path;
 /// whole command line at 32,767, so a longer list runs in batches.
 const ARGUMENT_BUDGET: usize = 24_000;
 
-/// The prefix every reusable workflow a job may hand its secrets to carries.
-pub const SHARED_WORKFLOWS: &str = "zachthedev/.github/.github/workflows/";
-
 /// `paths` in batches that fit [`ARGUMENT_BUDGET`].
 #[must_use]
 pub fn batches(paths: &[String]) -> Vec<Vec<String>> {
@@ -351,59 +348,6 @@ pub fn machete_analyzed(printed: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every job zizmor's JSON report names as passing `secrets: inherit` to a
-/// workflow outside [`SHARED_WORKFLOWS`], as one sentence each.
-///
-/// The report comes from a run with `--no-config --no-ignores`, so no waiver in
-/// `zizmor.yml` or inline hides a job from it. The called workflow is the
-/// primary location's feature.
-///
-/// # Errors
-///
-/// Returns the sentence saying the report does not read as zizmor's JSON.
-pub fn inherit_callees(report: &str) -> Result<Vec<String>, String> {
-    let findings: serde_json::Value = serde_json::from_str(report)
-        .map_err(|err| format!("zizmor's JSON report does not parse: {err}"))?;
-    let findings = findings
-        .as_array()
-        .ok_or("zizmor's JSON report is not a list of findings")?;
-    let mut found = Vec::new();
-    for finding in findings {
-        if finding.get("ident").and_then(serde_json::Value::as_str) != Some("secrets-inherit") {
-            continue;
-        }
-        let locations = finding
-            .get("locations")
-            .and_then(serde_json::Value::as_array)
-            .ok_or("a secrets-inherit finding carries no locations")?;
-        let primary = locations
-            .iter()
-            .find(|location| {
-                location
-                    .pointer("/symbolic/kind")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("Primary")
-            })
-            .ok_or("a secrets-inherit finding carries no primary location")?;
-        let file = primary
-            .pointer("/symbolic/key/Local/given_path")
-            .or_else(|| primary.pointer("/symbolic/key/Local/verbatim_path"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("a workflow");
-        let callee = primary
-            .pointer("/concrete/feature")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        if !callee.trim().starts_with(SHARED_WORKFLOWS) {
-            found.push(format!(
-                "{file:?} passes secrets: inherit to {:?}, and a job may hand its secrets only to a workflow under {SHARED_WORKFLOWS}",
-                callee.trim()
-            ));
-        }
-    }
-    Ok(found)
-}
-
 /// The script Bun runs to ask Prettier which of the paths on standard input it
 /// formats: not ignored by `.prettierignore`, with a parser it infers.
 ///
@@ -427,9 +371,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        Examples, FILES, SHARED_WORKFLOWS, actionlint_linted, batches, comparable, count, covered,
-        doctest_examples, doctests_proven, inherit_callees, machete_analyzed, prove,
-        rustfmt_formatted, taplo_found, zizmor_completed,
+        Examples, FILES, actionlint_linted, batches, comparable, count, covered, doctest_examples,
+        doctests_proven, machete_analyzed, prove, rustfmt_formatted, taplo_found, zizmor_completed,
     };
 
     fn owned(paths: &[&str]) -> Vec<String> {
@@ -547,40 +490,6 @@ mod tests {
 
         let machete = "Analyzing dependencies of crates in a,b...\ncargo-machete found the following unused dependencies in a:\na -- a\\Cargo.toml:\n\tb\ncargo-machete didn't find any unused dependencies in ./b. Good job!\nDone!\n";
         assert_eq!(machete_analyzed(machete), owned(&["a", "./b"]));
-    }
-
-    /// A job may hand its secrets only to a workflow under the shared prefix,
-    /// read from the primary location's feature, and a report that does not
-    /// read as zizmor's JSON is refused rather than read as clean.
-    #[test]
-    fn a_secrets_inherit_callee_is_held_to_the_shared_workflows() {
-        let finding = |feature: &str| {
-            format!(
-                r#"[{{"ident":"secrets-inherit","locations":[{{"symbolic":{{"kind":"Related","key":{{"Local":{{"verbatim_path":"x"}}}}}},"concrete":{{"feature":"secrets: inherit"}}}},{{"symbolic":{{"kind":"Primary","key":{{"Local":{{"verbatim_path":".github/workflows/deps.yml"}}}}}},"concrete":{{"feature":"{feature}"}}}}]}}]"#
-            )
-        };
-        let shared = format!("{SHARED_WORKFLOWS}deps.yml@c53d09e393028ceddee0d761f2a7963394289a72");
-        assert_eq!(inherit_callees(&finding(&shared)), Ok(Vec::new()));
-        assert_eq!(inherit_callees("[]"), Ok(Vec::new()));
-        assert_eq!(
-            inherit_callees(&finding("evil/actions/.github/workflows/x.yml@main")),
-            Ok(vec![
-                "\".github/workflows/deps.yml\" passes secrets: inherit to \"evil/actions/.github/workflows/x.yml@main\", and a job may hand its secrets only to a workflow under zachthedev/.github/.github/workflows/".to_string()
-            ])
-        );
-        assert_eq!(
-            inherit_callees(&finding(
-                "zachthedev/.github-evil/.github/workflows/x.yml@main"
-            ))
-            .map(|found| found.len()),
-            Ok(1),
-            "a name the owner's repository starts with is another repository"
-        );
-        let other = r#"[{"ident":"unpinned-uses","locations":[]}]"#;
-        assert_eq!(inherit_callees(other), Ok(Vec::new()));
-        assert!(inherit_callees("not json").is_err());
-        assert!(inherit_callees(r#"{"ident":"secrets-inherit"}"#).is_err());
-        assert!(inherit_callees(r#"[{"ident":"secrets-inherit","locations":[]}]"#).is_err());
     }
 
     /// A list longer than one command line holds splits into batches that each
