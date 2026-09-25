@@ -8,9 +8,8 @@
 //! refused only when tracked, and `.gitignore` lists it. What a config holds is
 //! CODEOWNERS' to review, so the rules here refuse only a key that runs or
 //! redirects code from a file that reads as data. The shared `commits` job
-//! refuses a `patchedDependencies` key, a `bunfig.toml` key and TypeScript
-//! `paths` before a merge, reading the committed tree, and the rules here do
-//! not repeat them.
+//! refuses a `bunfig.toml` key and TypeScript `paths` before a merge, reading
+//! the committed tree, and the rules here do not repeat them.
 //!
 //! `cargo xtask pins`, the gate's opening row, runs these rules before any
 //! tool starts. Names compare through [`fold`].
@@ -1045,9 +1044,13 @@ fn extended_config(from: &str, target: &serde_json::Value) -> Option<String> {
 /// ways.
 ///
 /// commitlint's cosmiconfig reads its own settings from a `cosmiconfig` key
-/// before it looks at `--config`, and a `$import` there loads a module. Bun
-/// keeps the first of two equal keys where a JSON parser keeps the last, so a
-/// check that reads the file as JSON can pass a key Bun applies.
+/// before it looks at `--config`, and a `$import` there loads a module. A
+/// `patchedDependencies` key makes `bun install` rewrite each package it names,
+/// even frozen and without scripts. The shared `commits` job's check for it
+/// passes a file its `jq` cannot parse, such as one nested past `jq`'s depth
+/// limit, so the gate refuses it too. Bun keeps the first of two equal keys
+/// where a JSON parser keeps the last, so a check that reads the file as JSON
+/// can pass a key Bun applies.
 fn package_json_findings(path: &str, read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
     match read(path).map(|text| parse_json(&text)) {
         Some(Ok(parsed)) => parsed
@@ -1058,6 +1061,11 @@ fn package_json_findings(path: &str, read: &dyn Fn(&str) -> Option<String>) -> V
                 )
             })
             .into_iter()
+            .chain(parsed.get("patchedDependencies").map(|_| {
+                format!(
+                    "{path:?} carries a patchedDependencies key, and bun install rewrites each package it names with a patch, so what runs is not the release bun.lock pins. Remove it"
+                )
+            }))
             .collect(),
         Some(Err(why)) => vec![format!(
             "{path:?} is not plain JSON every reader reads one way: {why}"
@@ -1778,13 +1786,23 @@ mod tests {
     }
 
     /// A tracked `package.json` that runs code or does not read one way is
-    /// refused: a `cosmiconfig` key, a key repeated within one object at any
-    /// depth, or text that does not parse. An untracked one is the install's.
+    /// refused: a `cosmiconfig` or `patchedDependencies` key, a key repeated
+    /// within one object at any depth, or text that does not parse. An
+    /// untracked one is the install's.
     #[test]
     fn a_package_json_that_runs_code_or_reads_two_ways_is_refused() {
         let two_ways = "is not plain JSON every reader reads one way: it repeats";
         let cosmiconfig = "carries a cosmiconfig key, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it";
+        let patched = "carries a patchedDependencies key, and bun install rewrites each package it names with a patch, so what runs is not the release bun.lock pins. Remove it";
         let cases = vec![
+            (
+                "patched dependencies",
+                Tree::new().tracked("tools/package.json").file(
+                    "tools/package.json",
+                    r#"{ "patchedDependencies": { "prettier@3.9.8": "patches/p.patch" } }"#,
+                ),
+                format!("\"tools/package.json\" {patched}"),
+            ),
             (
                 "a cosmiconfig key",
                 Tree::new().tracked("package.json").file(
@@ -1827,6 +1845,24 @@ mod tests {
                 "\"package.json\" is not plain JSON every reader reads one way: it does not parse: "
             ),
             "{broken:?}"
+        );
+        // Nested past the shared job's jq depth limit of 256, beside a patch:
+        // jq fails on it and that job passes it, so the gate refuses it here.
+        let deep = format!(
+            r#"{{ "patchedDependencies": {{ "a@1.0.0": "p.patch" }}, "x": {}{} }}"#,
+            "[".repeat(300),
+            "]".repeat(300)
+        );
+        let nested = Tree::new()
+            .tracked("package.json")
+            .file("package.json", &deep)
+            .run(PLAIN);
+        assert_eq!(nested.len(), 1, "{nested:?}");
+        assert!(
+            nested[0] == format!("\"package.json\" {patched}")
+                || nested[0]
+                    .starts_with("\"package.json\" is not plain JSON every reader reads one way: "),
+            "a patch the shared job cannot read passes the gate: {nested:?}"
         );
         let untracked = Tree::new()
             .untracked("package.json")
