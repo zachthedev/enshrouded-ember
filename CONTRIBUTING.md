@@ -20,8 +20,18 @@
 Install mise, then:
 
 ```sh
-mise install
+cargo xtask setup
 ```
+
+That holds `mise.toml` and `mise.lock` to their rules first, then installs what
+the lockfile records, under the environment the gate gives every mise child. A
+bare `mise install` reads a committed `mise.local.toml` before any rule runs.
+The install asks api.github.com for the attestations of each tool mise's
+registry does not name, and a caller with no token gets 60 requests an hour. If
+it reports a rate limit, set `MISE_GITHUB_TOKEN` for that one command. The
+install is the only mise child that receives it. Set it only in a checkout you
+trust, because `cargo xtask` builds and runs the checkout's own code with the
+environment it inherits.
 
 Nothing from that lands on `PATH`. The gate asks `mise which` for each binary
 and runs the path it gives back, so the binary it checked is the binary it ran.
@@ -38,7 +48,7 @@ From a fresh clone to a green gate:
 ```sh
 git clone https://github.com/zachthedev/enshrouded-ember.git
 cd enshrouded-ember
-mise install                  # the gate's tools, at the releases mise.lock records
+cargo xtask setup             # the gate's tools, at the releases mise.lock records
 bun install --frozen-lockfile # the hooks and the markup formatter
 cargo xtask server fetch      # a dedicated server, into .cache
 cargo xtask schema extract    # the reflection schema, out of that server
@@ -787,7 +797,7 @@ A local run that fails, or that differs from continuous integration:
 - **zizmor passes here and fails in CI, or the reverse.** Locally it runs online
   when `gh auth token` answers, and CI's gate runs it offline; CI's shared
   `workflows` job runs the online audits.
-- **A tool is missing.** The gate names it. Run `mise install`.
+- **A tool is missing.** The gate names it. Run `cargo xtask setup`.
 
 ## What never happens
 

@@ -1,14 +1,17 @@
 //! Process execution behind one trait.
 //!
-//! Every command this crate runs goes through a `Runner`. A test builds its own
-//! and spawns nothing, so no test formats the tree, installs a git hook or
-//! reaches the network.
+//! Every command this crate runs goes through a `Runner`. A test builds its own,
+//! so no test formats the tree, installs a git hook or reaches the network. The
+//! cases for [`Processes::capture_within`] alone start real children: cargo,
+//! and a shell that leaves a child of its own running.
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write as _};
+use std::io::{self, Read, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 /// Environment variables that describe this crate rather than the workspace.
 ///
@@ -45,13 +48,51 @@ const CRATE_ENV: &[&str] = &[
 /// `CARGO_BUILD_RUSTDOCFLAGS` and `CARGO_ENCODED_RUSTDOCFLAGS`, where a test
 /// filter drops every documented example from the doctests row. Windows
 /// matches a variable name in any case, and so does the removal there.
+///
+/// gh, zizmor and mise read a GitHub token from the `_TOKEN` names below, and
+/// the rows that build and test repository code run with none of them. A
+/// command that needs a token is handed it by name, as gh is handed
+/// [`GH_OWN_TOKENS`]. `GH_HOST` points gh and zizmor at another host, the two
+/// `ZIZMOR_` switches turn the online audits off whatever the zizmor row
+/// prints, and `ZIZMOR_CONFIG` names a config against the one each zizmor run
+/// names or refuses.
 const WITHHELD_ENV: &[&str] = &[
     "SHELLCHECK_OPTS",
     "BUN_OPTIONS",
     "RUSTDOCFLAGS",
     "CARGO_BUILD_RUSTDOCFLAGS",
     "CARGO_ENCODED_RUSTDOCFLAGS",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GITHUB_API_TOKEN",
+    "ZIZMOR_GITHUB_TOKEN",
+    "MISE_GITHUB_TOKEN",
+    "MISE_GITHUB_ENTERPRISE_TOKEN",
+    "GH_HOST",
+    "ZIZMOR_OFFLINE",
+    "ZIZMOR_NO_ONLINE_AUDITS",
+    "ZIZMOR_CONFIG",
 ];
+
+/// The token names gh reads for github.com ahead of its own login. Every child
+/// loses them, and a gh call that needs a token gets them back through
+/// [`gh_own_tokens`].
+pub const GH_OWN_TOKENS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN"];
+
+/// Each of [`GH_OWN_TOKENS`] that `runner` holds, with its value, for a gh call
+/// to set on top of the scrubbed environment.
+#[must_use]
+pub fn gh_own_tokens(runner: &dyn Runner) -> Vec<(&'static str, String)> {
+    GH_OWN_TOKENS
+        .iter()
+        .filter_map(|name| Some((*name, runner.env_var(name)?)))
+        .collect()
+}
+
+/// How often a bounded child is checked for having exited.
+const POLL: Duration = Duration::from_millis(20);
 
 /// `text` without ANSI CSI and OSC sequences. A tool can color what it prints,
 /// or wrap a path in a link, on a runner that asks for color whatever
@@ -128,21 +169,29 @@ pub enum Exit {
 
 /// Runs commands on behalf of an xtask subcommand.
 pub trait Runner {
-    /// Run `command` silently and return what it printed, or `None` when the
-    /// program cannot be started or exits non-zero.
-    ///
-    /// `command[0]` is the program. Standard output and standard error come
-    /// back as one string, because a tool is free to print its release to
-    /// either. A caller that only wants to know whether the tool answers reads
-    /// this as `Some`, so one call covers both questions.
-    fn capture(&self, command: &[&str]) -> Option<String>;
-
     /// Run `command` silently and return what it printed whatever its exit
     /// code, or `None` when the program cannot be started.
     ///
-    /// This is for a command whose finding is its expected result, so a
-    /// non-zero exit carries the answer rather than the failure.
+    /// `command[0]` is the program. Standard output and standard error come
+    /// back as one string. This is for a command whose finding is its expected
+    /// result, so a non-zero exit carries the answer rather than the failure.
     fn capture_any(&self, command: &[&str]) -> Option<String>;
+
+    /// Run `command` silently with `env` set on top of the scrubbed
+    /// environment, and return what it printed, or `None` when the program
+    /// cannot be started, exits non-zero, or runs past `deadline`.
+    ///
+    /// `command[0]` is the program. Standard output and standard error come
+    /// back as one string. A child past its deadline is killed, and its own
+    /// children are not. Output still open at the deadline, held by a child of
+    /// the child, reads as no answer, and the threads reading it are left to
+    /// end when it closes.
+    fn capture_within(
+        &self,
+        command: &[&str],
+        env: &[(&str, &str)],
+        deadline: Duration,
+    ) -> Option<String>;
 
     /// Run `command` with `env` set on top of the scrubbed environment, letting
     /// it write straight to this process's terminal.
@@ -241,25 +290,47 @@ pub trait Runner {
 pub struct Processes;
 
 impl Runner for Processes {
-    fn capture(&self, command: &[&str]) -> Option<String> {
-        let (program, args) = command.split_first()?;
-        let mut child = command_for(program).ok()?;
-        let output = child.args(args).stdin(Stdio::null()).output().ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let mut printed = String::from_utf8_lossy(&output.stdout).into_owned();
-        printed.push_str(&String::from_utf8_lossy(&output.stderr));
-        Some(printed)
-    }
-
     fn capture_any(&self, command: &[&str]) -> Option<String> {
         let (program, args) = command.split_first()?;
         let mut child = command_for(program).ok()?;
         let output = child.args(args).stdin(Stdio::null()).output().ok()?;
-        let mut printed = String::from_utf8_lossy(&output.stdout).into_owned();
-        printed.push_str(&String::from_utf8_lossy(&output.stderr));
-        Some(printed)
+        Some(printed(&output.stdout, &output.stderr))
+    }
+
+    fn capture_within(
+        &self,
+        command: &[&str],
+        env: &[(&str, &str)],
+        deadline: Duration,
+    ) -> Option<String> {
+        let (program, args) = command.split_first()?;
+        let mut child = command_for(program).ok()?;
+        child.envs(env.iter().copied()).args(args);
+        child
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut running = child.spawn().ok()?;
+        let started = Instant::now();
+        let stdout = drain(running.stdout.take());
+        let stderr = drain(running.stderr.take());
+        let status = loop {
+            match running.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if started.elapsed() < deadline => std::thread::sleep(POLL),
+                // Past the deadline, or no longer waitable: the child ends here,
+                // and a kill that fails means it already exited.
+                _ => {
+                    running.kill().ok();
+                    running.wait().ok();
+                    return None;
+                }
+            }
+        };
+        let left = || deadline.saturating_sub(started.elapsed());
+        let stdout = stdout.recv_timeout(left()).ok()?;
+        let stderr = stderr.recv_timeout(left()).ok()?;
+        status.success().then(|| printed(&stdout, &stderr))
     }
 
     fn run(&self, command: &[&str], env: &[(&str, &str)]) -> io::Result<Exit> {
@@ -286,10 +357,9 @@ impl Runner for Processes {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty command"));
         };
         let mut child = command_for(program)?;
-        // A row parses what this child prints, so it prints no color, and cargo
+        // A row parses what this child prints, so cargo prints no color, and it
         // prints its headers whatever quiet setting a user config holds.
         child
-            .env("NO_COLOR", "1")
             .env("CARGO_TERM_COLOR", "never")
             .env("CARGO_TERM_QUIET", "false");
         child.envs(env.iter().copied()).args(args);
@@ -340,10 +410,32 @@ impl Runner for Processes {
     }
 }
 
-/// A command running `program`, with this crate's build metadata removed from
-/// its environment and `PATH` narrowed as `spawn` narrows it. An absolute path
-/// runs as given, and a bare name runs from the absolute path `PATH` holds for
-/// it.
+/// What a child wrote to standard output, then standard error, as plain text.
+fn printed(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut printed = String::from_utf8_lossy(stdout).into_owned();
+    printed.push_str(&String::from_utf8_lossy(stderr));
+    plain(&printed)
+}
+
+/// Every byte `stream` yields, read to its end on a thread of its own and sent
+/// once whole. Nothing arrives when there is no stream or a read fails.
+fn drain(stream: Option<impl Read + Send + 'static>) -> mpsc::Receiver<Vec<u8>> {
+    let (sender, received) = mpsc::channel();
+    if let Some(mut stream) = stream {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if stream.read_to_end(&mut bytes).is_ok() {
+                // The receiver is gone only once its capture gave up.
+                sender.send(bytes).ok();
+            }
+        });
+    }
+    received
+}
+
+/// A command running `program`, with the environment [`scrub`] leaves and
+/// `PATH` narrowed as `spawn` narrows it. An absolute path runs as given, and
+/// a bare name runs from the absolute path `PATH` holds for it.
 fn command_for(program: &str) -> io::Result<Command> {
     let path = if Path::new(program).is_absolute() {
         PathBuf::from(program)
@@ -365,7 +457,8 @@ const WITHHELD_PREFIX: &str = "NEXTEST_";
 /// Drop this crate's own build metadata, every variable in [`WITHHELD_ENV`],
 /// every inherited one [`WITHHELD_PREFIX`] opens, and every inherited
 /// `CARGO_TARGET_<triple>_RUSTDOCFLAGS`, which hands rustdoc a test filter for
-/// one target, from a child's environment.
+/// one target, from a child's environment, and set `NO_COLOR=1` in it, so no
+/// child colors what a row reads.
 fn scrub(command: &mut Command) {
     scrub_inherited(command, std::env::vars_os().map(|(name, _)| name));
 }
@@ -375,6 +468,7 @@ fn scrub_inherited(command: &mut Command, inherited: impl Iterator<Item = OsStri
     for name in CRATE_ENV.iter().chain(WITHHELD_ENV) {
         command.env_remove(name);
     }
+    command.env("NO_COLOR", "1");
     for name in inherited {
         let upper = name.to_string_lossy().to_ascii_uppercase();
         let target_doc_flags =
@@ -390,6 +484,7 @@ mod tests {
     use std::ffi::{OsStr, OsString};
     use std::path::Path;
     use std::process::Command;
+    use std::time::Duration;
 
     use super::{CRATE_ENV, Processes, Runner, scrub, scrub_inherited};
 
@@ -478,6 +573,110 @@ mod tests {
                 "a child keeps {name}: the scrub removes only {removed:?}"
             );
         }
+    }
+
+    /// A child runs with `NO_COLOR=1` and without any variable gh, zizmor or
+    /// mise reads a GitHub token or a host from.
+    #[test]
+    fn a_child_gets_no_color_and_no_token() {
+        let mut command = Command::new("child");
+        scrub(&mut command);
+        let envs: Vec<(&OsStr, Option<&OsStr>)> = command.get_envs().collect();
+        for name in [
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "GITHUB_ENTERPRISE_TOKEN",
+            "GITHUB_API_TOKEN",
+            "ZIZMOR_GITHUB_TOKEN",
+            "MISE_GITHUB_TOKEN",
+            "MISE_GITHUB_ENTERPRISE_TOKEN",
+            "GH_HOST",
+            "ZIZMOR_OFFLINE",
+            "ZIZMOR_NO_ONLINE_AUDITS",
+            "ZIZMOR_CONFIG",
+        ] {
+            assert!(
+                envs.contains(&(OsStr::new(name), None)),
+                "a child keeps {name}: {envs:?}"
+            );
+        }
+        assert!(
+            envs.contains(&(OsStr::new("NO_COLOR"), Some(OsStr::new("1")))),
+            "a child gets no NO_COLOR=1: {envs:?}"
+        );
+    }
+
+    /// What a captured child printed reaches its caller as plain text, the
+    /// standard output first, with every color sequence gone.
+    #[test]
+    fn captured_output_reads_as_plain_text() {
+        assert_eq!(
+            super::printed(
+                b"\x1b[32mSC2086\x1b[0m found\n",
+                b"\x1b[1;31merror\x1b[0m: x\n"
+            ),
+            "SC2086 found\nerror: x\n"
+        );
+    }
+
+    /// A child left running by the captured one keeps its output open. The
+    /// capture reads that as no answer once the deadline passes, rather than
+    /// waiting for the output to close.
+    #[test]
+    fn output_held_open_past_the_deadline_is_no_answer() {
+        #[cfg(unix)]
+        let command = ["sh", "-c", "sleep 8 & echo token-line"];
+        #[cfg(windows)]
+        let command = [
+            "cmd",
+            "/d",
+            "/c",
+            "start /b ping -n 9 127.0.0.1 & echo token-line",
+        ];
+        let deadline = Duration::from_secs(2);
+        let started = std::time::Instant::now();
+        let answer = Processes.capture_within(&command, &[], deadline);
+        let took = started.elapsed();
+        assert_eq!(answer, None, "the held output counts as an answer");
+        assert!(
+            took < Duration::from_secs(5),
+            "the capture waited {took:?} on a {deadline:?} deadline"
+        );
+    }
+
+    /// gh gets its own token names back by name alone, so each is one every
+    /// other child loses.
+    #[test]
+    fn every_name_gh_gets_back_is_withheld_from_other_children() {
+        for name in super::GH_OWN_TOKENS {
+            assert!(
+                super::WITHHELD_ENV.contains(name),
+                "{name} reaches every child"
+            );
+        }
+    }
+
+    /// A bounded capture returns what a child printed when it exits in time
+    /// and zero, and nothing when it exits non-zero or runs past its deadline.
+    /// The child is cargo, which the gate's own rows start from `PATH`.
+    #[test]
+    fn a_bounded_capture_answers_only_in_time() {
+        let long = Duration::from_secs(60);
+        let printed = Processes
+            .capture_within(&["cargo", "--version"], &[], long)
+            .expect("cargo answers");
+        assert!(printed.starts_with("cargo "), "{printed:?}");
+        assert_eq!(
+            Processes.capture_within(&["cargo", "--no-such-flag"], &[], long),
+            None,
+            "a non-zero exit"
+        );
+        assert_eq!(
+            Processes.capture_within(&["cargo", "--version"], &[], Duration::ZERO),
+            None,
+            "a child past its deadline"
+        );
     }
 
     /// A child loses every inherited `CARGO_TARGET_<triple>_RUSTDOCFLAGS`, in

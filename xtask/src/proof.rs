@@ -265,6 +265,56 @@ pub fn doctests_proven(examples: Examples, declared_none: bool) -> Result<String
     Ok(count(examples.passed, "example", "examples"))
 }
 
+/// How many tests nextest's one summary line reports it skipped. nextest
+/// counts an `#[ignore]` test and a filtered one alike as skipped.
+///
+/// # Errors
+///
+/// Returns the sentence saying the output holds no single summary line, or a
+/// summary with no skipped count.
+pub fn nextest_skipped(printed: &str) -> Result<usize, String> {
+    let summaries: Vec<&str> = printed
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Summary ["))
+        .collect();
+    let [summary] = summaries.as_slice() else {
+        return Err(format!(
+            "nextest printed {}, and the tests row reads exactly one",
+            count(summaries.len(), "summary line", "summary lines")
+        ));
+    };
+    let totals = summary.split_once(']').map_or("", |(_, rest)| rest);
+    totals
+        .split([',', ':'])
+        .find_map(|part| part.trim().strip_suffix(" skipped"))
+        .and_then(|number| number.trim().parse().ok())
+        .ok_or_else(|| {
+            format!(
+                "nextest's summary names no skipped count: {}",
+                summary.trim()
+            )
+        })
+}
+
+/// The note a test row carries when `skipped`, the tests its runner skipped,
+/// equals `declared`, the count the gate declares beside the step table, or
+/// the sentence saying how they differ.
+///
+/// # Errors
+///
+/// Returns the sentence naming both counts when they differ, so a change that
+/// skips a test or stops skipping one declares it in the same diff.
+pub fn skips_proven(runner: &str, skipped: usize, declared: usize) -> Result<String, String> {
+    if skipped == declared {
+        Ok(format!("{skipped} skipped, as declared"))
+    } else {
+        Err(format!(
+            "{runner} skipped {}, and the gate declares {declared}. Change the declaration beside the step table in the same change as the tests",
+            count(skipped, "test", "tests")
+        ))
+    }
+}
+
 /// Every file rustfmt's `--verbose` output names as formatted.
 #[must_use]
 pub fn rustfmt_formatted(printed: &str) -> Vec<String> {
@@ -330,6 +380,117 @@ pub fn zizmor_completed(printed: &str) -> Vec<String> {
         .collect()
 }
 
+/// The zizmor config every zizmor row names, whose `secrets-inherit` waivers
+/// the zizmor row holds to the jobs they cover.
+pub const ZIZMOR_CONFIG: &str = ".github/zizmor.yml";
+
+/// The files zizmor's JSON report names as holding a job that passes
+/// `secrets: inherit`, each with forward slashes.
+///
+/// The report comes from a run with no config and no inline ignores, so no
+/// waiver hides a job from it.
+///
+/// # Errors
+///
+/// Returns the sentence saying the report does not read as zizmor's JSON, or
+/// names such a job with no file.
+pub fn inherit_call_files(report: &str) -> Result<Vec<String>, String> {
+    let findings: serde_json::Value = serde_json::from_str(report)
+        .map_err(|err| format!("zizmor's JSON report does not parse: {err}"))?;
+    let findings = findings
+        .as_array()
+        .ok_or("zizmor's JSON report is not a list of findings")?;
+    let mut files = Vec::new();
+    for finding in findings {
+        if finding.get("ident").and_then(serde_json::Value::as_str) != Some("secrets-inherit") {
+            continue;
+        }
+        let path = finding
+            .get("locations")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|location| {
+                location
+                    .pointer("/symbolic/kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("Primary")
+            })
+            .and_then(|primary| primary.pointer("/symbolic/key/Local/verbatim_path"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or("zizmor reported a secrets-inherit finding with no primary file")?;
+        files.push(path.replace('\\', "/"));
+    }
+    Ok(files)
+}
+
+/// The script Bun runs to read the `secrets-inherit` waivers from the zizmor
+/// config at the path on standard input. It prints JSON: the waiver list as
+/// the config writes it, `null` when the config sets none, or an object
+/// carrying the reason the config does not parse.
+pub const INHERIT_WAIVERS: &str = "\
+const path = (await Bun.stdin.text()).trim();
+let document;
+try {
+  document = Bun.YAML.parse(await Bun.file(path).text());
+} catch (error) {
+  process.stdout.write(JSON.stringify({ error: String(error) }));
+  process.exit(0);
+}
+const ignore = document?.rules?.['secrets-inherit']?.ignore;
+process.stdout.write(JSON.stringify(ignore === undefined ? null : ignore));
+";
+
+/// The waiver names [`INHERIT_WAIVERS`] printed.
+///
+/// # Errors
+///
+/// Returns the sentence saying why the config's waivers are unknown: the
+/// config does not parse, the list holds anything but names, or the reader
+/// printed no JSON.
+pub fn inherit_waivers(printed: &str) -> Result<Vec<String>, String> {
+    let unknown =
+        || format!("{ZIZMOR_CONFIG} rules.secrets-inherit.ignore is not a list of file names");
+    let value: serde_json::Value = serde_json::from_str(printed)
+        .map_err(|err| format!("the secrets-inherit waiver reader printed no JSON: {err}"))?;
+    match value {
+        serde_json::Value::Null => Ok(Vec::new()),
+        serde_json::Value::Array(names) => names
+            .iter()
+            .map(|name| name.as_str().map(str::to_string).ok_or_else(unknown))
+            .collect(),
+        serde_json::Value::Object(reason) => Err(format!(
+            "{ZIZMOR_CONFIG} does not parse as the gate reads YAML, so its secrets-inherit waivers are unknown: {}",
+            reason
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("no reason given")
+        )),
+        _ => Err(unknown()),
+    }
+}
+
+/// A finding for every name in `waived` whose file, the name before any
+/// `:line`, holds none of the jobs in `calls`, compared by file name.
+///
+/// A waiver names a file, and zizmor says nothing when that file holds no job
+/// to waive, so a waiver outlives the job it was written for.
+#[must_use]
+pub fn stale_inherit_waivers(calls: &[String], waived: &[String]) -> Vec<String> {
+    waived
+        .iter()
+        .filter(|name| {
+            let file = name.split(':').next().unwrap_or_default();
+            !calls.iter().any(|call| call.rsplit('/').next() == Some(file))
+        })
+        .map(|name| {
+            format!(
+                "the secrets-inherit waiver in {ZIZMOR_CONFIG} names {name:?}, and zizmor reported no job there passing secrets: inherit, so the waiver or the audit is stale"
+            )
+        })
+        .collect()
+}
+
 /// Every directory cargo-machete names as analyzed, whether it found an unused
 /// dependency there or not.
 #[must_use]
@@ -372,8 +533,166 @@ mod tests {
 
     use super::{
         Examples, FILES, actionlint_linted, batches, comparable, count, covered, doctest_examples,
-        doctests_proven, machete_analyzed, prove, rustfmt_formatted, taplo_found, zizmor_completed,
+        doctests_proven, inherit_call_files, inherit_waivers, machete_analyzed, nextest_skipped,
+        prove, rustfmt_formatted, skips_proven, stale_inherit_waivers, taplo_found,
+        zizmor_completed,
     };
+
+    /// The skipped count comes from nextest's one summary line, whatever else
+    /// it counts beside it, and a missing or doubled summary is refused.
+    #[test]
+    fn nextest_skips_are_read_from_its_summary() {
+        for (what, printed, wanted) in [
+            (
+                "none skipped",
+                "   PASS [   0.143s] (1/1) a\n────────────\n     Summary [   2.594s] 152 tests run: 152 passed, 0 skipped\n",
+                Ok(0),
+            ),
+            (
+                "some skipped",
+                "     Summary [   3.256s] 267 tests run: 267 passed, 12 skipped",
+                Ok(12),
+            ),
+            (
+                "failures beside the skips",
+                "     Summary [   1.000s] 5 tests run: 3 passed, 1 failed, 1 timed out, 2 skipped",
+                Ok(2),
+            ),
+            (
+                "no summary",
+                "   PASS [   0.143s] (1/1) a",
+                Err("nextest printed 0 summary lines, and the tests row reads exactly one".to_string()),
+            ),
+            (
+                "two summaries",
+                "Summary [ 1s] 1 tests run: 1 passed, 0 skipped\nSummary [ 1s] 1 tests run: 1 passed, 0 skipped",
+                Err("nextest printed 2 summary lines, and the tests row reads exactly one".to_string()),
+            ),
+            (
+                "a summary with no skipped count",
+                "     Summary [   1.000s] 1 tests run: 1 passed",
+                Err("nextest's summary names no skipped count: Summary [   1.000s] 1 tests run: 1 passed".to_string()),
+            ),
+        ] {
+            assert_eq!(nextest_skipped(printed), wanted, "{what}");
+        }
+    }
+
+    /// A skip count passes only when it equals the declared one.
+    #[test]
+    fn skips_pass_only_at_the_declared_count() {
+        assert_eq!(
+            skips_proven("nextest", 12, 12),
+            Ok("12 skipped, as declared".to_string())
+        );
+        assert_eq!(
+            skips_proven("nextest", 13, 12),
+            Err("nextest skipped 13 tests, and the gate declares 12. Change the declaration beside the step table in the same change as the tests".to_string()),
+            "one more"
+        );
+        assert_eq!(
+            skips_proven("bun test", 0, 1),
+            Err("bun test skipped 0 tests, and the gate declares 1. Change the declaration beside the step table in the same change as the tests".to_string()),
+            "one fewer"
+        );
+    }
+
+    /// A job passing `secrets: inherit` is read from each finding's primary
+    /// location, and a report that does not read as zizmor's JSON is refused
+    /// rather than read as clean.
+    #[test]
+    fn inherit_calls_are_read_from_the_primary_location() {
+        let finding = |path: &str| {
+            serde_json::json!({
+                "ident": "secrets-inherit",
+                "locations": [
+                    { "symbolic": { "kind": "Related", "key": { "Local": { "verbatim_path": "x.yml" } } } },
+                    { "symbolic": { "kind": "Primary", "key": { "Local": { "verbatim_path": path } } } },
+                ],
+            })
+        };
+        let report = serde_json::json!([
+            finding(".github/workflows/deps.yml"),
+            finding(".github\\workflows\\cd.yml"),
+            { "ident": "unpinned-uses", "locations": [] },
+        ])
+        .to_string();
+        assert_eq!(
+            inherit_call_files(&report),
+            Ok(owned(&[
+                ".github/workflows/deps.yml",
+                ".github/workflows/cd.yml"
+            ]))
+        );
+        assert_eq!(inherit_call_files("[]"), Ok(Vec::new()), "no finding");
+        assert_eq!(
+            inherit_call_files("{}"),
+            Err("zizmor's JSON report is not a list of findings".to_string())
+        );
+        assert_eq!(
+            inherit_call_files(r#"[{"ident":"secrets-inherit","locations":[]}]"#),
+            Err("zizmor reported a secrets-inherit finding with no primary file".to_string())
+        );
+        assert!(
+            inherit_call_files("")
+                .is_err_and(|why| why.starts_with("zizmor's JSON report does not parse: ")),
+            "no report"
+        );
+    }
+
+    /// The waiver list reads as names, a config that sets none reads as
+    /// none, and anything else leaves the waivers unknown.
+    #[test]
+    fn inherit_waivers_read_as_names_or_unknown() {
+        let unknown = ".github/zizmor.yml rules.secrets-inherit.ignore is not a list of file names";
+        assert_eq!(
+            inherit_waivers(r#"["deps.yml","ci.yml:3:5"]"#),
+            Ok(owned(&["deps.yml", "ci.yml:3:5"]))
+        );
+        assert_eq!(inherit_waivers("null"), Ok(Vec::new()), "none set");
+        assert_eq!(inherit_waivers("[1]"), Err(unknown.to_string()), "a number");
+        assert_eq!(
+            inherit_waivers(r#""deps.yml""#),
+            Err(unknown.to_string()),
+            "a bare name"
+        );
+        assert_eq!(
+            inherit_waivers(r#"{"error":"bad indentation"}"#),
+            Err(".github/zizmor.yml does not parse as the gate reads YAML, so its secrets-inherit waivers are unknown: bad indentation".to_string())
+        );
+        assert!(
+            inherit_waivers("").is_err_and(
+                |why| why.starts_with("the secrets-inherit waiver reader printed no JSON: ")
+            ),
+            "no output"
+        );
+    }
+
+    /// A waiver naming a file that holds no job passing `secrets: inherit` is
+    /// stale, compared by file name, with any `:line` ignored.
+    #[test]
+    fn a_waiver_with_no_job_is_stale() {
+        let calls = owned(&[".github/workflows/deps.yml"]);
+        let stale = |name: &str| {
+            format!(
+                "the secrets-inherit waiver in .github/zizmor.yml names {name:?}, and zizmor reported no job there passing secrets: inherit, so the waiver or the audit is stale"
+            )
+        };
+        assert_eq!(
+            stale_inherit_waivers(&calls, &owned(&["deps.yml", "deps.yml:12:3"])),
+            Vec::<String>::new(),
+            "waivers with a job"
+        );
+        assert_eq!(
+            stale_inherit_waivers(&calls, &owned(&["cd.yml", "ci.yml:3:5", "workflows"])),
+            vec![stale("cd.yml"), stale("ci.yml:3:5"), stale("workflows")]
+        );
+        assert_eq!(
+            stale_inherit_waivers(&[], &owned(&["deps.yml"])),
+            vec![stale("deps.yml")],
+            "no job anywhere"
+        );
+    }
 
     fn owned(paths: &[&str]) -> Vec<String> {
         paths.iter().map(|path| (*path).to_string()).collect()

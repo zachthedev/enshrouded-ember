@@ -35,6 +35,16 @@ pub const MISE_PINS: &[(&str, &str)] = &[
 /// The variable naming the one directory whose configuration mise trusts.
 const TRUSTED: &str = "MISE_TRUSTED_CONFIG_PATHS";
 
+/// The variable carrying mise's url rewrites, which replaces every map a
+/// configuration file sets.
+const URL_REPLACEMENTS: &str = "MISE_URL_REPLACEMENTS";
+
+/// The one rewrite every mise child carries, as JSON: the `url_replacements`
+/// rule [`crate::pins::PINS`] holds, so no committed file lifts it.
+fn url_replacements() -> String {
+    serde_json::json!({ crate::pins::URL_API_PATTERN: crate::pins::URL_API_REFUSED }).to_string()
+}
+
 /// The proxy settings a mise child keeps, in both spellings its HTTP client
 /// reads. A certificate override is not among them.
 const PROXIES: &[&str] = &[
@@ -80,7 +90,8 @@ pub struct Folders {
 /// when the directories kept out of the search cannot be read, or when no
 /// searched entry holds the program.
 pub fn resolve(name: &str) -> Result<PathBuf, String> {
-    resolve_in(name, &search_path()?)
+    let search = search()?;
+    resolve_in(name, &search.entries, &search.excluded)
 }
 
 /// A command running `program` with `PATH` narrowed to the entries [`resolve`]
@@ -92,7 +103,7 @@ pub fn resolve(name: &str) -> Result<PathBuf, String> {
 /// Returns the sentence a result row carries when the directories kept out of
 /// the search cannot be read or the narrowed `PATH` cannot be written.
 pub fn command(program: &Path) -> Result<Command, String> {
-    let path = std::env::join_paths(search_path()?)
+    let path = std::env::join_paths(&search()?.entries)
         .map_err(|err| format!("PATH cannot be narrowed for {}: {err}", program.display()))?;
     let mut command = Command::new(program);
     command.env("PATH", path);
@@ -110,22 +121,75 @@ pub fn command(program: &Path) -> Result<Command, String> {
 ///
 /// # Errors
 ///
-/// Returns the sentence a result row carries when mise cannot be found or run,
-/// or when it resolves no `tool`, with the first line mise wrote to standard
-/// error.
+/// Returns the sentence a result row carries when the pin files fail their
+/// rules, when mise cannot be found or run, or when it resolves no `tool`,
+/// with the first line mise wrote to standard error.
 pub fn mise_which(root: &Path, tool: &str) -> Result<PathBuf, String> {
-    let mise = resolve("mise")?;
-    let output = mise_command(&mise, root)?
+    let output = checked_mise(root)?
         .args(["which", tool])
         .stdin(Stdio::null())
         .output()
-        .map_err(|err| format!("running {}: {err}", mise.display()))?;
+        .map_err(|err| format!("running mise: {err}"))?;
     which_answer(
         tool,
         output.status.success(),
         &output.stdout,
         &output.stderr,
     )
+}
+
+/// Install every tool [`crate::pins::PINS`] pins, from the lockfile, in the
+/// checkout at `root`, once its pin files pass their rules, writing to this
+/// process's terminal.
+///
+/// # Errors
+///
+/// Returns the sentence saying why mise did not start or did not finish.
+pub fn mise_install(root: &Path) -> Result<(), String> {
+    let mut install = checked_mise(root)?;
+    with_install_token(&mut install, |name| std::env::var_os(name));
+    let status = install
+        .args(["install", "--locked"])
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|err| format!("running mise: {err}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("mise install --locked exited with {status}"))
+    }
+}
+
+/// The variable mise reads a GitHub token from, which the install alone gets.
+const INSTALL_TOKEN: &str = "MISE_GITHUB_TOKEN";
+
+/// Hand the install `command` the [`INSTALL_TOKEN`] that `inherited` answers,
+/// when it answers one. mise.toml makes a failed provenance check fatal, and a
+/// tool mise's registry does not name asks api.github.com for its
+/// attestations, which answers 60 requests an hour to a caller with no token.
+fn with_install_token(command: &mut Command, inherited: impl Fn(&str) -> Option<OsString>) {
+    if let Some(token) = inherited(INSTALL_TOKEN) {
+        command.env(INSTALL_TOKEN, token);
+    }
+}
+
+/// A mise command in the checkout at `root`, built by [`mise_command`] once the
+/// pin files there pass the rules in `pins`.
+///
+/// Every mise child starts here, so none runs over a pin file that changed
+/// after the gate's opening row read it.
+fn checked_mise(root: &Path) -> Result<Command, String> {
+    let problems = crate::pins::file_problems(
+        &|path| std::fs::read_to_string(root.join(path)).ok(),
+        crate::pins::config_paths(root),
+    );
+    if let Some(first) = problems.first() {
+        return Err(format!(
+            "mise does not start over pin files that fail their rules: {first} (cargo xtask pins names every finding)"
+        ));
+    }
+    let mise = resolve("mise")?;
+    mise_command(&mise, root)
 }
 
 /// The path a `mise which` run for `tool` printed, or the sentence saying why
@@ -153,8 +217,9 @@ fn which_answer(
     })
 }
 
-/// [`resolve`] against the searched `PATH` entries `entries`.
-fn resolve_in(name: &str, entries: &[PathBuf]) -> Result<PathBuf, String> {
+/// [`resolve`] against the searched `PATH` entries `entries`, refusing a
+/// program whose final path lies inside a canonical directory in `excluded`.
+fn resolve_in(name: &str, entries: &[PathBuf], excluded: &[PathBuf]) -> Result<PathBuf, String> {
     let bare = !name.is_empty() && !name.contains(['/', '\\', ':']);
     if !bare {
         return Err(format!("{name:?} is not a bare program name"));
@@ -166,8 +231,20 @@ fn resolve_in(name: &str, entries: &[PathBuf]) -> Result<PathBuf, String> {
     let joined = std::env::join_paths(entries).map_err(|_| missing())?;
     which::which_in_global(name, Some(joined))
         .map_err(|_| missing())?
-        .find(|found| found.is_absolute() && starts_directly(found))
+        .find(|found| {
+            found.is_absolute() && starts_directly(found) && lands_outside(found, excluded)
+        })
         .ok_or_else(missing)
+}
+
+/// Whether the file at `found`, followed through every link to its final
+/// path, is one the operating system starts itself and sits outside every
+/// canonical directory in `excluded`. A link on a searched entry can point
+/// into the checkout, into the build output, or at a script.
+fn lands_outside(found: &Path, excluded: &[PathBuf]) -> bool {
+    found.canonicalize().is_ok_and(|real| {
+        starts_directly(&real) && !excluded.iter().any(|root| real.starts_with(root))
+    })
 }
 
 /// Whether the operating system starts the file at `path` itself. On Windows
@@ -180,23 +257,31 @@ fn starts_directly(path: &Path) -> bool {
             .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
 }
 
-/// The entries of this process's `PATH` that [`resolve`] searches, read once:
-/// neither `PATH` nor the running executable changes while xtask runs, and each
-/// read canonicalizes every entry.
-fn search_path() -> Result<Vec<PathBuf>, String> {
-    static SEARCH: OnceLock<Result<Vec<PathBuf>, String>> = OnceLock::new();
+/// The entries of this process's `PATH` that [`resolve`] searches, and the
+/// directories no program resolves from, both canonical.
+struct Search {
+    entries: Vec<PathBuf>,
+    excluded: Vec<PathBuf>,
+}
+
+/// The [`Search`] for this process, read once: neither `PATH` nor the running
+/// executable changes while xtask runs, and each read canonicalizes every
+/// entry.
+fn search() -> Result<&'static Search, String> {
+    static SEARCH: OnceLock<Result<Search, String>> = OnceLock::new();
     SEARCH
         .get_or_init(|| {
             let excluded = excluded_roots(
                 std::env::current_exe().ok().as_deref(),
                 Path::new(env!("CARGO_MANIFEST_DIR")),
             )?;
-            Ok(search_entries(
-                std::env::var_os("PATH").as_deref(),
-                &excluded,
-            ))
+            Ok(Search {
+                entries: search_entries(std::env::var_os("PATH").as_deref(), &excluded),
+                excluded,
+            })
         })
-        .clone()
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 /// The directories no program resolves from, canonical: the one holding the
@@ -259,9 +344,9 @@ fn mise_command(mise: &Path, root: &Path) -> Result<Command, String> {
     Ok(command)
 }
 
-/// Every variable a mise child runs with: the pins, the checkout as the one
-/// trusted configuration path, the Windows directories from `folders`, and
-/// each of `names` that `inherited` answers.
+/// Every variable a mise child runs with: the pins, the url rewrite, the
+/// checkout as the one trusted configuration path, the Windows directories
+/// from `folders`, and each of `names` that `inherited` answers.
 fn mise_environment(
     root: &Path,
     folders: Option<&Folders>,
@@ -272,6 +357,7 @@ fn mise_environment(
         .iter()
         .map(|(name, value)| ((*name).into(), (*value).into()))
         .collect();
+    environment.push((URL_REPLACEMENTS.into(), url_replacements().into()));
     environment.push((TRUSTED.into(), root.as_os_str().to_owned()));
     if let Some(folders) = folders {
         let temp = folders.local_app_data.join("Temp").into_os_string();
@@ -379,8 +465,8 @@ mod tests {
     fn a_bare_name_resolves_from_an_absolute_entry() {
         let dir = tempfile::tempdir().expect("a temporary directory");
         let planted = plant(dir.path(), "xtask-probe-tool");
-        let found =
-            resolve_in("xtask-probe-tool", &[dir.path().to_path_buf()]).expect("the planted tool");
+        let found = resolve_in("xtask-probe-tool", &[dir.path().to_path_buf()], &[])
+            .expect("the planted tool");
         assert!(found.is_absolute(), "{found:?}");
         assert_eq!(
             found.canonicalize().expect("the found path"),
@@ -470,15 +556,118 @@ mod tests {
         }
         let planted = plant(second.path(), "xtask-probe-tool");
         let entries = [first.path().to_path_buf(), second.path().to_path_buf()];
-        let found = resolve_in("xtask-probe-tool", &entries).expect("the planted tool");
+        let found = resolve_in("xtask-probe-tool", &entries, &[]).expect("the planted tool");
         assert_eq!(
             found.canonicalize().expect("the found path"),
             planted.canonicalize().expect("the planted path")
         );
         assert_eq!(
-            resolve_in("xtask-probe-tool", &entries[..1]),
+            resolve_in("xtask-probe-tool", &entries[..1], &[]),
             Err("xtask-probe-tool is not on PATH".to_string())
         );
+    }
+
+    /// Link `link` to the file `target`.
+    fn link_file(target: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).expect("a link");
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(target, link).expect("a link");
+    }
+
+    /// A program found on a searched entry is judged at its final path: a
+    /// link landing inside an excluded directory is refused, and one landing
+    /// outside every excluded directory resolves.
+    #[test]
+    fn a_program_is_judged_at_its_final_path() {
+        let inside = tempfile::tempdir().expect("a temporary directory");
+        let searched = tempfile::tempdir().expect("a temporary directory");
+        let target = plant(inside.path(), "xtask-probe-real");
+        let name = if cfg!(windows) {
+            "xtask-probe-tool.exe"
+        } else {
+            "xtask-probe-tool"
+        };
+        link_file(&target, &searched.path().join(name));
+        let entries = [searched.path().to_path_buf()];
+        let excluded = [inside.path().canonicalize().expect("a canonical path")];
+        assert_eq!(
+            resolve_in("xtask-probe-tool", &entries, &excluded),
+            Err("xtask-probe-tool is not on PATH".to_string()),
+            "a link into an excluded directory"
+        );
+        let found = resolve_in("xtask-probe-tool", &entries, &[])
+            .expect("a link landing outside every excluded directory");
+        assert_eq!(
+            found.canonicalize().expect("the found path"),
+            target.canonicalize().expect("the planted path")
+        );
+    }
+
+    /// On Windows an `.exe` link whose final path is a script is refused.
+    #[cfg(windows)]
+    #[test]
+    fn an_exe_link_to_a_script_is_refused_on_windows() {
+        let scripts = tempfile::tempdir().expect("a temporary directory");
+        let searched = tempfile::tempdir().expect("a temporary directory");
+        let script = scripts.path().join("xtask-probe-script.cmd");
+        std::fs::write(&script, "").expect("a script");
+        link_file(&script, &searched.path().join("xtask-probe-tool.exe"));
+        assert_eq!(
+            resolve_in("xtask-probe-tool", &[searched.path().to_path_buf()], &[]),
+            Err("xtask-probe-tool is not on PATH".to_string())
+        );
+    }
+
+    /// mise never starts in a checkout whose pin files fail their rules: the
+    /// refusal names the first finding.
+    #[test]
+    fn mise_does_not_start_over_failing_pin_files() {
+        let root = tempfile::tempdir().expect("a temporary directory");
+        let refused = super::mise_which(root.path(), "taplo").expect_err("a refusal");
+        assert!(
+            refused.starts_with(
+                "mise does not start over pin files that fail their rules: mise.toml cannot be read"
+            ),
+            "{refused}"
+        );
+        let refused = super::mise_install(root.path()).expect_err("a refusal");
+        assert!(
+            refused.starts_with("mise does not start over pin files that fail their rules: "),
+            "{refused}"
+        );
+    }
+
+    /// The install gets the `MISE_GITHUB_TOKEN` this process holds, and no
+    /// other variable, and nothing when it holds none.
+    #[test]
+    fn the_install_gets_the_mise_token_this_process_holds() {
+        for (what, held, wanted) in [
+            (
+                "a token",
+                Some("fake-token"),
+                vec![("MISE_GITHUB_TOKEN", Some("fake-token"))],
+            ),
+            ("none", None, vec![]),
+        ] {
+            let mut command = std::process::Command::new("mise");
+            super::with_install_token(&mut command, |name| {
+                (name == "MISE_GITHUB_TOKEN")
+                    .then_some(held)
+                    .flatten()
+                    .map(OsString::from)
+            });
+            let set: Vec<(&str, Option<&str>)> = command
+                .get_envs()
+                .map(|(name, value)| {
+                    (
+                        name.to_str().expect("a unicode name"),
+                        value.map(|value| value.to_str().expect("a unicode value")),
+                    )
+                })
+                .collect();
+            assert_eq!(set, wanted, "{what}");
+        }
     }
 
     /// A name that names a path rather than a program is refused, and the
@@ -489,7 +678,7 @@ mod tests {
         let entries = [dir.path().to_path_buf()];
         for name in ["", "sub/tool", "..\\tool", "C:tool", "./tool"] {
             assert_eq!(
-                resolve_in(name, &entries),
+                resolve_in(name, &entries, &[]),
                 Err(format!("{name:?} is not a bare program name")),
                 "{name:?}"
             );
@@ -501,11 +690,11 @@ mod tests {
     fn a_missing_program_is_named() {
         let dir = tempfile::tempdir().expect("a temporary directory");
         assert_eq!(
-            resolve_in("xtask-probe-missing", &[dir.path().to_path_buf()]),
+            resolve_in("xtask-probe-missing", &[dir.path().to_path_buf()], &[]),
             Err("xtask-probe-missing is not on PATH".to_string())
         );
         assert_eq!(
-            resolve_in("xtask-probe-missing", &[]),
+            resolve_in("xtask-probe-missing", &[], &[]),
             Err("xtask-probe-missing is not on PATH".to_string())
         );
     }
@@ -582,6 +771,10 @@ mod tests {
         Some(value.into())
     }
 
+    /// The url rewrite every mise child carries, as the workflows' install
+    /// steps spell it.
+    const URL_MAP: &str = r#"{"regex:^https://api\\.github\\.com/repos/[^/]+/[^/]+/releases/assets/.*$":"https://url-api-refused.invalid/"}"#;
+
     /// The builder's output as a map, so a test reads each value by name.
     fn built(folders: Option<&Folders>, names: &[&str]) -> BTreeMap<String, String> {
         mise_environment(Path::new("/checkout"), folders, names, inherited)
@@ -606,6 +799,7 @@ mod tests {
             .iter()
             .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
             .collect();
+        wanted.insert("MISE_URL_REPLACEMENTS".into(), URL_MAP.into());
         wanted.insert("MISE_TRUSTED_CONFIG_PATHS".into(), "/checkout".into());
         wanted.insert("SYSTEMROOT".into(), "C:\\Windows".into());
         wanted.insert(
@@ -637,6 +831,7 @@ mod tests {
             .iter()
             .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
             .collect();
+        wanted.insert("MISE_URL_REPLACEMENTS".into(), URL_MAP.into());
         wanted.insert("MISE_TRUSTED_CONFIG_PATHS".into(), "/checkout".into());
         for name in PROXIES {
             wanted.insert((*name).into(), format!("{name}-value"));

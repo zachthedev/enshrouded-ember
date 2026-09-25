@@ -123,6 +123,10 @@ const AQUA_SETTINGS_ON: &[&str] = &["github_attestations"];
 /// The keys mise writes at a lockfile's top level.
 const LOCK_KEYS: &[&str] = &["lockfile_version", "tools"];
 
+/// The lockfile format every rule here reads. mise writes the number at the
+/// top of the file, and another format could carry what no rule knows about.
+const LOCKFILE_VERSION: i64 = 1;
+
 /// The keys mise writes on a locked entry beside its platform blocks.
 const ENTRY_KEYS: &[&str] = &["version", "backend", "specifiers", "options"];
 
@@ -1034,6 +1038,42 @@ pub fn stray_config_problems(entries: &[TreeEntry]) -> Vec<String> {
         .collect()
 }
 
+/// Every way the pin files of [`PAIRS`] and the mise configurations in the
+/// tree fall short, with an unreadable pin file reported as a problem of its
+/// own.
+///
+/// `read` answers a file by its path from the root, and `paths` is the listing
+/// [`config_paths`] makes. The gate's opening row and every mise start run
+/// these same rules.
+#[must_use]
+pub fn file_problems(
+    read: &dyn Fn(&str) -> Option<String>,
+    paths: Result<Vec<TreeEntry>, String>,
+) -> Vec<String> {
+    let read = |path: &str| read(path).ok_or_else(|| format!("{path} cannot be read"));
+    let mut found = match (
+        read(MAIN.pins),
+        read(MAIN.lock),
+        read(SEMVER.pins),
+        read(SEMVER.lock),
+    ) {
+        (Ok(pin_text), Ok(lock), Ok(semver_pins), Ok(semver_lock)) => {
+            let mut found = problems(&pin_text, &lock);
+            found.extend(semver_problems(&pin_text, &semver_pins, &semver_lock));
+            found
+        }
+        (first, second, third, fourth) => [first, second, third, fourth]
+            .into_iter()
+            .filter_map(Result::err)
+            .collect(),
+    };
+    match paths {
+        Ok(paths) => found.extend(stray_config_problems(&paths)),
+        Err(problem) => found.push(problem),
+    }
+    found
+}
+
 /// Every way the main pin files fall short, as one sentence each.
 ///
 /// The two texts are passed in rather than read here, so the rules run the
@@ -1171,6 +1211,15 @@ fn lock_key_problems(pair: Pair, text: &str) -> Vec<String> {
         .filter(|key| !LOCK_KEYS.contains(&key.as_str()))
         .map(|key| format!("{lock} carries {key:?}, which mise does not write"))
         .collect();
+    match document.get("lockfile_version") {
+        Some(toml::Value::Integer(LOCKFILE_VERSION)) => {}
+        Some(value) => found.push(format!(
+            "{lock} gives lockfile_version {value}, and the rules here read version {LOCKFILE_VERSION} alone"
+        )),
+        None => found.push(format!(
+            "{lock} carries no lockfile_version, and the rules here read version {LOCKFILE_VERSION} alone"
+        )),
+    }
     let Some(tools) = document.get("tools").and_then(toml::Value::as_table) else {
         return found;
     };
@@ -1421,6 +1470,7 @@ mod tests {
     /// taplo carries no provenance and nextest carries one, so the sound
     /// document holds both halves of that rule.
     const SOUND_LOCK: &str = concat!(
+        "lockfile_version = 1\n\n",
         "[[tools.taplo]]\nversion = \"0.10.0\"\nbackend = \"aqua:tamasfe/taplo\"\n",
         "[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n",
@@ -2062,6 +2112,7 @@ mod tests {
     /// Its lockfile, for the platforms [`sound_pins`] names, shaped as mise
     /// writes one.
     const SOUND_SEMVER_LOCK: &str = concat!(
+        "lockfile_version = 1\n\n",
         "[[tools.\"github:obi1kenobi/cargo-semver-checks\"]]\nversion = \"0.50.0\"\n",
         "backend = \"github:obi1kenobi/cargo-semver-checks\"\n",
         "[tools.\"github:obi1kenobi/cargo-semver-checks\".\"platforms.linux-x64\"]\n",
@@ -2631,6 +2682,24 @@ mod tests {
                 sound_pins(),
                 format!("env = {{ A = \"b\" }}\n{SOUND_LOCK}"),
                 "mise.lock carries \"env\", which mise does not write",
+            ),
+            (
+                "another lockfile format",
+                sound_pins(),
+                SOUND_LOCK.replace("lockfile_version = 1\n", "lockfile_version = 2\n"),
+                "mise.lock gives lockfile_version 2, and the rules here read version 1 alone",
+            ),
+            (
+                "a format written as a string",
+                sound_pins(),
+                SOUND_LOCK.replace("lockfile_version = 1\n", "lockfile_version = \"1\"\n"),
+                "mise.lock gives lockfile_version \"1\", and the rules here read version 1 alone",
+            ),
+            (
+                "no lockfile format",
+                sound_pins(),
+                SOUND_LOCK.replace("lockfile_version = 1\n", ""),
+                "mise.lock carries no lockfile_version, and the rules here read version 1 alone",
             ),
         ];
         refuses(cases);
