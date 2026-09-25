@@ -5,6 +5,7 @@
   "description": "The Steam build watcher, the R2 archive client, commit message linting and markup formatting for the Ember repository. The project itself is Rust.",
   "packageManager": "bun@1.4.2",
   "scripts": {
+    "audit": "bun audit --audit-level=high",
     "prepare": "bun ./node_modules/lefthook/bin/index.js install",
     "watch-builds": "bun run tools/watch-builds.ts",
     "archive": "bun run tools/archive.ts"

@@ -82,8 +82,8 @@ env:
   APP_SERVER: '2278520'
   DEPOT_SERVER: '2278521'
   # SteamCMD updates itself from Valve on every run, so this digest pins the
-  # wrapper rather than the client. No bot reads a `docker run` line, so it is
-  # bumped by hand. Taken from the ubuntu-24 tag on 2026-09-18.
+  # wrapper rather than the client. A regex manager in .github/renovate.json
+  # reads the tag and digest here and moves the digest.
   #
   # The one tool that talks to Steam here, for reading app info and for
   # fetching a build. The watch job gives the container no environment, no
@@ -316,7 +316,11 @@ jobs:
       && needs.watch.outputs.server_manifest_id != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: archive-write
+    # deployment: false, because this is a credential scope and not a target.
+    # The reviewer still gates the job.
+    environment:
+      name: archive-write
+      deployment: false
     # One writer at a time. The refusal that stops an overwrite is a check
     # followed by a write, so two runs uploading the same key is the window it
     # cannot close.

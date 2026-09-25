@@ -41,6 +41,21 @@ env:
 # no pull request and no cooldown; a commit cannot. Renovate bumps the hash and
 # keeps the version comment current.
 jobs:
+  # The pin rules for both pairs, ahead of release-update's install from them.
+  # They build and run checkout code, so they run in a job of their own, and
+  # release-update's install step, which holds the job token, follows no step
+  # that ran repository code.
+  pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo xtask pins
+
   # Computes the next release: every crate's version, its changelog and the
   # lockfile, with release-plz's semver check deciding how far a library's
   # version moves. The check builds rustdoc for each changed library and its
@@ -48,6 +63,7 @@ jobs:
   # macro, so this job holds no credential: no environment, and a job token
   # that reads.
   release-update:
+    needs: pins
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
