@@ -155,11 +155,11 @@ mod tests {
     fn the_content_tree_rule_reads_components_and_ignores_case() {
         let host_syntax = |case: &&&str| cfg!(windows) || !case.contains('\\');
         let refused: &[&str] = &[
-            r"D:\SteamLibrary\steamapps\common\Enshrouded",
-            r"D:/SteamLibrary/steamapps/common/Enshrouded",
-            r"D:\SteamLibrary\SteamApps\Common\Enshrouded",
-            r"D:\SteamLibrary\STEAMAPPS\common\Enshrouded",
-            r"D:\SteamLibrary\steamapps\common\Enshrouded\enshrouded.exe",
+            r"D:\Games\SteamLibrary\steamapps\common\Enshrouded",
+            r"D:/Games/SteamLibrary/steamapps/common/Enshrouded",
+            r"D:\Games\SteamLibrary\SteamApps\Common\Enshrouded",
+            r"D:\Games\SteamLibrary\STEAMAPPS\common\Enshrouded",
+            r"D:\Games\SteamLibrary\steamapps\common\Enshrouded\enshrouded.exe",
             r"C:\Program Files (x86)\Steam\steamapps\common\Enshrouded",
             r"\\fileserver\games\steamapps\common\Enshrouded",
             r"//fileserver/games/steamapps/common/Enshrouded",
@@ -180,13 +180,13 @@ mod tests {
         }
 
         let accepted: &[&str] = &[
-            r"Z:\repos\ember\.cache\server\23178631",
-            r"Z:\repos\ember\.cache\server\23178631\steamapps",
-            r"D:\SteamLibrary\steamapps",
-            r"D:\SteamLibrary\steamappscommon\Enshrouded",
+            r"C:\work\ember\.cache\server\23178631",
+            r"C:\work\ember\.cache\server\23178631\steamapps",
+            r"D:\Games\SteamLibrary\steamapps",
+            r"D:\Games\SteamLibrary\steamappscommon\Enshrouded",
             r"D:\backups\steamapps-common\Enshrouded",
             r"D:\common\steamapps",
-            "/home/player/repos/ember/.cache/server/23178631/steamapps",
+            "/work/ember/.cache/server/23178631/steamapps",
             "/mnt/games/SteamLibrary/steamapps",
             "/mnt/games/SteamLibrary/steamappscommon/Enshrouded",
             "/mnt/common/steamapps",

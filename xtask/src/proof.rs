@@ -399,8 +399,8 @@ mod tests {
             };
             assert_eq!(comparable(printed, root), wanted, "{printed}");
         }
-        let root = Path::new(r"Z:\repos\mods");
-        let printed = r"\\?\Z:\repos\mods\crates\a\src\lib.rs";
+        let root = Path::new(r"C:\work\mods");
+        let printed = r"\\?\C:\work\mods\crates\a\src\lib.rs";
         assert_eq!(comparable(printed, root), "crates/a/src/lib.rs");
     }
 
