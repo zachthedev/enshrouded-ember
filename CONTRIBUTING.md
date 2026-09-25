@@ -10,12 +10,11 @@ bun install
 
 `lefthook.yml` holds them: `commit-msg` runs commitlint, and `pre-push` runs
 the gate. [lefthook](https://lefthook.dev) installs them into `.git/hooks` when
-`bun install` runs the `prepare` script. Each hook runs its tool under Bun by
-its path in `node_modules`, so a tool that is not installed fails the commit or
-the push rather than letting it through. The commitlint hook first unsets every
-spelling of the Bun variables that add flags or run a module, and starts Bun
-with `--no-env-file`, so nothing in your environment or an env file reaches
-it. The hooks themselves need `node_modules`:
+`bun install` runs the `prepare` script. Each hook starts its tool through
+`bunx --bun --no-install`, which runs the copy in `node_modules`, or one from
+a parent directory or `PATH` when the install is missing. Hooks run in your shell's environment, so unset `BUN_OPTIONS`,
+`BUN_INSPECT`, `BUN_INSPECT_CONNECT_TO` and `BUN_INSPECT_PRELOAD` before you
+commit if you ever set them. The hooks themselves need `node_modules`:
 in a fresh clone before `bun install`, or once `node_modules` is gone, no hook
 runs and every commit and push goes through unchecked. Continuous integration's
 `commits` job and gate are the control that holds either way. If
@@ -62,7 +61,7 @@ a second lefthook config, an actionlint config, a nested `.cargo/config` or
 toolchain file, and a root `.config` directory, which commitlint's cosmiconfig
 reads even under `--config`. `tree.rs` lists every name.
 Such a file is refused on disk, tracked or not, so a local run agrees with
-continuous integration. A personal file, such as an env file, an `.npmrc` or a
+continuous integration. A personal file, such as an env file Bun loads or a
 `lefthook-local` config, is refused only when tracked, and `.gitignore` lists
 it. The rules run again before every later row, since the build and test rows
 run repository code. They read the tree through git, and refuse to when the
@@ -74,23 +73,23 @@ change to one to a code owner. The rules refuse only a key that runs or
 redirects code from a file that reads as data:
 
 - `bunfig.toml` holds `[install] minimumReleaseAge`, and nothing else.
-- `.prettierrc` is JSON and names no `plugins`, at its top level or in an
-  override.
+- `.cargo/config.toml` holds the `xtask` alias, and nothing else.
 - No `package.json` carries a `cosmiconfig` key, which commitlint's cosmiconfig
   reads even under `--config`.
 - `rust-toolchain.toml` names a channel and its components, and nothing else.
 - No TypeScript project config sets `paths`, `baseUrl` or `noCheck`, and
   one the gate does not name is refused.
 
-Every JavaScript tool a row or a hook starts runs under Bun by its path in
-`node_modules`. A checkout missing the package stops there, where `bunx` would
-run a copy found on `PATH` or in its cache. Every Bun a row starts carries
-`--no-env-file`, so an untracked env file reaches none of them. The opening row also refuses a
+Every JavaScript tool a row or a hook starts runs through
+`bunx --bun --no-install`, which fetches nothing. bunx runs a copy from a
+parent directory or `PATH` when the checkout holds none, so a row first checks
+that `node_modules/.bin` holds its tool. Every Bun the gate starts itself, a script
+it evaluates or `bun test`, carries `--no-env-file`. bunx passes that flag to
+no tool it starts, so an untracked env file reaches those. The opening row also refuses a
 `package.json` carrying `patchedDependencies`, since a patch changes an
 installed package away from the release `bun.lock` pins. No child gets
 `BUN_OPTIONS`, which Bun reads into every process as flags, a preload or a test
-filter among them, or `BUN_INSPECT_PRELOAD`, `BUN_INSPECT` and
-`BUN_INSPECT_CONNECT_TO`, which run a module or open Bun's inspector.
+filter among them.
 
 `cargo xtask` runs `--locked`, and so does every cargo row, so a manifest edit
 with no relock is refused before the gate starts rather than rewriting
@@ -101,8 +100,8 @@ test`'s junit report does, the row reads that back and fails on a file it
 skipped. Prettier is handed exactly the files its own file info keeps.
 cargo-machete names each crate directory it visited, and the row fails when it
 says it could not read one. A tool whose output a row
-reads runs with `NO_COLOR` set, and the row strips any color code before it
-reads.
+reads runs with `NO_COLOR` set, and the row strips any color or link code
+before it reads.
 
 `typecheck` and `tools` cover `tools/`, the repository's own TypeScript. Bun
 strips types rather than checking them, so without `typecheck` the gate would
@@ -123,8 +122,7 @@ when it does not, and no flag changes that. ShellCheck runs through a stand-in.
 `-shellcheck` names this xtask under a hidden subcommand, which reads each
 `run:` script as actionlint decoded it. The stand-in refuses any line holding a
 ShellCheck directive, and otherwise runs the ShellCheck mise resolved over the
-same bytes. actionlint looks the whole value up as one path before it splits
-it, so the opening row refuses a root entry named `'`. A directive drops a finding from the report, and YAML escapes and
+same bytes. A directive drops a finding from the report, and YAML escapes and
 folding hide one from any reading of the workflow file. The row first runs two
 canary workflows. One must come back with `SC2086`, and the other, which carries
 a directive, must come back refused. actionlint hands only a bash or sh script
@@ -157,7 +155,12 @@ reads no nextest user config. No child gets a `NEXTEST_` variable, since one
 can pass such a run or retry a failing test into a pass.
 
 `doctests` runs beside `tests`, because `cargo nextest` runs none of them and a
-doctest that stops compiling would otherwise pass the gate in silence. `doc`
+doctest that stops compiling would otherwise pass the gate in silence. It
+counts every documented example and fails on a filtered run, on every example
+ignored, and on none. A repository that holds none yet declares that with
+`NO_DOC_EXAMPLES` beside the step table, and the row fails once it counts one.
+No child gets `RUSTDOCFLAGS`, `CARGO_BUILD_RUSTDOCFLAGS` or
+`CARGO_ENCODED_RUSTDOCFLAGS`, where a test filter drops every example. `doc`
 builds every crate's documentation with warnings denied, so a broken link is a
 failure.
 
@@ -257,8 +260,7 @@ crate's own manifest.
 - A crate declares only the dependencies its code uses. `cargo xtask pins`
   refuses a cargo-machete ignore list in any `Cargo.toml`.
 - A TypeScript file keeps tsc's checking on. `cargo xtask pins` refuses
-  `@ts-nocheck`, `@ts-ignore`, an `@ts-expect-error` with no reason, and a
-  tracked declaration file, which tsc never checks under `skipLibCheck`.
+  `@ts-nocheck`, `@ts-ignore` and an `@ts-expect-error` with no reason.
 - Code behind `cfg(windows)` builds on Windows alone and code behind its
   inverse on Linux alone. The resolution path carries no `cfg(windows)`, and
   every Linux backend is a stub that returns `Unsupported`, so both hold on a

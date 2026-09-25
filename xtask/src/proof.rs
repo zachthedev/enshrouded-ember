@@ -159,6 +159,115 @@ fn join(paths: &[&String]) -> String {
 // What each tool reports
 // ///////////////////////////////////////////////
 
+/// The documented examples one `cargo test --doc` run counted, summed over the
+/// result line each crate's `Doc-tests` header opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Examples {
+    /// Examples that ran and passed, a `no_run` one compiled alone included.
+    pub passed: usize,
+    /// Examples marked `ignore`.
+    pub ignored: usize,
+    /// Examples a test filter left out.
+    pub filtered: usize,
+}
+
+/// The examples `printed`, what `cargo test --doc` wrote, counts, or why the
+/// count cannot be read.
+///
+/// cargo exits zero on a crate with no examples, on one whose every example is
+/// ignored or filtered out, and on `--list`, which prints no result line, so
+/// only the count says what ran. A crate holding a `compile_fail` or
+/// `standalone_crate` example prints a second result line for its separate
+/// pass, so every header needs at least one and every result line counts.
+///
+/// # Errors
+///
+/// Returns the sentence the doctests row carries when a `Doc-tests` header has
+/// no result line, or a result line lacks a count.
+pub fn doctest_examples(printed: &str) -> Result<Examples, String> {
+    let headers = printed
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Doc-tests "))
+        .count();
+    let results: Vec<&str> = printed
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("test result: "))
+        .collect();
+    if results.len() < headers {
+        return Err(format!(
+            "cargo test --doc printed {} and {}, so which examples ran is unknown",
+            count(headers, "Doc-tests header", "Doc-tests headers"),
+            count(results.len(), "result line", "result lines")
+        ));
+    }
+    let mut examples = Examples::default();
+    for result in results {
+        let field = |name: &str| {
+            result
+                .split(';')
+                .find_map(|part| {
+                    part.trim()
+                        .strip_suffix(name)?
+                        .trim()
+                        .rsplit(' ')
+                        .next()?
+                        .parse::<usize>()
+                        .ok()
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "cargo test --doc printed a result line with no {} count: {result}",
+                        name.trim()
+                    )
+                })
+        };
+        examples.passed += field(" passed")?;
+        examples.ignored += field(" ignored")?;
+        examples.filtered += field(" filtered out")?;
+    }
+    Ok(examples)
+}
+
+/// The doctests row's note for `examples`, or the sentence saying why they
+/// prove nothing ran. `declared_none` is a repository's declaration that it
+/// holds no documented example, which holds only while none is counted.
+///
+/// # Errors
+///
+/// Returns the sentence the doctests row carries when an example was filtered
+/// out, when every counted example was ignored, when none was counted and none
+/// is declared, or when one was counted though none is declared.
+pub fn doctests_proven(examples: Examples, declared_none: bool) -> Result<String, String> {
+    let counted = examples.passed + examples.ignored + examples.filtered;
+    if examples.filtered > 0 {
+        return Err(format!(
+            "cargo test --doc filtered out {}, so the row did not run them all",
+            count(examples.filtered, "example", "examples")
+        ));
+    }
+    if declared_none {
+        return if counted == 0 {
+            Ok("no examples, as declared".to_string())
+        } else {
+            Err(format!(
+                "the gate declares no documented example, and cargo test --doc counted {counted}. Remove the declaration"
+            ))
+        };
+    }
+    if counted == 0 {
+        return Err(
+            "cargo test --doc ran no documented example. Write one, or declare none beside the step table"
+                .to_string(),
+        );
+    }
+    if examples.passed == 0 {
+        return Err(format!(
+            "cargo test --doc ignored every example it counted, {counted} of them, so none ran"
+        ));
+    }
+    Ok(count(examples.passed, "example", "examples"))
+}
+
 /// Every file rustfmt's `--verbose` output names as formatted.
 #[must_use]
 pub fn rustfmt_formatted(printed: &str) -> Vec<String> {
@@ -318,8 +427,9 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        FILES, SHARED_WORKFLOWS, actionlint_linted, batches, comparable, count, covered,
-        inherit_callees, machete_analyzed, prove, rustfmt_formatted, taplo_found, zizmor_completed,
+        Examples, FILES, SHARED_WORKFLOWS, actionlint_linted, batches, comparable, count, covered,
+        doctest_examples, doctests_proven, inherit_callees, machete_analyzed, prove,
+        rustfmt_formatted, taplo_found, zizmor_completed,
     };
 
     fn owned(paths: &[&str]) -> Vec<String> {
@@ -491,5 +601,121 @@ mod tests {
         assert_eq!(batches(&[]), Vec::<Vec<String>>::new());
         assert_eq!(count(1, "file", "files"), "1 file");
         assert_eq!(count(9, "file", "files"), "9 files");
+    }
+
+    /// One crate's `cargo test --doc` block as cargo 1.98 prints it.
+    fn block(name: &str, passed: usize, ignored: usize, filtered: usize) -> String {
+        format!(
+            "   Doc-tests {name}\n\nrunning {}\n\ntest result: ok. {passed} passed; 0 failed; {ignored} ignored; 0 measured; {filtered} filtered out; finished in 0.00s\n\n",
+            passed + ignored
+        )
+    }
+
+    /// The examples sum over every crate's result line, and a header with no
+    /// result line after it, as `--list` prints, leaves the count unknown.
+    #[test]
+    fn a_doctest_run_counts_every_crates_examples() {
+        let examples = |passed, ignored, filtered| Examples {
+            passed,
+            ignored,
+            filtered,
+        };
+        for (what, printed, wanted) in [
+            (
+                "two crates",
+                format!("{}{}", block("a", 1, 0, 0), block("b", 3, 1, 0)),
+                examples(4, 1, 0),
+            ),
+            ("a crate with none", block("a", 0, 0, 0), examples(0, 0, 0)),
+            ("a filtered run", block("a", 0, 0, 2), examples(0, 0, 2)),
+            ("no library at all", String::new(), examples(0, 0, 0)),
+            (
+                "a crate with a separate pass",
+                format!(
+                    "{}test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n",
+                    block("a", 2, 0, 0)
+                ),
+                examples(3, 0, 0),
+            ),
+        ] {
+            assert_eq!(doctest_examples(&printed), Ok(wanted), "{what}");
+        }
+        assert_eq!(
+            doctest_examples("   Doc-tests a\nsrc/lib.rs - add (line 3): test\n\n1 test, 0 benchmarks\n"),
+            Err("cargo test --doc printed 1 Doc-tests header and 0 result lines, so which examples ran is unknown".to_string()),
+            "a listed run"
+        );
+        assert_eq!(
+            doctest_examples("   Doc-tests a\ntest result: ok. 1 passed; 0 failed; 0 measured\n"),
+            Err("cargo test --doc printed a result line with no ignored count: ok. 1 passed; 0 failed; 0 measured".to_string()),
+            "a result line missing a count"
+        );
+    }
+
+    /// The row passes on a run that ran an example, or on none where none is
+    /// declared, and fails on a filtered run, on every example ignored, on none
+    /// undeclared and on one counted though none is declared.
+    #[test]
+    fn a_doctest_count_proves_what_ran() {
+        let examples = |passed, ignored, filtered| Examples {
+            passed,
+            ignored,
+            filtered,
+        };
+        for (what, counted, declared, wanted) in [
+            ("four ran", examples(4, 0, 0), false, Ok("4 examples")),
+            (
+                "one ran beside an ignored one",
+                examples(1, 1, 0),
+                false,
+                Ok("1 example"),
+            ),
+            (
+                "none, declared",
+                examples(0, 0, 0),
+                true,
+                Ok("no examples, as declared"),
+            ),
+            (
+                "none, undeclared",
+                examples(0, 0, 0),
+                false,
+                Err(
+                    "cargo test --doc ran no documented example. Write one, or declare none beside the step table",
+                ),
+            ),
+            (
+                "every one ignored",
+                examples(0, 2, 0),
+                false,
+                Err("cargo test --doc ignored every example it counted, 2 of them, so none ran"),
+            ),
+            (
+                "one filtered out",
+                examples(3, 0, 1),
+                false,
+                Err("cargo test --doc filtered out 1 example, so the row did not run them all"),
+            ),
+            (
+                "filtered out where none is declared",
+                examples(0, 0, 2),
+                true,
+                Err("cargo test --doc filtered out 2 examples, so the row did not run them all"),
+            ),
+            (
+                "one counted though none is declared",
+                examples(1, 0, 0),
+                true,
+                Err(
+                    "the gate declares no documented example, and cargo test --doc counted 1. Remove the declaration",
+                ),
+            ),
+        ] {
+            assert_eq!(
+                doctests_proven(counted, declared),
+                wanted.map(str::to_string).map_err(str::to_string),
+                "{what}"
+            );
+        }
     }
 }
