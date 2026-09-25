@@ -760,10 +760,10 @@ mod tests {
     fn a_windows_path_is_escaped_for_json() {
         let cases: &[(&str, &str)] = &[
             (
-                r"Z:\repos\ember\.cache\run\23178631",
-                r"Z:\\repos\\ember\\.cache\\run\\23178631",
+                r"C:\work\ember\.cache\run\23178631",
+                r"C:\\work\\ember\\.cache\\run\\23178631",
             ),
-            ("/home/zach/.cache/run", "/home/zach/.cache/run"),
+            ("/work/ember/.cache/run", "/work/ember/.cache/run"),
         ];
         for (input, want) in cases {
             assert_eq!(json_string(Path::new(input)), *want, "path {input}");

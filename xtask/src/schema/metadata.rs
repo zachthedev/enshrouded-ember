@@ -143,7 +143,7 @@ mod tests {
                 stamp: "2026-05-11T10:44:54.050433Z".to_string(),
             }),
             extracted_at: "2026-09-17T21:00:00Z".to_string(),
-            server: r"Z:\cache\server\23178631\enshrouded_server.exe".to_string(),
+            server: r"C:\work\ember\.cache\server\23178631\enshrouded_server.exe".to_string(),
             client: None,
         }
     }
