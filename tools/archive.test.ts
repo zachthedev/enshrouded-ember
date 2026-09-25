@@ -455,6 +455,38 @@ describe('fetchedManifests', () => {
     expect(await fetchedManifests(dir, 2278520, 2278521)).toEqual([]);
   });
 
+  /**
+   * A key named `__proto__` or `constructor` in the app manifest is data to
+   * the reader, so the manifest is still found and `Object.prototype` is left
+   * alone.
+   */
+  test.each([
+    ['a __proto__ table', ['\t"__proto__"', '\t{', '\t\t"pwned"\t\t"yes"', '\t}']],
+    [
+      'a constructor table with a prototype',
+      ['\t"constructor"', '\t{', '\t\t"prototype"', '\t\t{', '\t\t\t"pwned"\t\t"yes"', '\t\t}', '\t}'],
+    ],
+  ])('an app manifest carrying %s still names the manifest', async (name, lines) => {
+    const dir = await sandbox();
+    const plain = acf({ '2278521': '2174935030716737236' });
+    const crafted = plain.replace('\t"InstalledDepots"', `${lines.join('\n')}\n\t"InstalledDepots"`);
+    expect(crafted).not.toBe(plain);
+    await Bun.write(join(dir, 'steamapps', 'appmanifest_2278520.acf'), crafted);
+    const [found] = await fetchedManifests(dir, 2278520, 2278521);
+    expect(found?.manifestId).toBe('2174935030716737236');
+    expect(({} as Record<string, unknown>)['pwned'], `reading ${name} wrote onto Object.prototype`).toBeUndefined();
+  });
+
+  /** An app manifest that cannot be read is not the same as none. */
+  test('an app manifest that is not KeyValues is refused, naming the file', async () => {
+    const dir = await sandbox();
+    const truncated = acf({ '2278521': '2174935030716737236' }).slice(0, 60);
+    await Bun.write(join(dir, 'steamapps', 'appmanifest_2278520.acf'), truncated);
+    const read = fetchedManifests(dir, 2278520, 2278521);
+    await expect(read).rejects.toBeInstanceOf(DdManifestError);
+    await expect(read).rejects.toThrow(/appmanifest_2278520\.acf is not KeyValues this tool reads/);
+  });
+
   test('a gid that is not decimal is no evidence', async () => {
     const dir = await sandbox();
     await Bun.write(join(dir, 'steamapps', 'appmanifest_2278520.acf'), acf({ '2278521': '../../../evil' }));

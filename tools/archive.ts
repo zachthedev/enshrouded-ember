@@ -46,7 +46,6 @@ import { appendFile, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import * as VDF from 'vdf-parser';
 import { z } from 'zod';
 import { compareToManifest, DdManifestError, readDdManifest } from './dd-manifest.ts';
 import {
@@ -59,6 +58,7 @@ import {
   readRecords,
   RecordError,
 } from './records.ts';
+import { parseVdf, type VdfTable, VdfError, vdfString, vdfTable } from './vdf.ts';
 
 /**
  * ///////////////////////////////////////////////
@@ -220,7 +220,8 @@ export interface FetchedManifest {
  * @returns Each record, app manifest first, and an empty array for a directory
  * that carries none.
  * @throws {@link DdManifestError} When `.DepotDownloader` is there and
- * cannot be listed. Evidence that cannot be read is not the same as none, and
+ * cannot be listed, or the app manifest is there and is not KeyValues this
+ * tool reads. Evidence that cannot be read is not the same as none, and
  * `--unattested` is allowed to wave through only the second one.
  */
 export async function fetchedManifests(dir: string, appId: number, depotId: number): Promise<FetchedManifest[]> {
@@ -228,15 +229,19 @@ export async function fetchedManifests(dir: string, appId: number, depotId: numb
 
   const acf = join(dir, 'steamapps', `appmanifest_${appId}.acf`);
   if (await Bun.file(acf).exists()) {
-    // The same two options the app info parser passes, for the same two
-    // reasons: a gid rounds if it becomes a number, and arrayify keeps the
-    // parser off Object.prototype.
-    const root = VDF.parse<Record<string, unknown>>(await Bun.file(acf).text(), { types: false, arrayify: true });
-    const state = root['AppState'] as Record<string, unknown> | undefined;
-    const installed = state?.['InstalledDepots'] as Record<string, unknown> | undefined;
-    const entry = installed?.[String(depotId)] as Record<string, unknown> | undefined;
-    const manifestId = entry?.['manifest'];
-    if (typeof manifestId === 'string' && /^\d{1,20}$/.test(manifestId)) {
+    let root: VdfTable;
+    try {
+      root = parseVdf(await Bun.file(acf).text());
+    } catch (error) {
+      if (error instanceof VdfError) {
+        throw new DdManifestError(acf, `is not KeyValues this tool reads: ${error.message}`);
+      }
+      throw error;
+    }
+    const state = vdfTable(root['AppState']);
+    const entry = vdfTable(vdfTable(state['InstalledDepots'])[String(depotId)]);
+    const manifestId = vdfString(entry['manifest']);
+    if (manifestId !== null && /^\d{1,20}$/.test(manifestId)) {
       found.push({ manifestId, source: acf, by: 'SteamCMD' });
     }
   }

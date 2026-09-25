@@ -200,20 +200,40 @@ describe('parseAppInfo, against input Valve did not send', () => {
   });
 
   /**
-   * The parser is handed a block whose key is `__proto__`. With `arrayify`
-   * off, vdf-parser walks into `Object.prototype` itself and writes the
-   * block's children onto it for the life of the process. The option the
-   * caller passes is the only thing that stops it.
+   * A key named `__proto__` or `constructor` is data to the reader. A block
+   * carrying one reads as it would without it, and `Object.prototype` is left
+   * alone.
    */
-  test('a __proto__ block leaves Object.prototype alone', () => {
-    const polluted = ['"2278520"', '{', '\t"__proto__"', '\t{', '\t\t"pwned"\t\t"yes"', '\t}', '}'].join('\n');
-    // The block advertises no branch, so a refusal is expected. What is under
-    // test is the state of the prototype afterwards, not the refusal.
-    expect(() => parseAppInfo(polluted, 2278520)).toThrow(AppInfoError);
-    expect(
-      ({} as Record<string, unknown>)['pwned'],
-      'parsing a __proto__ block wrote onto Object.prototype',
-    ).toBeUndefined();
+  test.each([
+    ['a __proto__ table', ['\t\t"__proto__"', '\t\t{', '\t\t\t"pwned"\t\t"yes"', '\t\t}']],
+    [
+      'a constructor table with a prototype',
+      ['\t\t"constructor"', '\t\t{', '\t\t\t"prototype"', '\t\t\t{', '\t\t\t\t"pwned"\t\t"yes"', '\t\t\t}', '\t\t}'],
+    ],
+  ])('%s leaves Object.prototype alone', (name, lines) => {
+    const crafted = CAPTURE.replace('\t"common"\n\t{\n', `\t"common"\n\t{\n${lines.join('\n')}\n`);
+    expect(crafted).not.toBe(CAPTURE);
+    expect(parseAppInfo(crafted, 2278520)).toEqual(parseAppInfo(CAPTURE, 2278520));
+    expect(({} as Record<string, unknown>)['pwned'], `parsing ${name} wrote onto Object.prototype`).toBeUndefined();
+  });
+
+  /**
+   * `constructor` is inside the branch name alphabet, so a branch with that
+   * name is a branch like any other and is recorded, which only a reader whose
+   * tables have no prototype can do.
+   */
+  test('a branch named constructor is recorded beside public', () => {
+    const extra = ['\t\t\t"constructor"', '\t\t\t{', '\t\t\t\t"buildid"\t\t"42"', '\t\t\t}'].join('\n');
+    const crafted = CAPTURE.replace('\t\t"branches"\n\t\t{\n', `\t\t"branches"\n\t\t{\n${extra}\n`);
+    expect(crafted).not.toBe(CAPTURE);
+    expect(parseAppInfo(crafted, 2278520).branches).toEqual({ constructor: '42', public: '23178631' });
+  });
+
+  test('a block that is not KeyValues is refused, and says so', () => {
+    const crafted = CAPTURE.replace('"Enshrouded Dedicated Server"', '"Enshrouded Dedicated Server');
+    expect(crafted).not.toBe(CAPTURE);
+    expect(() => parseAppInfo(crafted, 2278520)).toThrow(AppInfoError);
+    expect(() => parseAppInfo(crafted, 2278520)).toThrow("SteamCMD's block for app 2278520 is not KeyValues");
   });
 });
 
