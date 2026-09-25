@@ -18,10 +18,11 @@
 
 use std::io::{self, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use owo_colors::{OwoColorize, Stream};
 
-use crate::runner::{Captured, Exit, Runner};
+use crate::runner::{self, Captured, Exit, Runner};
 use crate::{pins, proof, shellcheck, tree};
 
 /// Every TypeScript project config this repository keeps. The tree rules
@@ -67,17 +68,31 @@ pub enum Proof {
     /// files `tsconfig.json` includes.
     Typecheck,
     /// `bun test` says how many test files it ran, which must be the tracked
-    /// ones.
+    /// ones, and how many tests it skipped, which must be
+    /// [`BUN_SKIPPED_TESTS`].
     BunTest,
     /// `cargo test --doc` counts every documented example, and the row fails on
     /// a filtered run, on every example ignored, and on none unless
     /// [`NO_DOC_EXAMPLES`] declares none.
     Doctests,
+    /// nextest's summary counts the tests it skipped, which must equal
+    /// [`SKIPPED_TESTS`].
+    Tests,
 }
 
 /// Whether this repository declares it holds no documented example. It holds
 /// several, so the doctests row fails on a run that counts none.
 const NO_DOC_EXAMPLES: bool = false;
+
+/// The tests nextest skips here: each `#[ignore]` test, which needs a fetched
+/// server build. The tests row fails on any other count, so the change that
+/// ignores a test or stops ignoring one changes this in the same diff.
+const SKIPPED_TESTS: usize = 12;
+
+/// The tests `bun test` skips here: the dd-manifest cases against archived
+/// builds, one `test.skipIf` that skips while `EMBER_ARCHIVE_DIR` is empty,
+/// as the tools row sets it. The tools row fails on any other count.
+const BUN_SKIPPED_TESTS: usize = 1;
 
 /// One row of the gate.
 pub struct Step {
@@ -98,11 +113,16 @@ pub struct Step {
 }
 
 /// What to run when a tool mise owns is absent. One command covers every one
-/// of them, because `mise.toml` names them all and mise reads it.
-pub const MISE_INSTALL: &str = "mise install --locked";
+/// of them: it holds the pin files to their rules, then installs what
+/// `mise.lock` records under the environment every mise child gets.
+pub const MISE_INSTALL: &str = "cargo xtask setup";
 
 /// The rustup command that installs the toolchain a cargo row needs.
 const RUSTUP: &str = "rustup toolchain install";
+
+/// How long `gh auth token` may take. A keyring read that hangs past it reads
+/// as no token, and zizmor runs offline.
+const GH_DEADLINE: Duration = Duration::from_secs(5);
 
 /// What to run when the Bun packages a row starts are absent.
 const BUN_INSTALL: &str = "run bun install --frozen-lockfile, or bun install --frozen-lockfile --ignore-scripts in a worktree (CONTRIBUTING.md#setup).";
@@ -285,14 +305,16 @@ pub const STEPS: &[Step] = &[
     },
     Step {
         name: "tools",
-        covers: "The tests in tools/, every tracked test file handed by path and proven run",
+        covers: "The tests in tools/, every tracked test file handed by path and proven run, and the skipped count the declared one",
         program: Program::Path("bun"),
         // Each tracked test file goes by its ./ path, since a bare argument is
         // a substring filter over every path. CI makes a committed test.only
-        // fail rather than skip the file's other tests.
+        // fail rather than skip the file's other tests. An empty archive
+        // directory skips the cases against archived builds, so the skipped
+        // count is the declared one whatever this process holds.
         args: &[NO_ENV_FILE, "test"],
         install: "install Bun from https://bun.sh",
-        env: &[("CI", "true")],
+        env: &[("CI", "true"), ("EMBER_ARCHIVE_DIR", "")],
         proof: Proof::BunTest,
     },
     Step {
@@ -314,7 +336,7 @@ pub const STEPS: &[Step] = &[
     },
     Step {
         name: "tests",
-        covers: "The test suites, under cargo-nextest, failing when no test ran",
+        covers: "The test suites, under cargo-nextest, failing when no test ran or the skipped count is not the declared one",
         program: Program::Mise("cargo-nextest"),
         // --no-tests=fail fails a run that skipped every test, and no user
         // config reaches the run.
@@ -329,7 +351,7 @@ pub const STEPS: &[Step] = &[
         ],
         install: MISE_INSTALL,
         env: TEST_ENV,
-        proof: Proof::Exit,
+        proof: Proof::Tests,
     },
     Step {
         name: "doctests",
@@ -462,29 +484,10 @@ impl<'a> Gate<'a> {
     /// Every way the pin files and the tree fall short, with an unreadable file
     /// reported as a problem of its own.
     fn pin_problems(&self) -> Vec<String> {
-        let read = |path: &str| {
-            self.runner
-                .read_file(path)
-                .ok_or_else(|| format!("{path} cannot be read"))
-        };
-        let (main, semver) = (pins::MAIN, pins::SEMVER);
-        let mut found = match (
-            read(main.pins),
-            read(main.lock),
-            read(semver.pins),
-            read(semver.lock),
-        ) {
-            (Ok(pin_text), Ok(lock), Ok(semver_pins), Ok(semver_lock)) => {
-                let mut found = pins::problems(&pin_text, &lock);
-                found.extend(pins::semver_problems(&pin_text, &semver_pins, &semver_lock));
-                found
-            }
-            (first, second, third, fourth) => [first, second, third, fourth]
-                .into_iter()
-                .filter_map(Result::err)
-                .collect(),
-        };
-        found.extend(self.stray_problems());
+        let mut found = pins::file_problems(
+            &|path| self.runner.read_file(path),
+            self.runner.config_paths(),
+        );
         found.extend(self.tree_problems());
         found
     }
@@ -730,12 +733,22 @@ impl<'a> Gate<'a> {
             .ok_or_else(|| format!("{} could not start for the canary run", command[0]))
     }
 
-    /// The token `gh` holds for github.com, or `None` when nobody is logged in.
+    /// The token `gh` holds for github.com, or `None` when nobody is logged in
+    /// or gh does not answer within [`GH_DEADLINE`].
     ///
-    /// The first line alone: `capture` merges the streams, and the token is
-    /// the one line standard output carries.
+    /// gh reads its own token names ahead of its login, and the gate withholds
+    /// them from every child, so they are handed back to this call by name. The
+    /// first line alone: the capture merges the streams, and the token is the
+    /// one line standard output carries.
     fn gh_token(&self) -> Option<String> {
-        let printed = self.runner.capture(&["gh", "auth", "token"])?;
+        let own = runner::gh_own_tokens(self.runner);
+        let env: Vec<(&str, &str)> = own
+            .iter()
+            .map(|(name, value)| (*name, value.as_str()))
+            .collect();
+        let printed = self
+            .runner
+            .capture_within(&["gh", "auth", "token"], &env, GH_DEADLINE)?;
         let token = printed.lines().next()?.trim().to_string();
         (!token.is_empty()).then_some(token)
     }
@@ -820,6 +833,7 @@ impl<'a> Gate<'a> {
             Proof::Actionlint => self.prove_actionlint(out, prepared, &existing, &root),
             Proof::Zizmor => self.prove_zizmor(out, prepared, &existing, &root),
             Proof::Doctests => self.prove_doctests(out, prepared),
+            Proof::Tests => self.prove_tests(out, prepared),
             Proof::Typecheck => self.prove_typecheck(out, prepared, &existing, &root),
             Proof::BunTest => self.prove_bun_test(out, prepared, &existing, &root),
         }
@@ -991,7 +1005,9 @@ impl<'a> Gate<'a> {
                     .to_string(),
             ));
         }
+        // After `--`, a crate directory named like a flag stays a path.
         let mut command = prepared.command.clone();
+        command.push("--".to_string());
         command.extend(handed.iter().cloned());
         let captured = match self.capture(out, &command, &prepared.env, None)? {
             Ok(captured) => captured,
@@ -1097,8 +1113,103 @@ impl<'a> Gate<'a> {
         if let Err(sentence) = proof::prove("zizmor", proof::FILES, &workflows, &completed, root) {
             return Ok(Err(sentence));
         }
+        if let Err(sentence) = self.hold_inherit_waivers(out, &prepared.command[0])? {
+            return Ok(Err(sentence));
+        }
         let count = proof::count(workflows.len(), "workflow", "workflows");
         Ok(Ok(format!("{count}, {}", prepared.note)))
+    }
+
+    /// Refuse a `secrets-inherit` waiver in the zizmor config that names a
+    /// file holding no job that passes `secrets: inherit`.
+    ///
+    /// A second zizmor pass with no config and no inline ignores reports every
+    /// such job, waived or not, and Bun reads the waiver list from the config.
+    /// zizmor's exit code there reports the audits it ran, so the row reads its
+    /// JSON alone. It logs warnings and worse, whatever `RUST_LOG` this process
+    /// holds, so a report it cannot write leaves only its reason on standard
+    /// error, and the row prints that.
+    fn hold_inherit_waivers(
+        &self,
+        out: &mut dyn Write,
+        zizmor: &str,
+    ) -> io::Result<Result<(), String>> {
+        let held: Vec<String> = [
+            zizmor,
+            "--no-progress",
+            "--offline",
+            "--no-config",
+            "--no-ignores",
+            "--strict-collection",
+            "--format",
+            "json",
+            "--collect=all",
+            ".github",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        writeln!(
+            out,
+            "\n{}",
+            tree::printable(held.join(" ")).if_supports_color(Stream::Stdout, OwoColorize::dimmed)
+        )?;
+        let argv: Vec<&str> = held.iter().map(String::as_str).collect();
+        let report = match self.runner.output(&argv, &[("RUST_LOG", "warn")], None) {
+            Ok(captured) => captured,
+            Err(err) => return Ok(Err(format!("{zizmor} could not start: {err}"))),
+        };
+        let calls = match proof::inherit_call_files(&report.stdout) {
+            Ok(calls) => calls,
+            Err(sentence) => {
+                for line in report.stderr.lines().filter(|line| !noise(line)) {
+                    writeln!(out, "{}", tree::printable(line.to_string()))?;
+                }
+                return Ok(Err(format!("{sentence}, and zizmor's output is above")));
+            }
+        };
+        let ask = bun_script(proof::INHERIT_WAIVERS);
+        let printed = match self.capture(out, &ask, &[], Some(proof::ZIZMOR_CONFIG))? {
+            Ok(captured) if captured.exit == Exit::Ok => captured.stdout,
+            Ok(_) => {
+                return Ok(Err(format!(
+                    "Bun could not read the secrets-inherit waivers in {}, and its output is above",
+                    proof::ZIZMOR_CONFIG
+                )));
+            }
+            Err(sentence) => return Ok(Err(sentence)),
+        };
+        let waived = match proof::inherit_waivers(&printed) {
+            Ok(waived) => waived,
+            Err(sentence) => return Ok(Err(sentence)),
+        };
+        let stale = proof::stale_inherit_waivers(&calls, &waived);
+        Ok(if stale.is_empty() {
+            Ok(())
+        } else {
+            Err(stale.join("; "))
+        })
+    }
+
+    /// The tests row: nextest must pass, and the tests its summary counts as
+    /// skipped must be [`SKIPPED_TESTS`].
+    fn prove_tests(
+        &self,
+        out: &mut dyn Write,
+        prepared: &Prepared,
+    ) -> io::Result<Result<String, String>> {
+        let captured = match self.capture(out, &prepared.command, &prepared.env, None)? {
+            Ok(captured) => captured,
+            Err(sentence) => return Ok(Err(sentence)),
+        };
+        if captured.exit == Exit::Err {
+            return Ok(Err(
+                "cargo-nextest exited non-zero, and its output is above".to_string(),
+            ));
+        }
+        Ok(
+            proof::nextest_skipped(&format!("{}\n{}", captured.stdout, captured.stderr))
+                .and_then(|skipped| proof::skips_proven("nextest", skipped, SKIPPED_TESTS)),
+        )
     }
 
     /// The typecheck row: tsc must read every tracked file `tsconfig.json`
@@ -1209,15 +1320,22 @@ impl<'a> Gate<'a> {
         let idle = junit_idle(&written);
         Ok(
             proof::prove("bun test", proof::FILES, &handed, &ran, root).and_then(|()| {
-                if idle.is_empty() {
-                    Ok(proof::count(handed.len(), "file", "files"))
-                } else {
+                if !idle.is_empty() {
                     let named: Vec<String> = idle.iter().map(|file| format!("{file:?}")).collect();
-                    Err(format!(
+                    return Err(format!(
                         "bun test ran no test in {}: each one there was skipped, a todo or held back by its condition",
                         named.join(", ")
-                    ))
+                    ));
                 }
+                let skipped = proof::skips_proven(
+                    "bun test",
+                    junit_skipped(&written),
+                    BUN_SKIPPED_TESTS,
+                )?;
+                Ok(format!(
+                    "{}, {skipped}",
+                    proof::count(handed.len(), "file", "files")
+                ))
             }),
         )
     }
@@ -1331,6 +1449,16 @@ fn junit_files(report: &str) -> Vec<String> {
         .collect()
 }
 
+/// The tests a `bun test` junit report counts as skipped, across the outermost
+/// suite of every file it names: a skipped test, a todo and one whose
+/// condition kept it from running.
+fn junit_skipped(report: &str) -> usize {
+    junit_suites(report)
+        .into_iter()
+        .filter_map(|(_, tag)| xml_attribute(tag, "skipped")?.parse::<usize>().ok())
+        .sum()
+}
+
 /// Every file a `bun test` junit report names where no test ran. Bun counts a
 /// skipped test, a todo and one whose condition kept it from running as
 /// skipped, and a suite carrying no count ran nothing either.
@@ -1414,6 +1542,7 @@ mod tests {
     use std::fmt::Write as _;
     use std::io;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use super::{
         Gate, MISE_INSTALL, Outcome, PRETTIER, Program, Row, STEPS, TSC, canary_passed,
@@ -1496,7 +1625,30 @@ mod tests {
         ran: RefCell<Vec<Vec<String>>>,
         /// The environment each of those commands set, in the same order.
         envs: RefCell<Vec<Vec<(String, String)>>>,
+        /// The variables this process holds beside `CI`, as `env_var` answers.
+        inherited: Vec<(&'static str, &'static str)>,
+        /// The environment and deadline each `gh auth token` call was given.
+        gh_calls: RefCell<Vec<GhCall>>,
+        /// The files the no-config zizmor pass names as passing
+        /// `secrets: inherit`.
+        inherit_calls: Vec<&'static str>,
+        /// What the no-config zizmor pass writes to standard error in place
+        /// of a report, or `None` for a report.
+        held_pass_said: Option<&'static str>,
+        /// What the waiver reader prints for the zizmor config.
+        waivers: &'static str,
+        /// The tests nextest's summary counts as skipped.
+        skipped: usize,
+        /// The tests `bun test` holds back beside the ones `skipping` names.
+        bun_skips: usize,
     }
+
+    /// The environment and deadline one `gh auth token` call was given.
+    type GhCall = (Vec<(String, String)>, Duration);
+
+    /// What zizmor 1.30.1 writes to standard error when a workflow does not
+    /// load, at its default log level: its banner, then the failure.
+    const HELD_PASS_FAILURE: &str = " INFO zizmor: \u{1f308} zizmor v1.30.1\nfatal: no audit was performed\nfailed to load file://.github\\workflows\\bad.yml as workflow\n\nCaused by:\n    0: invalid YAML syntax\n";
 
     impl FakeRunner {
         fn all_installed() -> Self {
@@ -1521,7 +1673,44 @@ mod tests {
                 examples: (1, 0, 0),
                 ran: RefCell::new(Vec::new()),
                 envs: RefCell::new(Vec::new()),
+                inherited: Vec::new(),
+                gh_calls: RefCell::new(Vec::new()),
+                inherit_calls: vec![".github/workflows/deps.yml"],
+                held_pass_said: None,
+                waivers: r#"["deps.yml"]"#,
+                skipped: 12,
+                bun_skips: 1,
             }
+        }
+
+        fn held_pass_saying(mut self, said: &'static str) -> Self {
+            self.held_pass_said = Some(said);
+            self
+        }
+
+        fn inheriting(mut self, name: &'static str, value: &'static str) -> Self {
+            self.inherited.push((name, value));
+            self
+        }
+
+        fn inheriting_in(mut self, calls: &[&'static str]) -> Self {
+            self.inherit_calls = calls.to_vec();
+            self
+        }
+
+        fn waiving(mut self, printed: &'static str) -> Self {
+            self.waivers = printed;
+            self
+        }
+
+        fn nextest_skipping(mut self, skipped: usize) -> Self {
+            self.skipped = skipped;
+            self
+        }
+
+        fn bun_skipping(mut self, skipped: usize) -> Self {
+            self.bun_skips = skipped;
+            self
         }
 
         fn in_ci(mut self) -> Self {
@@ -1757,7 +1946,7 @@ mod tests {
                         |path: &str| format!("verbose: Found total 0 errors in 1 ms for {path}");
                     (String::new(), lines(&linted, shape))
                 }
-                "zizmor" => {
+                "zizmor" if !command.contains(&"--no-config") => {
                     let inputs: Vec<&str> = self
                         .tracked
                         .iter()
@@ -1768,12 +1957,51 @@ mod tests {
                     let shape = |path: &str| format!(" INFO audit: zizmor: completed {path}");
                     (String::new(), lines(&completed, shape))
                 }
-                _ => (String::new(), String::new()),
+                _ => self.answer_more(program, command),
             }
         }
     }
 
     impl FakeRunner {
+        /// What the rows the main answer leaves out print: the no-config
+        /// zizmor pass, the waiver reader and nextest's summary.
+        fn answer_more(&self, program: &str, command: &[&str]) -> (String, String) {
+            match program {
+                "zizmor"
+                    if command.contains(&"--no-config")
+                        && let Some(said) = self.held_pass_said =>
+                {
+                    (String::new(), said.to_string())
+                }
+                "zizmor" if command.contains(&"--no-config") => {
+                    let findings: Vec<serde_json::Value> = self
+                        .inherit_calls
+                        .iter()
+                        .map(|path| {
+                            serde_json::json!({
+                                "ident": "secrets-inherit",
+                                "locations": [{
+                                    "symbolic": { "kind": "Primary", "key": { "Local": { "verbatim_path": path } } },
+                                }],
+                            })
+                        })
+                        .collect();
+                    (serde_json::Value::from(findings).to_string(), String::new())
+                }
+                "bun" if script(command) == Some(proof::INHERIT_WAIVERS) => {
+                    (self.waivers.to_string(), String::new())
+                }
+                "cargo-nextest" => (
+                    String::new(),
+                    format!(
+                        "     Summary [   0.100s] 15 tests run: 15 passed, {} skipped\n",
+                        self.skipped
+                    ),
+                ),
+                _ => (String::new(), String::new()),
+            }
+        }
+
         /// The workflow shell report for the NUL-separated paths in `input`:
         /// one step per workflow, under the fake's shell, less what the case
         /// has the reader leave out.
@@ -1808,14 +2036,18 @@ mod tests {
                 .iter()
                 .filter_map(|arg| arg.strip_prefix("./"))
                 .collect();
+            // The first file also carries the tests the case has Bun hold back.
             let suites: Vec<String> = self
                 .reported("bun", &handed)
                 .iter()
-                .map(|path| {
+                .enumerate()
+                .map(|(at, path)| {
                     let name = path.replace('/', "\\");
-                    let skipped = u8::from(self.skipping.contains(path));
+                    let held = if at == 0 { self.bun_skips } else { 0 };
+                    let tests = 1 + held;
+                    let skipped = usize::from(self.skipping.contains(path)) + held;
                     format!(
-                        "<testsuite name=\"{name}\" file=\"{name}\" tests=\"1\" skipped=\"{skipped}\"></testsuite>"
+                        "<testsuite name=\"{name}\" file=\"{name}\" tests=\"{tests}\" skipped=\"{skipped}\"></testsuite>"
                     )
                 })
                 .collect();
@@ -1871,7 +2103,7 @@ mod tests {
     fn sound_pair(pair: pins::Pair) -> (String, String) {
         let digest = "a".repeat(64);
         let mut pinned = String::from("[tools]\n");
-        let mut lock = String::new();
+        let mut lock = String::from("lockfile_version = 1\n\n");
         for tool in pins::TOOLS.iter().filter(|tool| tool.pair == pair) {
             writeln!(pinned, "\"{}\" = \"1.2.3\"", tool.key).expect("write to a String");
             writeln!(
@@ -1915,8 +2147,21 @@ mod tests {
     }
 
     impl Runner for FakeRunner {
-        fn capture(&self, command: &[&str]) -> Option<String> {
-            (command == ["gh", "auth", "token"] && self.logged_in).then(|| "ghp_fake\n".to_string())
+        fn capture_within(
+            &self,
+            command: &[&str],
+            env: &[(&str, &str)],
+            deadline: Duration,
+        ) -> Option<String> {
+            if command != ["gh", "auth", "token"] {
+                return None;
+            }
+            let env = env
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                .collect();
+            self.gh_calls.borrow_mut().push((env, deadline));
+            self.logged_in.then(|| "ghp_fake\n".to_string())
         }
 
         fn capture_any(&self, command: &[&str]) -> Option<String> {
@@ -2009,7 +2254,13 @@ mod tests {
         }
 
         fn env_var(&self, name: &str) -> Option<String> {
-            (name == "CI" && self.in_ci).then(|| "true".to_string())
+            if name == "CI" {
+                return self.in_ci.then(|| "true".to_string());
+            }
+            self.inherited
+                .iter()
+                .find(|(held, _)| *held == name)
+                .map(|(_, value)| (*value).to_string())
         }
 
         fn config_paths(&self) -> Result<Vec<pins::TreeEntry>, String> {
@@ -2113,7 +2364,8 @@ mod tests {
             ("machete", "2 crates"),
             ("prettier", "8 files"),
             ("typecheck", "2 files"),
-            ("tools", "1 file"),
+            ("tools", "1 file, 1 skipped, as declared"),
+            ("tests", "12 skipped, as declared"),
             ("actionlint", "2 files"),
             ("zizmor", "2 workflows, online"),
             ("doctests", "1 example"),
@@ -2294,6 +2546,7 @@ mod tests {
                 "--no-ignore",
                 "--skip-target-dir",
                 "--with-metadata",
+                "--",
                 "crates/a",
                 "xtask"
             ]
@@ -2465,7 +2718,7 @@ mod tests {
         let (rows, _) = gate(&runner);
         assert_eq!(
             row(&rows, "tools").outcome,
-            Outcome::Passed("2 files".to_string())
+            Outcome::Passed("2 files, 1 skipped, as declared".to_string())
         );
         let ran = runner.ran();
         let at = ran
@@ -2490,6 +2743,10 @@ mod tests {
         assert!(
             runner.envs.borrow()[at].contains(&("CI".to_string(), "true".to_string())),
             "bun test runs without CI set"
+        );
+        assert!(
+            runner.envs.borrow()[at].contains(&("EMBER_ARCHIVE_DIR".to_string(), String::new())),
+            "bun test runs with an inherited archive directory, which changes its skipped count"
         );
     }
 
@@ -2828,6 +3085,170 @@ mod tests {
         assert!(runner.ran()[at].contains(&"--offline".to_string()));
         let env = runner.envs.borrow()[at].clone();
         assert!(env.iter().all(|(name, _)| name != "GH_TOKEN"), "{env:?}");
+    }
+
+    /// `gh auth token` runs under a five-second deadline, handed gh's own two
+    /// token names from this process and no other variable.
+    #[test]
+    fn gh_answers_under_a_deadline_with_its_own_token_names() {
+        let runner = FakeRunner::all_installed()
+            .inheriting("GH_TOKEN", "ghp_held")
+            .inheriting("GITHUB_TOKEN", "ghs_held")
+            .inheriting("GH_HOST", "example.invalid");
+        gate(&runner);
+        let calls = runner.gh_calls.borrow();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        let (env, deadline) = &calls[0];
+        assert_eq!(*deadline, Duration::from_secs(5), "the deadline");
+        assert_eq!(
+            env,
+            &[
+                ("GH_TOKEN".to_string(), "ghp_held".to_string()),
+                ("GITHUB_TOKEN".to_string(), "ghs_held".to_string()),
+            ],
+            "the environment gh is handed"
+        );
+    }
+
+    /// zizmor runs a second pass with no config and no inline ignores, and a
+    /// `secrets-inherit` waiver naming a file that holds no job passing
+    /// `secrets: inherit` fails the row, as does a waiver list the gate cannot
+    /// read.
+    #[test]
+    fn zizmor_refuses_a_stale_secrets_inherit_waiver() {
+        let runner = FakeRunner::all_installed();
+        let (rows, _) = gate(&runner);
+        assert!(row(&rows, "zizmor").passed(), "{rows:?}");
+        let held = runner
+            .ran()
+            .into_iter()
+            .find(|command| {
+                basename(&command[0]) == "zizmor" && command.contains(&"--no-config".to_string())
+            })
+            .expect("the held pass ran");
+        assert_eq!(
+            held[1..],
+            [
+                "--no-progress",
+                "--offline",
+                "--no-config",
+                "--no-ignores",
+                "--strict-collection",
+                "--format",
+                "json",
+                "--collect=all",
+                ".github"
+            ]
+        );
+        let stale = |name: &str| {
+            format!(
+                "the secrets-inherit waiver in .github/zizmor.yml names {name:?}, and zizmor reported no job there passing secrets: inherit, so the waiver or the audit is stale"
+            )
+        };
+        for (label, runner, sentence) in [
+            (
+                "a waiver naming a file with no job",
+                FakeRunner::all_installed().waiving(r#"["deps.yml","cd.yml"]"#),
+                stale("cd.yml"),
+            ),
+            (
+                "a waived job that is gone",
+                FakeRunner::all_installed().inheriting_in(&[]),
+                stale("deps.yml"),
+            ),
+            (
+                "a waiver list the gate cannot read",
+                FakeRunner::all_installed().waiving(r#"{"error":"bad indentation"}"#),
+                ".github/zizmor.yml does not parse as the gate reads YAML, so its secrets-inherit waivers are unknown: bad indentation".to_string(),
+            ),
+        ] {
+            let (rows, text) = gate(&runner);
+            let last = rows.last().expect("one row");
+            assert_eq!(last.step, "zizmor", "{label}");
+            assert_eq!(last.outcome, Outcome::Failed, "{label}");
+            assert!(text.contains(&sentence), "{label}: {text}");
+        }
+    }
+
+    /// The held zizmor pass logs warnings and worse, and when it writes no
+    /// report the row fails with zizmor's own reason printed above it and its
+    /// banner left out.
+    #[test]
+    fn a_held_pass_with_no_report_prints_zizmor_s_reason() {
+        let runner = FakeRunner::all_installed().held_pass_saying(HELD_PASS_FAILURE);
+        let (rows, text) = gate(&runner);
+        let last = rows.last().expect("one row");
+        assert_eq!(last.step, "zizmor");
+        assert_eq!(last.outcome, Outcome::Failed);
+        assert!(
+            text.contains("zizmor's JSON report does not parse: EOF while parsing a value at line 1 column 0, and zizmor's output is above"),
+            "{text}"
+        );
+        assert!(
+            text.contains("failed to load file://.github\\workflows\\bad.yml as workflow"),
+            "the reason is missing: {text}"
+        );
+        assert!(
+            !text.contains("zizmor v1.30.1"),
+            "the banner is printed: {text}"
+        );
+        let ran = runner.ran();
+        let at = ran
+            .iter()
+            .position(|command| {
+                basename(&command[0]) == "zizmor" && command.contains(&"--no-config".to_string())
+            })
+            .expect("the held pass ran");
+        assert!(
+            runner.envs.borrow()[at].contains(&("RUST_LOG".to_string(), "warn".to_string())),
+            "the held pass logs at the contributor's level"
+        );
+    }
+
+    /// The tests row passes when nextest skips as many tests as
+    /// `SKIPPED_TESTS` declares, and fails naming both counts on any other.
+    #[test]
+    fn the_tests_row_holds_the_declared_skip_count() {
+        let runner = FakeRunner::all_installed();
+        let (rows, _) = gate(&runner);
+        assert_eq!(
+            row(&rows, "tests").outcome,
+            Outcome::Passed("12 skipped, as declared".to_string())
+        );
+        for (skipped, sentence) in [
+            (13, "nextest skipped 13 tests, and the gate declares 12."),
+            (11, "nextest skipped 11 tests, and the gate declares 12."),
+        ] {
+            let runner = FakeRunner::all_installed().nextest_skipping(skipped);
+            let (rows, text) = gate(&runner);
+            let last = rows.last().expect("one row");
+            assert_eq!(last.step, "tests", "{skipped}");
+            assert_eq!(last.outcome, Outcome::Failed, "{skipped}");
+            assert!(text.contains(sentence), "{skipped}: {text}");
+        }
+    }
+
+    /// The tools row passes when `bun test` skips the one test the gate
+    /// declares, and fails naming both counts on any other.
+    #[test]
+    fn the_tools_row_holds_the_declared_skip_count() {
+        let runner = FakeRunner::all_installed();
+        let (rows, _) = gate(&runner);
+        let Outcome::Passed(note) = &row(&rows, "tools").outcome else {
+            panic!("the tools row failed: {rows:?}");
+        };
+        assert!(note.ends_with(", 1 skipped, as declared"), "{note}");
+        for (skipped, sentence) in [
+            (2, "bun test skipped 2 tests, and the gate declares 1."),
+            (0, "bun test skipped 0 tests, and the gate declares 1."),
+        ] {
+            let runner = FakeRunner::all_installed().bun_skipping(skipped);
+            let (rows, text) = gate(&runner);
+            let last = rows.last().expect("one row");
+            assert_eq!(last.step, "tools", "{skipped}");
+            assert_eq!(last.outcome, Outcome::Failed, "{skipped}");
+            assert!(text.contains(sentence), "{skipped}: {text}");
+        }
     }
 
     /// A pin file nothing can read stops the gate at its first row, before any

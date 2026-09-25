@@ -1,7 +1,8 @@
 //! Repository automation, run as `cargo xtask <command>`.
 //!
 //! `check` is the single gate that continuous integration, the pre-push hook
-//! and `CONTRIBUTING.md` all call. `server` fetches a dedicated server build,
+//! and `CONTRIBUTING.md` all call. `tools` installs what the pin files name,
+//! once they pass. `server` fetches a dedicated server build,
 //! seeds it, launches it with the loader injected, tails it and stops it.
 //! `schema` recovers the reflection schema from a build and diffs two
 //! recoveries. `loca` writes a client's localization tables out, so a mod can
@@ -169,6 +170,9 @@ enum Command {
     /// Hold both mise pin files, their lockfiles and the configs the gate's
     /// tools read to their rules, which the gate does first.
     Pins,
+    /// Install every tool mise.toml pins, from mise.lock, once the pin files
+    /// pass their rules.
+    Setup,
     /// Fetch, seed, launch, tail and stop a dedicated server build.
     #[command(subcommand)]
     Server(ServerCommand),
@@ -457,6 +461,10 @@ fn run(cli: &Cli, ui: &ui::Ui) -> anyhow::Result<bool> {
             Ok(rows.iter().all(check::Row::passed))
         }
         Command::Pins => Ok(!check::Gate::new(check::STEPS, &runner).pins(&mut out)?),
+        Command::Setup => {
+            spawn::mise_install(&workspace_root()).map_err(anyhow::Error::msg)?;
+            Ok(true)
+        }
         Command::Server(command) => {
             let root = root::DevRoot::resolve(cli.global.root.as_deref())?;
             server::run(command, &root, ui)
