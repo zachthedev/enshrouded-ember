@@ -23,7 +23,7 @@ rules:
   artipacked:
     ignore:
       - build-watch.yml:144
-      - build-watch.yml:463
+      - build-watch.yml:467
       - client-build-watch.yml:63
   # An advisory published against an unchanged action pin turns every pull
   # request's workflows check red until the pin moves. A waiver is one GHSA id

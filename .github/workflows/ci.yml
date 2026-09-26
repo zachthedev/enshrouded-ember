@@ -13,8 +13,12 @@ on:
 
 permissions: {}
 
+# A pull request's runs share its ref, so a new push cancels the run it
+# replaces. A push to main takes a group of its own commit: a group holds one
+# pending run, so a shared one would drop the run of a commit queued behind
+# another.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

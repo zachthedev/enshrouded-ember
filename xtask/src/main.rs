@@ -1,7 +1,7 @@
 //! Repository automation, run as `cargo xtask <command>`.
 //!
 //! `check` is the single gate that continuous integration, the pre-push hook
-//! and `CONTRIBUTING.md` all call. `tools` installs what the pin files name,
+//! and `CONTRIBUTING.md` all call. `setup` installs what the pin files name,
 //! once they pass. `server` fetches a dedicated server build,
 //! seeds it, launches it with the loader injected, tails it and stops it.
 //! `schema` recovers the reflection schema from a build and diffs two

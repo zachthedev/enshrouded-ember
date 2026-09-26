@@ -3,14 +3,17 @@ name: codeql
 # Code scanning from a committed workflow, never default setup: default setup
 # pins nothing and names checks the repository does not control. The reusable
 # workflow runs one analysis per language below. In a caller each check run is
-# named <caller job> / Analyze (<language>), so here `codeql / Analyze (rust)`
+# named <caller job> / Analyze (<language>), so here `codeql / Analyze (rust)`,
+# `codeql / Analyze (javascript-typescript)`, `codeql / Analyze (java-kotlin)`
 # and `codeql / Analyze (actions)`, which are the names a branch ruleset
 # requires.
 #
-# The languages are the shipped one plus actions. The actions analysis runs
-# beside zizmor, and neither replaces the other. Rust is analyzed under
-# build-mode none, which codeql-action runs as asked: its server-side fallback
-# to autobuild covers C# and Java alone.
+# The languages are every one the repository holds, plus actions: Rust for the
+# crates, TypeScript for tools/, and Java for the Ghidra scripts under
+# xtask/ghidra. The actions analysis runs beside zizmor, and neither replaces
+# the other. Each runs under build-mode none. codeql-action runs Rust and
+# TypeScript as asked, and a server-side flag can move Java to autobuild,
+# which the run's log records.
 on:
   push:
     branches: [main]
@@ -34,4 +37,4 @@ jobs:
       actions: read
     uses: zachthedev/.github/.github/workflows/codeql.yml@09a9a00aae657ea11e5d5979ef3ce5859d9aba3a # v0.2.0
     with:
-      languages: '[{"language": "rust"}, {"language": "actions"}]'
+      languages: '[{"language": "rust"}, {"language": "javascript-typescript"}, {"language": "java-kotlin"}, {"language": "actions"}]'
