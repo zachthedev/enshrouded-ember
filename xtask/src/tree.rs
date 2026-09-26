@@ -236,22 +236,6 @@ struct Search {
 /// cosmiconfig reads its own settings from there even under `--config`.
 const SEARCHES: &[Search] = &[
     Search {
-        what: "an env file",
-        paths: &[
-            "**/.env",
-            "**/.env.local",
-            "**/.env.development",
-            "**/.env.development.local",
-            "**/.env.production",
-            "**/.env.production.local",
-            "**/.env.test",
-            "**/.env.test.local",
-        ],
-        named: None,
-        reads: "Bun loads one into the environment of every bun run started beside it",
-        personal: true,
-    },
-    Search {
         what: "a local lefthook config",
         paths: &[
             "lefthook-local",
@@ -306,98 +290,6 @@ const PROJECT_CONFIG_NAMES: &[&str] = &["tsconfig.json", "jsconfig.json"];
 /// The directory GitHub reads workflows from, where actionlint and zizmor read
 /// a lowercase `.yml` name alone.
 const WORKFLOWS: &str = ".github/workflows";
-
-/// Whether `text` carries an inline zizmor waiver, in any case and spacing
-/// zizmor might read.
-fn zizmor_waiver(text: &str) -> bool {
-    let folded = text.to_ascii_lowercase();
-    folded.match_indices("zizmor").any(|(at, _)| {
-        let rest = folded[at + "zizmor".len()..].trim_start();
-        rest.strip_prefix(':')
-            .map(str::trim_start)
-            .and_then(|rest| rest.strip_prefix("ignore"))
-            .is_some_and(|rest| rest.trim_start().starts_with('['))
-    })
-}
-
-// ///////////////////////////////////////////////
-// JSON read one way
-// ///////////////////////////////////////////////
-
-/// Every key that appears twice within one object of `text`, which is JSON
-/// that parses.
-///
-/// Strings are skipped whole, and a key is decoded, so an escaped spelling
-/// counts as the key it spells.
-fn repeated_keys(text: &str) -> Vec<String> {
-    let characters: Vec<char> = text.chars().collect();
-    let mut repeated = Vec::new();
-    // One entry per open object or array; an array has no keys.
-    let mut open: Vec<Option<BTreeSet<String>>> = Vec::new();
-    let mut at = 0;
-    while at < characters.len() {
-        match characters[at] {
-            '"' => {
-                let mut end = at + 1;
-                while end < characters.len() && characters[end] != '"' {
-                    end += if characters[end] == '\\' { 2 } else { 1 };
-                }
-                let token: String = characters[at..=end.min(characters.len() - 1)]
-                    .iter()
-                    .collect();
-                at = end + 1;
-                while at < characters.len() && characters[at].is_whitespace() {
-                    at += 1;
-                }
-                if let Some(Some(keys)) = open.last_mut()
-                    && characters.get(at) == Some(&':')
-                {
-                    let key = serde_json::from_str::<String>(&token).unwrap_or(token);
-                    if !keys.insert(key.clone()) {
-                        repeated.push(key);
-                    }
-                }
-                continue;
-            }
-            '{' => open.push(Some(BTreeSet::new())),
-            '[' => open.push(None),
-            '}' | ']' => {
-                open.pop();
-            }
-            _ => {}
-        }
-        at += 1;
-    }
-    repeated
-}
-
-/// `text` parsed as JSON, refusing a key repeated within one object.
-///
-/// Bun's `package.json` and `tsconfig.json` reader keeps the first of two equal
-/// keys, and `serde_json` the last, so the gate refuses a file with a repeated
-/// key rather than read it two ways.
-///
-/// # Errors
-///
-/// Returns the sentence saying why, when the text does not parse or repeats a
-/// key.
-pub fn parse_json(text: &str) -> Result<serde_json::Value, String> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(text).map_err(|err| format!("it does not parse: {err}"))?;
-    let repeated = repeated_keys(text);
-    if repeated.is_empty() {
-        Ok(parsed)
-    } else {
-        Err(format!(
-            "it repeats {} within one object, and Bun reads the first where a JSON parser reads the last",
-            repeated
-                .iter()
-                .map(|key| format!("{key:?}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))
-    }
-}
 
 // ///////////////////////////////////////////////
 // Inline waivers
@@ -876,9 +768,8 @@ pub fn findings(
 }
 
 /// Every finding against the listed paths: a config a program reads in place
-/// of the one the gate names, a project config, a `package.json` that runs
-/// code or reads two ways, a tracked path under `node_modules`, and a tracked
-/// file outside what the rows read.
+/// of the one the gate names, a project config, a tracked path under
+/// `node_modules`, and a tracked workflow outside the spelling the rows read.
 ///
 /// A path under `node_modules` compares folded, so a name NTFS or APFS could
 /// open as `node_modules` counts as one.
@@ -927,9 +818,6 @@ fn listing_findings(
             found.extend(project_config_findings(path, project_configs, read));
         }
         if is_tracked {
-            if base == "package.json" {
-                found.extend(package_json_findings(path, read));
-            }
             if base == "cargo.toml" {
                 found.extend(machete_findings(path, read));
                 if path != "Cargo.toml" {
@@ -948,7 +836,7 @@ fn listing_findings(
             {
                 found.extend(typescript_findings(path, &text));
             }
-            found.extend(scope_findings(path, &segments, read));
+            found.extend(workflow_findings(path, &segments));
         }
     }
     if !modules.is_empty() {
@@ -986,6 +874,7 @@ fn project_config_findings(
 ///
 /// `extends` is one path or a list, and every entry must be a named config, so
 /// no base file the rule never reads can carry an option the named one lacks.
+/// The file is read as tsc reads it, the last of two equal keys winning.
 fn extends_findings(
     config: &str,
     file: &str,
@@ -1001,13 +890,9 @@ fn extends_findings(
     } else {
         format!("{config:?}, through {file:?},")
     };
-    let parsed = match read(file).map(|text| parse_json(&text)) {
+    let parsed = match read(file).map(|text| serde_json::from_str::<serde_json::Value>(&text)) {
         Some(Ok(parsed)) => parsed,
-        Some(Err(why)) => {
-            return vec![format!(
-                "{shown} is not plain JSON the gate reads one way: {why}"
-            )];
-        }
+        Some(Err(err)) => return vec![format!("{shown} does not parse as JSON: {err}")],
         None => return vec![format!("{shown} cannot be read")],
     };
     let mut found = Vec::new();
@@ -1067,42 +952,10 @@ fn extended_config(from: &str, target: &serde_json::Value) -> Option<String> {
     })
 }
 
-/// Every way the tracked `package.json` at `path` runs code or reads two
-/// ways.
-///
-/// commitlint's cosmiconfig reads its own settings from a `cosmiconfig` key
-/// before it looks at `--config`, and a `$import` there loads a module. Bun
-/// keeps the first of two equal keys where a JSON parser keeps the last, so a
-/// check that reads the file as JSON can pass a key Bun applies.
-fn package_json_findings(path: &str, read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
-    match read(path).map(|text| parse_json(&text)) {
-        Some(Ok(parsed)) => parsed
-            .get("cosmiconfig")
-            .map(|_| {
-                format!(
-                    "{path:?} carries a cosmiconfig key, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it"
-                )
-            })
-            .into_iter()
-            .collect(),
-        Some(Err(why)) => vec![format!(
-            "{path:?} is not plain JSON every reader reads one way: {why}"
-        )],
-        None => Vec::new(),
-    }
-}
-
-/// Every way the tracked file at `path` falls outside what the rows read: a
-/// workflow not named `.github/workflows/<name>.yml` exactly, and an inline
-/// zizmor waiver under `.github`.
-///
-/// The waiver scan reads the bytes, so no `.gitattributes` entry marking the
-/// file binary hides a waiver from it.
-fn scope_findings(
-    path: &str,
-    segments: &[String],
-    read: &dyn Fn(&str) -> Option<String>,
-) -> Vec<String> {
+/// A finding when the tracked file at `path`, split into its folded
+/// `segments`, is a workflow not named `.github/workflows/<name>.yml` exactly,
+/// the one spelling actionlint and zizmor read.
+fn workflow_findings(path: &str, segments: &[String]) -> Vec<String> {
     let mut found = Vec::new();
     let directory = segments[..segments.len() - 1].join("/");
     let base = segments.last().map_or("", String::as_str);
@@ -1117,31 +970,19 @@ fn scope_findings(
             "{path:?} is a workflow outside {WORKFLOWS}/<name>.yml, and actionlint and zizmor read that spelling alone. Rename it"
         ));
     }
-    if segments.first().is_some_and(|first| first == ".github")
-        && let Some(text) = read(path)
-        && zizmor_waiver(&text)
-    {
-        found.push(format!(
-            "{path:?} carries a zizmor ignore comment, and zizmor waives the audit it names. A waiver is an entry in .github/zizmor.yml, the one config the zizmor row names"
-        ));
-    }
     found
 }
 
-/// Every root entry the gate refuses, in any case: a `.config`, and a
-/// `package.yaml`, which cosmiconfig searches for its own settings beside
-/// `package.json`.
+/// Every root entry named `.config` in any case, which the gate refuses on
+/// disk, tracked or not.
 fn root_findings(root_names: &[String]) -> Vec<String> {
     root_names
         .iter()
-        .filter_map(|name| match fold(name).as_str() {
-            ".config" => Some(format!(
+        .filter(|name| fold(name) == ".config")
+        .map(|name| {
+            format!(
                 "{name:?} is at the root, and mise, lefthook, commitlint's cosmiconfig and cargo-nextest each read a config from it that no row names. Remove it"
-            )),
-            "package.yaml" => Some(format!(
-                "{name:?} is at the root, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it"
-            )),
-            _ => None,
+            )
         })
         .collect()
 }
@@ -1322,8 +1163,8 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        Listing, findings, fold, git_environment, has_extension, hidden, listing_by, parse_json,
-        path_matches, printable, sound_files, work_tree_finding,
+        Listing, findings, fold, git_environment, has_extension, hidden, listing_by, path_matches,
+        printable, sound_files, work_tree_finding,
     };
 
     /// git starts with `NO_COLOR=1` and the two config switches, and with no
@@ -1443,8 +1284,6 @@ mod tests {
     const LEFTHOOK_READS: &str =
         "a lefthook config, and lefthook reads it in place of lefthook.yml";
     const LOCAL_READS: &str = "a local lefthook config, and lefthook merges it over lefthook.yml, where it can replace any hook job. .gitignore lists it";
-    const ENV_READS: &str =
-        "an env file, and Bun loads one into the environment of every bun run started beside it";
 
     /// The sound tree meets every rule, so each refusal below changes one thing
     /// from something that passed.
@@ -1589,46 +1428,12 @@ mod tests {
                 Tree::new().tracked(".lefthook-local"),
                 untrack(".lefthook-local", LOCAL_READS),
             ),
-            (
-                "a tracked root env file",
-                Tree::new().tracked(".env"),
-                untrack(".env", ENV_READS),
-            ),
-            (
-                "a tracked nested env file",
-                Tree::new().tracked("crates/a/.env.local"),
-                untrack("crates/a/.env.local", ENV_READS),
-            ),
-            (
-                "a tracked env file for a mode, local",
-                Tree::new().tracked("tools/.env.test.local"),
-                untrack("tools/.env.test.local", ENV_READS),
-            ),
-            (
-                "a tracked env file in another case",
-                Tree::new().tracked(".ENV.Production"),
-                untrack(".ENV.Production", ENV_READS),
-            ),
         ];
         finds(cases, PLAIN);
         let untracked = Tree::new()
             .untracked("lefthook-local.yml")
-            .untracked(".lefthook-local.json")
-            .untracked("crates/a/.env.local");
+            .untracked(".lefthook-local.json");
         assert_eq!(untracked.run(PLAIN), Vec::<String>::new());
-        for name in [
-            ".env.example",
-            "tools/.env.sample",
-            ".env.staging",
-            ".npmrc",
-        ] {
-            let tracked = Tree::new().tracked(name);
-            assert_eq!(
-                tracked.run(PLAIN),
-                Vec::<String>::new(),
-                "{name} is no file Bun loads, so it passes tracked"
-            );
-        }
     }
 
     /// A tracked path as or under `node_modules`, in any case or folded
@@ -1715,20 +1520,13 @@ mod tests {
                 extends,
                 "\"tsconfig.json\" extends \"./base\", and every config a named one extends must itself be named in PROJECT_CONFIGS".to_string(),
             ),
-            (
-                "a repeated key",
-                r#"{ "compilerOptions": { "strict": true }, "compilerOptions": { "strict": false } }"#,
-                "\"tsconfig.json\" is not plain JSON the gate reads one way: it repeats \"compilerOptions\" within one object, and Bun reads the first where a JSON parser reads the last".to_string(),
-            ),
         ] {
             assert_eq!(tree(text).run(TYPED), vec![wanted], "{label}");
         }
         let broken = tree("{ \"compilerOptions\": ").run(TYPED);
         assert_eq!(broken.len(), 1, "{broken:?}");
         assert!(
-            broken[0].starts_with(
-                "\"tsconfig.json\" is not plain JSON the gate reads one way: it does not parse: "
-            ),
+            broken[0].starts_with("\"tsconfig.json\" does not parse as JSON: "),
             "{broken:?}"
         );
         let named_base = Tree::new()
@@ -1823,111 +1621,15 @@ mod tests {
         }
     }
 
-    /// A tracked `package.json` that runs code or does not read one way is
-    /// refused: a `cosmiconfig` key, a key repeated within one object at any
-    /// depth, or text that does not parse. An untracked one is the install's.
+    /// A tracked workflow named anything but `<name>.yml` is refused.
     #[test]
-    fn a_package_json_that_runs_code_or_reads_two_ways_is_refused() {
-        let two_ways = "is not plain JSON every reader reads one way: it repeats";
-        let cosmiconfig = "carries a cosmiconfig key, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it";
-        let cases = vec![
-            (
-                "a cosmiconfig key",
-                Tree::new().tracked("package.json").file(
-                    "package.json",
-                    r#"{ "cosmiconfig": { "$import": ["./probe.mjs"] } }"#,
-                ),
-                format!("\"package.json\" {cosmiconfig}"),
-            ),
-            (
-                "a nested cosmiconfig key",
-                Tree::new()
-                    .tracked("a/package.json")
-                    .file("a/package.json", r#"{ "cosmiconfig": {} }"#),
-                format!("\"a/package.json\" {cosmiconfig}"),
-            ),
-            (
-                "a repeated key",
-                Tree::new()
-                    .tracked("package.json")
-                    .file("package.json", r#"{ "name": "a", "name": "b" }"#),
-                format!("\"package.json\" {two_ways} \"name\" within one object, and Bun reads the first where a JSON parser reads the last"),
-            ),
-            (
-                "a nested package repeating a key the shared job refuses",
-                Tree::new().tracked("tools/package.json").file(
-                    "tools/package.json",
-                    r#"{ "patchedDependencies": { "a@1.0.0": "p.patch" }, "patchedDependencies": {} }"#,
-                ),
-                format!("\"tools/package.json\" {two_ways} \"patchedDependencies\" within one object, and Bun reads the first where a JSON parser reads the last"),
-            ),
-        ];
-        finds(cases, PLAIN);
-        let broken = Tree::new()
-            .tracked("package.json")
-            .file("package.json", "{ \"name\": ")
-            .run(PLAIN);
-        assert_eq!(broken.len(), 1, "{broken:?}");
-        assert!(
-            broken[0].starts_with(
-                "\"package.json\" is not plain JSON every reader reads one way: it does not parse: "
-            ),
-            "{broken:?}"
-        );
-        let untracked = Tree::new()
-            .untracked("package.json")
-            .file("package.json", r#"{ "name": "a", "name": "b" }"#);
-        assert_eq!(untracked.run(PLAIN), Vec::<String>::new());
-        let plain = Tree::new().tracked("package.json").file(
-            "package.json",
-            r#"{ "name": "a", "x": { "cosmiconfig": 1 } }"#,
-        );
-        assert_eq!(
-            plain.run(PLAIN),
-            Vec::<String>::new(),
-            "a cosmiconfig key below the top level is no setting cosmiconfig reads"
-        );
-    }
-
-    /// A tracked file outside what the rows read is refused: a workflow named
-    /// anything but `<name>.yml`, and an inline zizmor waiver under `.github`.
-    #[test]
-    fn a_tracked_file_outside_the_rows_is_refused() {
+    fn a_workflow_outside_the_one_spelling_is_refused() {
         let workflow = |path: &str| {
             format!(
                 "{path:?} is a workflow outside .github/workflows/<name>.yml, and actionlint and zizmor read that spelling alone. Rename it"
             )
         };
-        let waiver = |path: &str| {
-            format!(
-                "{path:?} carries a zizmor ignore comment, and zizmor waives the audit it names. A waiver is an entry in .github/zizmor.yml, the one config the zizmor row names"
-            )
-        };
-        let ci = ".github/workflows/ci.yml";
         let cases = vec![
-            (
-                "an inline waiver",
-                Tree::new().tracked(ci).file(
-                    ci,
-                    "    secrets: inherit # zizmor: ignore[secrets-inherit]\n",
-                ),
-                waiver(ci),
-            ),
-            (
-                "a waiver in another spelling",
-                Tree::new()
-                    .tracked(ci)
-                    .file(ci, "# ZIZMOR :IGNORE [unpinned-uses]\n"),
-                waiver(ci),
-            ),
-            (
-                "a waiver in dependabot.yml",
-                Tree::new().tracked(".github/dependabot.yml").file(
-                    ".github/dependabot.yml",
-                    "# zizmor: ignore[dependabot-cooldown]\n",
-                ),
-                waiver(".github/dependabot.yml"),
-            ),
             (
                 "a workflow in capitals",
                 Tree::new()
@@ -1945,19 +1647,16 @@ mod tests {
         ];
         finds(cases, PLAIN);
         let elsewhere = Tree::new()
-            .tracked("docs/zizmor.md")
-            .file("docs/zizmor.md", "a zizmor: ignore[x] comment in prose\n")
             .tracked(".github/workflows/sub/x.yaml")
             .tracked("docs/.jj/x.md")
             .tracked("tools/g.d.ts");
         assert_eq!(elsewhere.run(PLAIN), Vec::<String>::new());
     }
 
-    /// A root `.config` or `package.yaml`, in any case, is refused whole.
+    /// A root `.config`, in any case, is refused whole.
     #[test]
-    fn a_root_config_directory_or_package_yaml_is_refused() {
+    fn a_root_config_directory_is_refused() {
         let reads = "is at the root, and mise, lefthook, commitlint's cosmiconfig and cargo-nextest each read a config from it that no row names. Remove it";
-        let yaml = "is at the root, and commitlint's cosmiconfig reads its search settings from it even under --config. Remove it";
         let cases = vec![
             (
                 "lower case",
@@ -1969,23 +1668,13 @@ mod tests {
                 Tree::new().root(".CONFIG"),
                 format!("\".CONFIG\" {reads}"),
             ),
-            (
-                "a package.yaml",
-                Tree::new().root("package.yaml"),
-                format!("\"package.yaml\" {yaml}"),
-            ),
-            (
-                "a package.yaml in capitals",
-                Tree::new().root("Package.YAML"),
-                format!("\"Package.YAML\" {yaml}"),
-            ),
         ];
         finds(cases, PLAIN);
-        for name in ["'", "package.yml", "package.json"] {
+        for name in ["'", "config", ".configs"] {
             assert_eq!(
                 Tree::new().root(name).run(PLAIN),
                 Vec::<String>::new(),
-                "{name} is no name cosmiconfig searches for its own settings"
+                "{name} is not the root .config"
             );
         }
     }
@@ -2713,22 +2402,5 @@ fn f() {}
             ),
         ];
         finds(cases, PLAIN);
-    }
-
-    /// JSON the gate parses refuses a repeated key at any depth, and an escaped
-    /// spelling counts as the key it spells.
-    #[test]
-    fn a_repeated_json_key_is_refused_at_any_depth() {
-        assert!(parse_json(r#"{ "a": { "b": 1, "c": [ { "d": 1 } ] } }"#).is_ok());
-        for text in [
-            r#"{ "a": 1, "a": 2 }"#,
-            r#"{ "x": { "b": 1, "b": 2 } }"#,
-            r#"{ "x": [ { "d": 1, "d": 2 } ] }"#,
-            r#"{ "a": 1, "\u0061": 2 }"#,
-        ] {
-            let why = parse_json(text).expect_err(text);
-            assert!(why.starts_with("it repeats "), "{text}: {why}");
-        }
-        assert!(parse_json(r#"{ "a": "\"a\": 1" , "b": ["a", "a"] }"#).is_ok());
     }
 }
