@@ -85,8 +85,9 @@ pub enum Proof {
 const NO_DOC_EXAMPLES: bool = false;
 
 /// The tests nextest skips here: each `#[ignore]` test, which needs a fetched
-/// server build. The tests row fails on any other count, so the change that
-/// ignores a test or stops ignoring one changes this in the same diff.
+/// game build, a server, a client or both. The tests row fails on any other
+/// count, so the change that ignores a test or stops ignoring one changes this
+/// in the same diff.
 const SKIPPED_TESTS: usize = 12;
 
 /// The tests `bun test` skips here: the dd-manifest cases against archived

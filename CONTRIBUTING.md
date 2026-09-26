@@ -612,8 +612,8 @@ GitHub host, or a `ZIZMOR_` switch that turns the online audits off or names
 another config.
 
 `tests` fails when no test ran, and on a skip count other than `SKIPPED_TESTS`
-beside the step table, each skip an `#[ignore]` test that needs a fetched
-server build. It reads no nextest user config. No child gets a `NEXTEST_`
+beside the step table, each skip an `#[ignore]` test that needs a fetched game
+build: a server, a client or both. It reads no nextest user config. No child gets a `NEXTEST_`
 variable, since one can pass such a run or retry a failing test into a pass.
 
 `doctests` runs beside `tests`, because `cargo nextest` runs none of them and a
