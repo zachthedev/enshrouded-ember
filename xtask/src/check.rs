@@ -1117,81 +1117,8 @@ impl<'a> Gate<'a> {
         if let Err(sentence) = proof::prove("zizmor", proof::FILES, &workflows, &completed, root) {
             return Ok(Err(sentence));
         }
-        if let Err(sentence) = self.hold_inherit_waivers(out, &prepared.command[0])? {
-            return Ok(Err(sentence));
-        }
         let count = proof::count(workflows.len(), "workflow", "workflows");
         Ok(Ok(format!("{count}, {}", prepared.note)))
-    }
-
-    /// Refuse a `secrets-inherit` waiver in the zizmor config that names a
-    /// file holding no job that passes `secrets: inherit`.
-    ///
-    /// A second zizmor pass with no config and no inline ignores reports every
-    /// such job, waived or not, and Bun reads the waiver list from the config.
-    /// zizmor's exit code there reports the audits it ran, so the row reads its
-    /// JSON alone. It logs warnings and worse, whatever `RUST_LOG` this process
-    /// holds, so a report it cannot write leaves only its reason on standard
-    /// error, and the row prints that.
-    fn hold_inherit_waivers(
-        &self,
-        out: &mut dyn Write,
-        zizmor: &str,
-    ) -> io::Result<Result<(), String>> {
-        let held: Vec<String> = [
-            zizmor,
-            "--no-progress",
-            "--offline",
-            "--no-config",
-            "--no-ignores",
-            "--strict-collection",
-            "--format",
-            "json",
-            "--collect=all",
-            ".github",
-        ]
-        .map(str::to_string)
-        .to_vec();
-        writeln!(
-            out,
-            "\n{}",
-            tree::printable(held.join(" ")).if_supports_color(Stream::Stdout, OwoColorize::dimmed)
-        )?;
-        let argv: Vec<&str> = held.iter().map(String::as_str).collect();
-        let report = match self.runner.output(&argv, &[("RUST_LOG", "warn")], None) {
-            Ok(captured) => captured,
-            Err(err) => return Ok(Err(format!("{zizmor} could not start: {err}"))),
-        };
-        let calls = match proof::inherit_call_files(&report.stdout) {
-            Ok(calls) => calls,
-            Err(sentence) => {
-                for line in report.stderr.lines().filter(|line| !noise(line)) {
-                    writeln!(out, "{}", tree::printable(line.to_string()))?;
-                }
-                return Ok(Err(format!("{sentence}, and zizmor's output is above")));
-            }
-        };
-        let ask = bun_script(proof::INHERIT_WAIVERS);
-        let printed = match self.capture(out, &ask, &[], Some(proof::ZIZMOR_CONFIG))? {
-            Ok(captured) if captured.exit == Exit::Ok => captured.stdout,
-            Ok(_) => {
-                return Ok(Err(format!(
-                    "Bun could not read the secrets-inherit waivers in {}, and its output is above",
-                    proof::ZIZMOR_CONFIG
-                )));
-            }
-            Err(sentence) => return Ok(Err(sentence)),
-        };
-        let waived = match proof::inherit_waivers(&printed) {
-            Ok(waived) => waived,
-            Err(sentence) => return Ok(Err(sentence)),
-        };
-        let stale = proof::stale_inherit_waivers(&calls, &waived);
-        Ok(if stale.is_empty() {
-            Ok(())
-        } else {
-            Err(stale.join("; "))
-        })
     }
 
     /// The tests row: nextest must pass, and the tests its summary counts as
@@ -1633,14 +1560,6 @@ mod tests {
         inherited: Vec<(&'static str, &'static str)>,
         /// The environment and deadline each `gh auth token` call was given.
         gh_calls: RefCell<Vec<GhCall>>,
-        /// The files the no-config zizmor pass names as passing
-        /// `secrets: inherit`.
-        inherit_calls: Vec<&'static str>,
-        /// What the no-config zizmor pass writes to standard error in place
-        /// of a report, or `None` for a report.
-        held_pass_said: Option<&'static str>,
-        /// What the waiver reader prints for the zizmor config.
-        waivers: &'static str,
         /// The tests nextest's summary counts as skipped.
         skipped: usize,
         /// The tests `bun test` holds back beside the ones `skipping` names.
@@ -1649,10 +1568,6 @@ mod tests {
 
     /// The environment and deadline one `gh auth token` call was given.
     type GhCall = (Vec<(String, String)>, Duration);
-
-    /// What the pinned zizmor writes to standard error when a workflow does not
-    /// load, at its default log level: its banner, then the failure.
-    const HELD_PASS_FAILURE: &str = " INFO zizmor: \u{1f308} zizmor v1.0.0\nfatal: no audit was performed\nfailed to load file://.github\\workflows\\bad.yml as workflow\n\nCaused by:\n    0: invalid YAML syntax\n";
 
     impl FakeRunner {
         fn all_installed() -> Self {
@@ -1679,31 +1594,13 @@ mod tests {
                 envs: RefCell::new(Vec::new()),
                 inherited: Vec::new(),
                 gh_calls: RefCell::new(Vec::new()),
-                inherit_calls: vec![".github/workflows/deps.yml"],
-                held_pass_said: None,
-                waivers: r#"["deps.yml"]"#,
                 skipped: 12,
                 bun_skips: 1,
             }
         }
 
-        fn held_pass_saying(mut self, said: &'static str) -> Self {
-            self.held_pass_said = Some(said);
-            self
-        }
-
         fn inheriting(mut self, name: &'static str, value: &'static str) -> Self {
             self.inherited.push((name, value));
-            self
-        }
-
-        fn inheriting_in(mut self, calls: &[&'static str]) -> Self {
-            self.inherit_calls = calls.to_vec();
-            self
-        }
-
-        fn waiving(mut self, printed: &'static str) -> Self {
-            self.waivers = printed;
             self
         }
 
@@ -1950,7 +1847,7 @@ mod tests {
                         |path: &str| format!("verbose: Found total 0 errors in 1 ms for {path}");
                     (String::new(), lines(&linted, shape))
                 }
-                "zizmor" if !command.contains(&"--no-config") => {
+                "zizmor" => {
                     let inputs: Vec<&str> = self
                         .tracked
                         .iter()
@@ -1961,40 +1858,15 @@ mod tests {
                     let shape = |path: &str| format!(" INFO audit: zizmor: completed {path}");
                     (String::new(), lines(&completed, shape))
                 }
-                _ => self.answer_more(program, command),
+                _ => self.answer_more(program),
             }
         }
     }
 
     impl FakeRunner {
-        /// What the rows the main answer leaves out print: the no-config
-        /// zizmor pass, the waiver reader and nextest's summary.
-        fn answer_more(&self, program: &str, command: &[&str]) -> (String, String) {
+        /// What the rows the main answer leaves out print: nextest's summary.
+        fn answer_more(&self, program: &str) -> (String, String) {
             match program {
-                "zizmor"
-                    if command.contains(&"--no-config")
-                        && let Some(said) = self.held_pass_said =>
-                {
-                    (String::new(), said.to_string())
-                }
-                "zizmor" if command.contains(&"--no-config") => {
-                    let findings: Vec<serde_json::Value> = self
-                        .inherit_calls
-                        .iter()
-                        .map(|path| {
-                            serde_json::json!({
-                                "ident": "secrets-inherit",
-                                "locations": [{
-                                    "symbolic": { "kind": "Primary", "key": { "Local": { "verbatim_path": path } } },
-                                }],
-                            })
-                        })
-                        .collect();
-                    (serde_json::Value::from(findings).to_string(), String::new())
-                }
-                "bun" if script(command) == Some(proof::INHERIT_WAIVERS) => {
-                    (self.waivers.to_string(), String::new())
-                }
                 "cargo-nextest" => (
                     String::new(),
                     format!(
@@ -3114,101 +2986,6 @@ mod tests {
                 ("GITHUB_TOKEN".to_string(), "ghs_held".to_string()),
             ],
             "the environment gh is handed"
-        );
-    }
-
-    /// zizmor runs a second pass with no config and no inline ignores, and a
-    /// `secrets-inherit` waiver naming a file that holds no job passing
-    /// `secrets: inherit` fails the row, as does a waiver list the gate cannot
-    /// read.
-    #[test]
-    fn zizmor_refuses_a_stale_secrets_inherit_waiver() {
-        let runner = FakeRunner::all_installed();
-        let (rows, _) = gate(&runner);
-        assert!(row(&rows, "zizmor").passed(), "{rows:?}");
-        let held = runner
-            .ran()
-            .into_iter()
-            .find(|command| {
-                basename(&command[0]) == "zizmor" && command.contains(&"--no-config".to_string())
-            })
-            .expect("the held pass ran");
-        assert_eq!(
-            held[1..],
-            [
-                "--no-progress",
-                "--offline",
-                "--no-config",
-                "--no-ignores",
-                "--strict-collection",
-                "--format",
-                "json",
-                "--collect=all",
-                ".github"
-            ]
-        );
-        let stale = |name: &str| {
-            format!(
-                "the secrets-inherit waiver in .github/zizmor.yml names {name:?}, and zizmor reported no job there passing secrets: inherit, so the waiver or the audit is stale"
-            )
-        };
-        for (label, runner, sentence) in [
-            (
-                "a waiver naming a file with no job",
-                FakeRunner::all_installed().waiving(r#"["deps.yml","cd.yml"]"#),
-                stale("cd.yml"),
-            ),
-            (
-                "a waived job that is gone",
-                FakeRunner::all_installed().inheriting_in(&[]),
-                stale("deps.yml"),
-            ),
-            (
-                "a waiver list the gate cannot read",
-                FakeRunner::all_installed().waiving(r#"{"error":"bad indentation"}"#),
-                ".github/zizmor.yml does not parse as the gate reads YAML, so its secrets-inherit waivers are unknown: bad indentation".to_string(),
-            ),
-        ] {
-            let (rows, text) = gate(&runner);
-            let last = rows.last().expect("one row");
-            assert_eq!(last.step, "zizmor", "{label}");
-            assert_eq!(last.outcome, Outcome::Failed, "{label}");
-            assert!(text.contains(&sentence), "{label}: {text}");
-        }
-    }
-
-    /// The held zizmor pass logs warnings and worse, and when it writes no
-    /// report the row fails with zizmor's own reason printed above it and its
-    /// banner left out.
-    #[test]
-    fn a_held_pass_with_no_report_prints_zizmor_s_reason() {
-        let runner = FakeRunner::all_installed().held_pass_saying(HELD_PASS_FAILURE);
-        let (rows, text) = gate(&runner);
-        let last = rows.last().expect("one row");
-        assert_eq!(last.step, "zizmor");
-        assert_eq!(last.outcome, Outcome::Failed);
-        assert!(
-            text.contains("zizmor's JSON report does not parse: EOF while parsing a value at line 1 column 0, and zizmor's output is above"),
-            "{text}"
-        );
-        assert!(
-            text.contains("failed to load file://.github\\workflows\\bad.yml as workflow"),
-            "the reason is missing: {text}"
-        );
-        assert!(
-            !text.contains("zizmor v1.0.0"),
-            "the banner is printed: {text}"
-        );
-        let ran = runner.ran();
-        let at = ran
-            .iter()
-            .position(|command| {
-                basename(&command[0]) == "zizmor" && command.contains(&"--no-config".to_string())
-            })
-            .expect("the held pass ran");
-        assert!(
-            runner.envs.borrow()[at].contains(&("RUST_LOG".to_string(), "warn".to_string())),
-            "the held pass logs at the contributor's level"
         );
     }
 

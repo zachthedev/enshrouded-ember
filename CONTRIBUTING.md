@@ -523,15 +523,14 @@ redirects code from a file that reads as data:
 - `rust-toolchain.toml` names a channel and its components, and nothing else.
 - No TypeScript project config sets `noCheck`, and one the gate does not name
   is refused.
-- No tracked `package.json` carries `patchedDependencies`, since `bun install`
-  rewrites each package it names with a patch. The shared `commits` job refuses
-  it too, but its check passes a file its `jq` cannot parse.
 - No tracked `package.json` or named TypeScript project config repeats a key
   within one object, since Bun keeps the first and a JSON parser the last.
 
 The shared `commits` job refuses the data files that run code before a merge,
 reading the committed tree, and the gate does not repeat them: a `bunfig.toml`
-key beyond `[install] minimumReleaseAge`, and TypeScript `paths` or `baseUrl`.
+key beyond `[install] minimumReleaseAge`, TypeScript `paths` or `baseUrl`, and
+a `package.json` `patchedDependencies` key, which makes `bun install` rewrite
+each package it names with a patch.
 
 Every JavaScript tool a row or a hook starts runs through
 `bun x --bun --no-install`, which fetches nothing. `bun x` runs a copy from a
@@ -604,10 +603,8 @@ an inline `zizmor: ignore` comment under `.github`, so nothing waives an audit
 outside that file. The shared `workflows` job fails unless every job passing
 `secrets: inherit` calls a workflow under
 `zachthedev/.github/.github/workflows/`. That hold is what lets `zizmor.yml`
-waive the audit by file. Until the next `.github` pin, the gate holds the
-waiver beside it: a second zizmor pass with no config reports every job
-passing `secrets: inherit`, and the row fails on a waiver naming a file that
-holds none. No child gets `GH_HOST`, which points gh and zizmor at another
+waive the audit by file. The same job refuses a waiver that names a position
+or a file holding no job passing `secrets: inherit`. No child gets `GH_HOST`, which points gh and zizmor at another
 GitHub host, or a `ZIZMOR_` switch that turns the online audits off or names
 another config.
 
