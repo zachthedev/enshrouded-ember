@@ -15,33 +15,20 @@
 # to this file, for the platforms `lockfile_platforms` names. `cargo xtask pins`
 # reads the pair, and the gate runs it before it runs any tool.
 #
-# The comment beside each entry names what its lockfile entry rests on:
-# provenance, where the publisher attests the release and mise re-checks the
-# attestation at install time; a checksum in a pinned tree, where the registry
-# entry mise resolves through carries the digest; a checksum recorded at lock
-# time, where mise hashes the release asset it downloaded; or a checksum
-# recorded here, computed by hand at the bump because the publisher records
-# none.
+# Dependencies in CONTRIBUTING.md names the integrity tier each lockfile entry
+# rests on.
 #
 # Renovate's mise manager bumps a version here. `mise lock` then rewrites the
 # lockfile, and a taplo bump takes its hash by hand, in the same change.
 
 [tools]
-# provenance
 actionlint = "1.7.12"
-# checksum in a pinned tree
 cargo-deny = "0.20.2"
-# checksum recorded at lock time
 "github:bnjbvr/cargo-machete" = "0.9.2"
-# provenance
 "github:nextest-rs/nextest" = { version = "0.9.145", version_prefix = "cargo-nextest-" }
-# checksum recorded at lock time
 release-plz = "0.3.169"
-# checksum in a pinned tree
 shellcheck = "0.11.0"
-# checksum recorded here
 taplo = "0.10.0"
-# provenance
 zizmor = "1.30.1"
 
 [tool_config]

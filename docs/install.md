@@ -22,9 +22,9 @@ ember/
   mods/<mod>/       One directory per mod, each with its own config.json
 ```
 
-Ember writes `ember/config.json` from defaults when it is absent, and a mod
-does the same for its own. A mod's install guide says which files go under its
-directory.
+A mod's install guide says which files go under its directory.
+[usage.md](usage.md#running-a-server) says what Ember writes into `ember/` and
+when.
 
 ## Check the download
 
