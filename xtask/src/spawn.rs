@@ -345,8 +345,8 @@ fn mise_command(mise: &Path, root: &Path) -> Result<Command, String> {
 }
 
 /// Every variable a mise child runs with: the pins, the url rewrite, the
-/// checkout as the one trusted configuration path, the Windows directories
-/// from `folders`, and each of `names` that `inherited` answers.
+/// checkout as the one trusted configuration path, `NO_COLOR`, the Windows
+/// directories from `folders`, and each of `names` that `inherited` answers.
 fn mise_environment(
     root: &Path,
     folders: Option<&Folders>,
@@ -359,6 +359,7 @@ fn mise_environment(
         .collect();
     environment.push((URL_REPLACEMENTS.into(), url_replacements().into()));
     environment.push((TRUSTED.into(), root.as_os_str().to_owned()));
+    environment.push(("NO_COLOR".into(), "1".into()));
     if let Some(folders) = folders {
         let temp = folders.local_app_data.join("Temp").into_os_string();
         environment.push((
@@ -801,6 +802,7 @@ mod tests {
             .collect();
         wanted.insert("MISE_URL_REPLACEMENTS".into(), URL_MAP.into());
         wanted.insert("MISE_TRUSTED_CONFIG_PATHS".into(), "/checkout".into());
+        wanted.insert("NO_COLOR".into(), "1".into());
         wanted.insert("SYSTEMROOT".into(), "C:\\Windows".into());
         wanted.insert(
             "LOCALAPPDATA".into(),
@@ -833,6 +835,7 @@ mod tests {
             .collect();
         wanted.insert("MISE_URL_REPLACEMENTS".into(), URL_MAP.into());
         wanted.insert("MISE_TRUSTED_CONFIG_PATHS".into(), "/checkout".into());
+        wanted.insert("NO_COLOR".into(), "1".into());
         for name in PROXIES {
             wanted.insert((*name).into(), format!("{name}-value"));
         }
