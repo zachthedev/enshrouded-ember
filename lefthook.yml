@@ -1,5 +1,5 @@
 # Git hooks. `bun install` runs the `prepare` script, which installs these.
-# Each JavaScript tool starts through `bunx --bun --no-install`, which fetches
+# Each JavaScript tool starts through `bun x --bun --no-install`, which fetches
 # nothing and runs the copy in node_modules, or one from a parent directory or
 # PATH when the install is missing. --config stops commitlint's search for any
 # other config.
@@ -7,7 +7,7 @@ commit-msg:
   jobs:
     - name: commitlint
       run: >-
-        bunx --bun --no-install commitlint --config commitlint.config.js
+        bun x --bun --no-install commitlint --config commitlint.config.js
         --edit {1}
 
 pre-push:

@@ -1,6 +1,9 @@
 name: New Keen build
 description: A dedicated server build no signature row covers.
 title: 'build: server buildid '
+# `build` is a label this repository adds to the kickstart's set. The build
+# watcher opens each new build's issue under it, and the schema-diff job finds
+# that issue by it.
 labels: ['build']
 body:
   - type: markdown

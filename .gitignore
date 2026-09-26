@@ -9,9 +9,10 @@
 /.claude/settings.local.json
 /.claude/worktrees/
 
-# Personal overrides a contributor keeps on their own machine. The gate refuses
-# each one tracked: an env file Bun loads, a registry bun install reads, and a
-# lefthook config merged over lefthook.yml.
+# Personal overrides a contributor keeps on their own machine: an env file Bun
+# loads, a registry bun install reads, and a lefthook config merged over
+# lefthook.yml. The gate refuses a tracked env file or lefthook config, and the
+# shared commits job refuses a tracked .npmrc.
 .env*
 .npmrc
 /lefthook-local*

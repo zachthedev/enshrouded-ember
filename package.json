@@ -1,5 +1,5 @@
 {
-  "name": "enshrouded-ember-tooling",
+  "name": "enshrouded-ember",
   "private": true,
   "type": "module",
   "description": "The Steam build watcher, the R2 archive client, commit message linting and markup formatting for the Ember repository. The project itself is Rust.",

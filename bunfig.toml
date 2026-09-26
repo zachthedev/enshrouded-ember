@@ -1,9 +1,8 @@
 # Bun waits three days before resolving a newly published version, the window
-# in which a malicious release is usually pulled. The maintainer's own
-# ~/.bunfig.toml carries the same value and stays outside the repository. This
-# copy exists because Renovate's weekly lock file maintenance runs `bun install`
-# inside a container that has no user-level config, and Renovate applies no
-# cooldown to that update type. Without this file a transitive dependency
-# published minutes ago lands in bun.lock there.
+# in which a malicious release is usually pulled. The file is committed because
+# Renovate's weekly lock file maintenance runs `bun install` inside a container
+# that has no user-level config, and Renovate applies no cooldown to that update
+# type. Without this file a transitive dependency published minutes ago lands in
+# bun.lock there.
 [install]
 minimumReleaseAge = 259200 # 3 days

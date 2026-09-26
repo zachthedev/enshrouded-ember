@@ -1451,7 +1451,7 @@ mod tests {
     /// in.
     fn sound_pins() -> String {
         format!(
-            "[tools]\ntaplo = \"0.10.0\"\n\"github:nextest-rs/nextest\" = {{ version = \"0.9.145\", version_prefix = \"cargo-nextest-\" }}\n\n[tool_config]\n{TOOL_CONFIG}\n\n[settings]\n{SOUND_SETTINGS}\nlockfile_platforms = {PLATFORMS}\n{RULE}\n\n[settings.aqua]\ngithub_attestations = true\n"
+            "[tools]\ntaplo = \"7.1.0\"\n\"github:nextest-rs/nextest\" = {{ version = \"7.2.0\", version_prefix = \"cargo-nextest-\" }}\n\n[tool_config]\n{TOOL_CONFIG}\n\n[settings]\n{SOUND_SETTINGS}\nlockfile_platforms = {PLATFORMS}\n{RULE}\n\n[settings.aqua]\ngithub_attestations = true\n"
         )
     }
 
@@ -1471,35 +1471,35 @@ mod tests {
     /// document holds both halves of that rule.
     const SOUND_LOCK: &str = concat!(
         "lockfile_version = 1\n\n",
-        "[[tools.taplo]]\nversion = \"0.10.0\"\nbackend = \"aqua:tamasfe/taplo\"\n",
+        "[[tools.taplo]]\nversion = \"7.1.0\"\nbackend = \"aqua:tamasfe/taplo\"\n",
         "[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n",
-        "url = \"https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz\"\n",
+        "url = \"https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz\"\n",
         "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600\"\n",
         "[tools.taplo.\"platforms.macos-arm64\"]\nchecksum = \"sha256:",
         "9999999999999999999999999999999999999999999999999999999999999999\"\n",
-        "url = \"https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-darwin-aarch64.gz\"\n",
+        "url = \"https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-darwin-aarch64.gz\"\n",
         "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257322740\"\n",
         "[tools.taplo.\"platforms.windows-x64\"]\nchecksum = \"sha256:",
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n",
-        "url = \"https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip\"\n",
+        "url = \"https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-windows-x86_64.zip\"\n",
         "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257323062\"\n",
-        "[[tools.\"github:nextest-rs/nextest\"]]\nversion = \"0.9.145\"\n",
-        "backend = \"github:nextest-rs/nextest\"\nspecifiers = [\"0.9.145\"]\n",
+        "[[tools.\"github:nextest-rs/nextest\"]]\nversion = \"7.2.0\"\n",
+        "backend = \"github:nextest-rs/nextest\"\nspecifiers = [\"7.2.0\"]\n",
         "[tools.\"github:nextest-rs/nextest\".options]\nversion_prefix = \"cargo-nextest-\"\n",
         "[tools.\"github:nextest-rs/nextest\".\"platforms.linux-x64\"]\nchecksum = \"sha256:",
         "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"\n",
-        "url = \"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.145/cargo-nextest-0.9.145-x86_64-unknown-linux-gnu.tar.gz\"\n",
+        "url = \"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-7.2.0/cargo-nextest-7.2.0-x86_64-unknown-linux-gnu.tar.gz\"\n",
         "url_api = \"https://api.github.com/repos/nextest-rs/nextest/releases/assets/568838794\"\n",
         "provenance = \"github-attestations\"\n",
         "[tools.\"github:nextest-rs/nextest\".\"platforms.macos-arm64\"]\nchecksum = \"sha256:",
         "8888888888888888888888888888888888888888888888888888888888888888\"\n",
-        "url = \"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.145/cargo-nextest-0.9.145-universal-apple-darwin.tar.gz\"\n",
+        "url = \"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-7.2.0/cargo-nextest-7.2.0-universal-apple-darwin.tar.gz\"\n",
         "url_api = \"https://api.github.com/repos/nextest-rs/nextest/releases/assets/568841216\"\n",
         "provenance = \"github-attestations\"\n",
         "[tools.\"github:nextest-rs/nextest\".\"platforms.windows-x64\"]\nchecksum = \"sha256:",
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"\n",
-        "url = \"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.145/cargo-nextest-0.9.145-x86_64-pc-windows-msvc.zip\"\n",
+        "url = \"https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-7.2.0/cargo-nextest-7.2.0-x86_64-pc-windows-msvc.zip\"\n",
         "url_api = \"https://api.github.com/repos/nextest-rs/nextest/releases/assets/568848390\"\n",
         "provenance = \"github-attestations\"\n",
     );
@@ -1595,7 +1595,7 @@ mod tests {
                 "a second entry for a tool, beside the sound one",
                 sound_pins(),
                 format!(
-                    "{SOUND_LOCK}[[tools.taplo]]\nversion = \"0.10.0\"\nbackend = \"aqua:attacker/taplo\"\n[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:{DIGEST_A}\"\nurl = \"https://cdn.attacker.example/taplo/payload.gz\"\n"
+                    "{SOUND_LOCK}[[tools.taplo]]\nversion = \"7.1.0\"\nbackend = \"aqua:attacker/taplo\"\n[tools.taplo.\"platforms.linux-x64\"]\nchecksum = \"sha256:{DIGEST_A}\"\nurl = \"https://cdn.attacker.example/taplo/payload.gz\"\n"
                 ),
                 "records 2 entries for taplo",
             ),
@@ -1603,7 +1603,7 @@ mod tests {
                 "a second entry carrying no platform block",
                 sound_pins(),
                 format!(
-                    "{SOUND_LOCK}[[tools.taplo]]\nversion = \"0.10.0\"\nbackend = \"aqua:attacker/taplo\"\n"
+                    "{SOUND_LOCK}[[tools.taplo]]\nversion = \"7.1.0\"\nbackend = \"aqua:attacker/taplo\"\n"
                 ),
                 "records an entry for taplo with no platform block",
             ),
@@ -1648,19 +1648,19 @@ mod tests {
             ),
             (
                 "the two files disagreeing on a version",
-                sound_pins().replace("taplo = \"0.10.0\"", "taplo = \"0.10.1\""),
+                sound_pins().replace("taplo = \"7.1.0\"", "taplo = \"7.1.1\""),
                 SOUND_LOCK.to_string(),
-                "pins taplo \"0.10.1\" and mise.lock records \"0.10.0\"",
+                "pins taplo \"7.1.1\" and mise.lock records \"7.1.0\"",
             ),
             (
                 "a range in place of an exact release",
-                sound_pins().replace("taplo = \"0.10.0\"", "taplo = \"0.10\""),
+                sound_pins().replace("taplo = \"7.1.0\"", "taplo = \"7.1\""),
                 SOUND_LOCK.to_string(),
                 "which is not one exact release",
             ),
             (
                 "a lockfile entry the pin file no longer names",
-                sound_pins().replace("taplo = \"0.10.0\"\n", ""),
+                sound_pins().replace("taplo = \"7.1.0\"\n", ""),
                 SOUND_LOCK.to_string(),
                 "locks taplo, which mise.toml no longer pins",
             ),
@@ -1707,11 +1707,11 @@ mod tests {
 
     /// The sound linux-x64 taplo url, which every url case below changes.
     const TAPLO_LINUX: &str =
-        "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz";
+        "https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz";
 
     /// The sentence the url rule says for the linux-x64 taplo entry, whatever
     /// the url it records.
-    const TAPLO_LINUX_REFUSED: &str = ", and the release asset is https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz";
+    const TAPLO_LINUX_REFUSED: &str = ", and the release asset is https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz";
 
     /// The rules refuse a url that moved to another host, owner, release or
     /// asset, which a checksum rule alone accepts.
@@ -1725,19 +1725,19 @@ mod tests {
             (
                 "another host",
                 sound_pins(),
-                moved("https://cdn.attacker.example/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz"),
+                moved("https://cdn.attacker.example/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz"),
                 TAPLO_LINUX_REFUSED,
             ),
             (
                 "a host whose text holds the real one",
                 sound_pins(),
-                moved("https://github.com.attacker.example/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz"),
+                moved("https://github.com.attacker.example/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz"),
                 TAPLO_LINUX_REFUSED,
             ),
             (
                 "another owner",
                 sound_pins(),
-                moved("https://github.com/attacker/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz"),
+                moved("https://github.com/attacker/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz"),
                 TAPLO_LINUX_REFUSED,
             ),
             (
@@ -1749,23 +1749,23 @@ mod tests {
             (
                 "an older tag with the pinned release moved into the filename",
                 sound_pins(),
-                moved("https://github.com/tamasfe/taplo/releases/download/0.9.3/taplo-0.10.0-linux-x86_64.gz"),
+                moved("https://github.com/tamasfe/taplo/releases/download/0.9.3/taplo-7.1.0-linux-x86_64.gz"),
                 TAPLO_LINUX_REFUSED,
             ),
             (
                 "a prerelease tag that starts with the pinned release",
                 sound_pins(),
-                moved("https://github.com/tamasfe/taplo/releases/download/0.10.0-rc1/taplo-linux-x86_64.gz"),
+                moved("https://github.com/tamasfe/taplo/releases/download/7.1.0-rc1/taplo-linux-x86_64.gz"),
                 TAPLO_LINUX_REFUSED,
             ),
             (
                 "another platform's asset",
                 sound_pins(),
                 SOUND_LOCK.replace(
-                    "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip",
+                    "https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-windows-x86_64.zip",
                     TAPLO_LINUX,
                 ),
-                ", and the release asset is https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip",
+                ", and the release asset is https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-windows-x86_64.zip",
             ),
             (
                 "the url dropped",
@@ -1786,55 +1786,55 @@ mod tests {
         let urls: &[(&str, &str)] = &[
             (
                 "a walk back out of the release path",
-                "https://github.com/tamasfe/taplo/releases/download/0.10.0/../../../../koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz",
+                "https://github.com/tamasfe/taplo/releases/download/7.1.0/../../../../koalaman/shellcheck/releases/download/v7.5.0/shellcheck-v7.5.0.linux.x86_64.tar.xz",
             ),
             (
                 "plain http",
-                "http://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+                "http://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz",
             ),
             (
                 "userinfo ahead of the real host",
-                "https://github.com@attacker.example/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+                "https://github.com@attacker.example/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz",
             ),
             (
                 "a port",
-                "https://github.com:8443/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+                "https://github.com:8443/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz",
             ),
             (
                 "a query",
-                "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz?x=1",
+                "https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz?x=1",
             ),
             (
                 "a fragment",
-                "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz#x",
+                "https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz#x",
             ),
             (
                 "a percent escape walking out of the release",
-                "https://github.com/tamasfe/taplo/releases/download/0.10.0/%2e%2e/taplo-linux-x86_64.gz",
+                "https://github.com/tamasfe/taplo/releases/download/7.1.0/%2e%2e/taplo-linux-x86_64.gz",
             ),
             (
                 "a percent escape in the host",
-                "https://%67ithub.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+                "https://%67ithub.com/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz",
             ),
             (
                 "a backslash",
-                "https://github.com\\\\attacker.example/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+                "https://github.com\\\\attacker.example/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz",
             ),
             (
                 "a tab a url parser drops",
-                "https://github.com/tamasfe/taplo/releases/download/0.10.0/\\ttaplo-linux-x86_64.gz",
+                "https://github.com/tamasfe/taplo/releases/download/7.1.0/\\ttaplo-linux-x86_64.gz",
             ),
             (
                 "the host in capitals",
-                "https://GitHub.COM/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz",
+                "https://GitHub.COM/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz",
             ),
             (
                 "an extra segment GitHub answers with a 404",
-                "https://github.com/tamasfe/taplo/releases/download/0.10.0/extra/taplo-linux-x86_64.gz",
+                "https://github.com/tamasfe/taplo/releases/download/7.1.0/extra/taplo-linux-x86_64.gz",
             ),
             (
                 "a missing asset GitHub answers with a 404",
-                "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-missing.gz",
+                "https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-missing.gz",
             ),
         ];
         let cases: Vec<(&str, String, String, &str)> = urls
@@ -1852,7 +1852,7 @@ mod tests {
     }
 
     /// A version that walks out of the release, pinned and locked alike.
-    const WALK: &str = "../../../../koalaman/shellcheck/releases/download/v0.11.0";
+    const WALK: &str = "../../../../koalaman/shellcheck/releases/download/v7.5.0";
 
     /// The rules refuse a version that is not one exact release, before any
     /// url is built from it.
@@ -1864,9 +1864,9 @@ mod tests {
     fn a_version_walking_out_of_the_release_is_refused() {
         refuses(&[(
             "a walking version in the pin file and the lockfile",
-            sound_pins().replace("taplo = \"0.10.0\"", &format!("taplo = \"{WALK}\"")),
-            SOUND_LOCK.replace("0.10.0", WALK),
-            "pins taplo at \"../../../../koalaman/shellcheck/releases/download/v0.11.0\", which is not one exact release",
+            sound_pins().replace("taplo = \"7.1.0\"", &format!("taplo = \"{WALK}\"")),
+            SOUND_LOCK.replace("7.1.0", WALK),
+            "pins taplo at \"../../../../koalaman/shellcheck/releases/download/v7.5.0\", which is not one exact release",
         )]);
     }
 
@@ -1976,7 +1976,7 @@ mod tests {
             SOUND_LOCK.replace(
                 "[[tools.\"github:nextest-rs/nextest\"]]",
                 &format!(
-                    "[tools.taplo.platforms.{platform}]\nchecksum = \"sha256:{DIGEST_A}\"\nurl = \"https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip\"\n[[tools.\"github:nextest-rs/nextest\"]]"
+                    "[tools.taplo.platforms.{platform}]\nchecksum = \"sha256:{DIGEST_A}\"\nurl = \"https://github.com/koalaman/shellcheck/releases/download/v7.5.0/shellcheck-v7.5.0.zip\"\n[[tools.\"github:nextest-rs/nextest\"]]"
                 ),
             )
         };
@@ -2064,10 +2064,10 @@ mod tests {
             .expect("taplo is pinned");
         assert_eq!(aqua.coordinate(), "aqua:tamasfe/taplo");
         assert_eq!(
-            aqua.url("linux-x64", "0.10.0").as_deref(),
-            Some("https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86_64.gz")
+            aqua.url("linux-x64", "7.1.0").as_deref(),
+            Some("https://github.com/tamasfe/taplo/releases/download/7.1.0/taplo-linux-x86_64.gz")
         );
-        assert_eq!(aqua.url("linux-arm64", "0.10.0"), None);
+        assert_eq!(aqua.url("linux-arm64", "7.1.0"), None);
         assert_eq!(
             aqua.api_prefix(),
             "https://api.github.com/repos/tamasfe/taplo/releases/assets/"
@@ -2081,9 +2081,9 @@ mod tests {
         assert_eq!(github.backend, Backend::Github);
         // The version fills the tag and the asset name alike.
         assert_eq!(
-            github.url("windows-x64", "0.9.2").as_deref(),
+            github.url("windows-x64", "7.3.0").as_deref(),
             Some(
-                "https://github.com/bnjbvr/cargo-machete/releases/download/v0.9.2/cargo-machete-v0.9.2-x86_64-pc-windows-msvc.tar.gz"
+                "https://github.com/bnjbvr/cargo-machete/releases/download/v7.3.0/cargo-machete-v7.3.0-x86_64-pc-windows-msvc.tar.gz"
             )
         );
     }
@@ -2107,25 +2107,25 @@ mod tests {
 
     /// A semver pin file every rule accepts beside [`sound_pins`].
     const SOUND_SEMVER_PINS: &str =
-        "[tools]\n\"github:obi1kenobi/cargo-semver-checks\" = \"0.50.0\"\n";
+        "[tools]\n\"github:obi1kenobi/cargo-semver-checks\" = \"7.4.0\"\n";
 
     /// Its lockfile, for the platforms [`sound_pins`] names, shaped as mise
     /// writes one.
     const SOUND_SEMVER_LOCK: &str = concat!(
         "lockfile_version = 1\n\n",
-        "[[tools.\"github:obi1kenobi/cargo-semver-checks\"]]\nversion = \"0.50.0\"\n",
+        "[[tools.\"github:obi1kenobi/cargo-semver-checks\"]]\nversion = \"7.4.0\"\n",
         "backend = \"github:obi1kenobi/cargo-semver-checks\"\n",
         "[tools.\"github:obi1kenobi/cargo-semver-checks\".\"platforms.linux-x64\"]\n",
         "checksum = \"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"\n",
-        "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz\"\n",
+        "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v7.4.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz\"\n",
         "url_api = \"https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498085744\"\n",
         "[tools.\"github:obi1kenobi/cargo-semver-checks\".\"platforms.macos-arm64\"]\n",
         "checksum = \"sha256:7777777777777777777777777777777777777777777777777777777777777777\"\n",
-        "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-aarch64-apple-darwin.tar.gz\"\n",
+        "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v7.4.0/cargo-semver-checks-aarch64-apple-darwin.tar.gz\"\n",
         "url_api = \"https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498087310\"\n",
         "[tools.\"github:obi1kenobi/cargo-semver-checks\".\"platforms.windows-x64\"]\n",
         "checksum = \"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"\n",
-        "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-pc-windows-msvc.zip\"\n",
+        "url = \"https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v7.4.0/cargo-semver-checks-x86_64-pc-windows-msvc.zip\"\n",
         "url_api = \"https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498090877\"\n",
     );
 
@@ -2159,7 +2159,7 @@ mod tests {
     fn a_tool_in_the_other_pairs_file_is_refused() {
         let semver_in_main_pins = sound_pins().replace(
             "[tools]\n",
-            "[tools]\n\"github:obi1kenobi/cargo-semver-checks\" = \"0.50.0\"\n",
+            "[tools]\n\"github:obi1kenobi/cargo-semver-checks\" = \"7.4.0\"\n",
         );
         let semver_in_main_lock = format!("{SOUND_LOCK}{SOUND_SEMVER_LOCK}");
         let found = problems(&semver_in_main_pins, &semver_in_main_lock);
@@ -2173,7 +2173,7 @@ mod tests {
         semver_refuses(&[(
             "taplo in the semver file",
             sound_pins(),
-            format!("{SOUND_SEMVER_PINS}taplo = \"0.10.0\"\n"),
+            format!("{SOUND_SEMVER_PINS}taplo = \"7.1.0\"\n"),
             SOUND_SEMVER_LOCK.to_string(),
             "mise.semver.toml pins taplo, which belongs in mise.toml",
         )]);
@@ -2214,19 +2214,19 @@ mod tests {
             (
                 "the two files disagreeing on a version",
                 main(),
-                SOUND_SEMVER_PINS.replace("0.50.0", "0.50.1"),
+                SOUND_SEMVER_PINS.replace("7.4.0", "7.4.1"),
                 lock(),
-                "mise.semver.toml pins github:obi1kenobi/cargo-semver-checks \"0.50.1\" and mise.semver.lock records \"0.50.0\"",
+                "mise.semver.toml pins github:obi1kenobi/cargo-semver-checks \"7.4.1\" and mise.semver.lock records \"7.4.0\"",
             ),
             (
                 "the url naming another release",
                 main(),
                 pins(),
                 SOUND_SEMVER_LOCK.replace(
-                    "download/v0.50.0/cargo-semver-checks-x86_64-unknown",
+                    "download/v7.4.0/cargo-semver-checks-x86_64-unknown",
                     "download/v0.49.0/cargo-semver-checks-x86_64-unknown",
                 ),
-                ", and the release asset is https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz",
+                ", and the release asset is https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v7.4.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz",
             ),
             (
                 "the api reference under another repository",
@@ -2622,15 +2622,15 @@ mod tests {
     /// a tool entry. Each case passed every other rule here.
     #[test]
     fn a_tool_entry_carries_its_version_and_tag_prefix_alone() {
-        let nextest = "\"github:nextest-rs/nextest\" = { version = \"0.9.145\", version_prefix = \"cargo-nextest-\" }";
+        let nextest = "\"github:nextest-rs/nextest\" = { version = \"7.2.0\", version_prefix = \"cargo-nextest-\" }";
         let taplo_api =
             "url_api = \"https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600\"\n";
         let cases: &[(&str, String, String, &str)] = &[
             (
                 "a postinstall command",
                 sound_pins().replace(
-                    "taplo = \"0.10.0\"",
-                    "taplo = { version = \"0.10.0\", postinstall = \"echo\" }",
+                    "taplo = \"7.1.0\"",
+                    "taplo = { version = \"7.1.0\", postinstall = \"echo\" }",
                 ),
                 SOUND_LOCK.to_string(),
                 "mise.toml gives \"taplo\" the option \"postinstall\", and a tool here carries its version and tag prefix alone",
@@ -2666,8 +2666,8 @@ mod tests {
                 "a key on an entry mise does not write",
                 sound_pins(),
                 SOUND_LOCK.replace(
-                    "specifiers = [\"0.9.145\"]\n",
-                    "specifiers = [\"0.9.145\"]\ninstall_env = { A = \"b\" }\n",
+                    "specifiers = [\"7.2.0\"]\n",
+                    "specifiers = [\"7.2.0\"]\ninstall_env = { A = \"b\" }\n",
                 ),
                 "mise.lock gives \"github:nextest-rs/nextest\" the key \"install_env\", which mise does not write",
             ),
@@ -2707,8 +2707,8 @@ mod tests {
             "a postinstall command in the semver file",
             sound_pins(),
             SOUND_SEMVER_PINS.replace(
-                "= \"0.50.0\"",
-                "= { version = \"0.50.0\", postinstall = \"echo\" }",
+                "= \"7.4.0\"",
+                "= { version = \"7.4.0\", postinstall = \"echo\" }",
             ),
             SOUND_SEMVER_LOCK.to_string(),
             "mise.semver.toml gives \"github:obi1kenobi/cargo-semver-checks\" the option \"postinstall\", and a tool here carries its version and tag prefix alone",

@@ -1,13 +1,27 @@
-# Rust is formatted by cargo fmt, and prettier never sees it.
+# Rust is formatted by cargo fmt, and prettier never sees it. Each pattern is
+# anchored at the root, so a file of the same name deeper in the tree is
+# formatted.
 
 # Build output and repository tooling.
-target/
-node_modules/
+/target/
+/node_modules/
 
 # SteamCMD, fetched server builds, and run directories.
-.cache/
+/.cache/
 
 # Written by release-plz, one per crate, on every release. Its scope markers
 # are `*` emphasis prettier rewrites, so formatting it would turn every release
 # pull request into a failing gate.
-CHANGELOG.md
+/crates/*/CHANGELOG.md
+
+# Claude Code's worktrees, each a whole checkout of its own.
+/.claude/worktrees/
+
+# A contributor's own files, which .gitignore lists: lefthook's local configs
+# and Claude Code's local settings. The gate refuses a tracked lefthook-local
+# config.
+/lefthook-local
+/lefthook-local.*
+/.lefthook-local
+/.lefthook-local.*
+/.claude/settings.local.json

@@ -127,17 +127,17 @@ const GH_DEADLINE: Duration = Duration::from_secs(5);
 /// What to run when the Bun packages a row starts are absent.
 const BUN_INSTALL: &str = "run bun install --frozen-lockfile, or bun install --frozen-lockfile --ignore-scripts in a worktree (CONTRIBUTING.md#setup).";
 
-/// Prettier's command-line name, which `bunx --bun --no-install` runs once the
+/// Prettier's command-line name, which `bun x --bun --no-install` runs once the
 /// row finds it in the checkout's `node_modules/.bin`.
 const PRETTIER: &str = "prettier";
 
 /// The flag every Bun the gate starts itself carries. Bun loads an env file
 /// beside it into every `bun <file>`, `bun -e` and `bun test`, an untracked one
-/// included. bunx takes the flag and never passes it on, so a tool it starts
+/// included. `bun x` takes the flag and never passes it on, so a tool it starts
 /// loads the file.
 const NO_ENV_FILE: &str = "--no-env-file";
 
-/// Where the install puts `tool`'s command in the checkout, as bunx finds it
+/// Where the install puts `tool`'s command in the checkout, as `bun x` finds it
 /// first: `node_modules/.bin/<tool>`, an `.exe` on Windows.
 fn installed_bin(tool: &str) -> String {
     let extension = if cfg!(windows) { ".exe" } else { "" };
@@ -152,7 +152,7 @@ fn bun_script(script: &str) -> Vec<String> {
         .to_vec()
 }
 
-/// tsc's command-line name, which `bunx --bun --no-install` runs the same way.
+/// tsc's command-line name, which `bun x --bun --no-install` runs the same way.
 const TSC: &str = "tsc";
 
 /// The rows that build test artifacts share a target directory of their own
@@ -234,11 +234,12 @@ pub const STEPS: &[Step] = &[
     Step {
         name: "prettier",
         covers: "Markup, JavaScript and TypeScript formatting over every tracked file Prettier formats, under .prettierrc alone",
-        program: Program::Path("bunx"),
+        program: Program::Path("bun"),
         // --ignore-path names .prettierignore alone, so .gitignore never
         // narrows the list, --config stops the search for another config, and
         // --no-editorconfig keeps any .editorconfig from setting an option.
         args: &[
+            "x",
             "--bun",
             "--no-install",
             PRETTIER,
@@ -287,10 +288,11 @@ pub const STEPS: &[Step] = &[
     Step {
         name: "typecheck",
         covers: "The types in tools/, which Bun strips rather than checks, under tsconfig.json alone, every file proven read",
-        program: Program::Path("bunx"),
+        program: Program::Path("bun"),
         // --project names the one config, so tsc never searches past the
         // checkout, and --listFiles names every file it read.
         args: &[
+            "x",
             "--bun",
             "--no-install",
             TSC,
@@ -632,11 +634,12 @@ impl<'a> Gate<'a> {
                 .to_string(),
             Program::Path(name) => name.to_string(),
         };
-        // bunx runs a copy from a parent directory or PATH when the checkout
-        // holds none, so a row it starts needs the checkout's own first. A
-        // directory or a dangling link there holds none either.
-        if step.program == Program::Path("bunx")
-            && let Some(tool) = step.args.iter().find(|arg| !arg.starts_with("--"))
+        // `bun x` runs a copy from a parent directory or PATH when the
+        // checkout holds none, so a row it starts needs the checkout's own
+        // first. A directory or a dangling link there holds none either.
+        if step.program == Program::Path("bun")
+            && let ["x", rest @ ..] = step.args
+            && let Some(tool) = rest.iter().find(|arg| !arg.starts_with("--"))
             && !self.runner.is_file(&installed_bin(tool))
         {
             return Err(format!(
@@ -1646,9 +1649,9 @@ mod tests {
     /// The environment and deadline one `gh auth token` call was given.
     type GhCall = (Vec<(String, String)>, Duration);
 
-    /// What zizmor 1.30.1 writes to standard error when a workflow does not
+    /// What the pinned zizmor writes to standard error when a workflow does not
     /// load, at its default log level: its banner, then the failure.
-    const HELD_PASS_FAILURE: &str = " INFO zizmor: \u{1f308} zizmor v1.30.1\nfatal: no audit was performed\nfailed to load file://.github\\workflows\\bad.yml as workflow\n\nCaused by:\n    0: invalid YAML syntax\n";
+    const HELD_PASS_FAILURE: &str = " INFO zizmor: \u{1f308} zizmor v1.0.0\nfatal: no audit was performed\nfailed to load file://.github\\workflows\\bad.yml as workflow\n\nCaused by:\n    0: invalid YAML syntax\n";
 
     impl FakeRunner {
         fn all_installed() -> Self {
@@ -1918,7 +1921,7 @@ mod tests {
                     (lines(&analyzed, shape), lines(&self.unreadable, failed))
                 }
                 "bun" if command.get(2) == Some(&"test") => (String::new(), String::new()),
-                "bunx" if command.contains(&TSC) => {
+                "bun" if command.get(1) == Some(&"x") && command.contains(&TSC) => {
                     let mut printed = self.tsc();
                     if self.failing.contains(&"tsc") {
                         printed.push_str(TSC_ERROR);
@@ -2200,7 +2203,7 @@ mod tests {
             self.record(command, env);
             let program = basename(command[0]);
             let (stdout, stderr) = self.answer(program, command, input);
-            let tsc = program == "bunx" && command.contains(&TSC);
+            let tsc = program == "bun" && command.get(1) == Some(&"x") && command.contains(&TSC);
             Ok(Captured {
                 exit: if self.failing.contains(&program) || (tsc && self.failing.contains(&"tsc")) {
                     Exit::Err
@@ -2493,7 +2496,7 @@ mod tests {
         carries("cargo-nextest", " --no-tests=fail --user-config-file none");
         let prettier = runner.running(PRETTIER).expect("prettier ran").join(" ");
         let wanted = format!(
-            "bunx --bun --no-install {PRETTIER} --check --config .prettierrc --ignore-path .prettierignore --no-editorconfig -- "
+            "bun x --bun --no-install {PRETTIER} --check --config .prettierrc --ignore-path .prettierignore --no-editorconfig -- "
         );
         assert!(
             prettier.starts_with(&wanted),
@@ -2512,7 +2515,8 @@ mod tests {
     }
 
     /// Every Bun the gate starts itself skips env files, so no untracked env
-    /// file reaches a script it evaluates or the tests it runs.
+    /// file reaches a script it evaluates or the tests it runs. A `bun x`
+    /// start runs a tool, and `bun x` passes the flag to no tool it starts.
     #[test]
     fn every_bun_the_gate_starts_skips_env_files() {
         let runner = FakeRunner::all_installed();
@@ -2520,7 +2524,9 @@ mod tests {
         let buns: Vec<Vec<String>> = runner
             .ran()
             .into_iter()
-            .filter(|command| basename(&command[0]) == "bun")
+            .filter(|command| {
+                basename(&command[0]) == "bun" && command.get(1).map(String::as_str) != Some("x")
+            })
             .collect();
         assert!(buns.len() >= 3, "the gate started {} Buns", buns.len());
         for command in buns {
@@ -2572,8 +2578,8 @@ mod tests {
             "the file-info script imports Prettier from outside the checkout: {}",
             ask[3]
         );
-        let bunx = runner.running(PRETTIER).expect("prettier ran");
-        let handed = &bunx[bunx.iter().position(|arg| arg == "--").expect("--") + 1..];
+        let started = runner.running(PRETTIER).expect("prettier ran");
+        let handed = &started[started.iter().position(|arg| arg == "--").expect("--") + 1..];
         assert_eq!(
             handed,
             [
@@ -2764,7 +2770,7 @@ mod tests {
 
     /// A file ran nothing when its outermost suite counts no more tests than
     /// skipped ones, nested suites taken in, or carries no count at all. The
-    /// reports are the shapes bun test 1.4.2 writes.
+    /// reports are the shapes the pinned `bun test` writes.
     #[test]
     fn a_file_whose_every_test_was_skipped_ran_nothing() {
         for (what, report, idle) in [
@@ -2975,10 +2981,10 @@ mod tests {
         assert!(text.contains("jobs.a\\u{1b}[2K.steps[0].shell"), "{text:?}");
     }
 
-    /// A JavaScript tool bunx starts must be a regular file in the checkout's
-    /// own `node_modules/.bin`, or its row refuses to run: bunx would run a
-    /// copy from a parent directory or PATH. An entry that is a directory or a
-    /// dangling link holds no tool.
+    /// A JavaScript tool `bun x` starts must be a regular file in the
+    /// checkout's own `node_modules/.bin`, or its row refuses to run: `bun x`
+    /// would run a copy from a parent directory or PATH. An entry that is a
+    /// directory or a dangling link holds no tool.
     #[test]
     fn a_js_tool_missing_from_the_checkout_stops_its_row() {
         for (tool, step) in [("prettier", "prettier"), ("tsc", "typecheck")] {
@@ -3189,7 +3195,7 @@ mod tests {
             "the reason is missing: {text}"
         );
         assert!(
-            !text.contains("zizmor v1.30.1"),
+            !text.contains("zizmor v1.0.0"),
             "the banner is printed: {text}"
         );
         let ran = runner.ran();

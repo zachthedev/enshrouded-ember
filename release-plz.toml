@@ -78,8 +78,11 @@ Managed by zachthedev-releaser.
 # release-please uses in every other repository. The comment in each group
 # fixes the section order, and the body strips it.
 protect_breaking_commits = true
+# A heading links GitHub's compare view from the previous version. A first
+# release has no previous version, and release_link then names a release page,
+# so its heading carries no link.
 body = """
-## [{{ version }}]{%- if release_link -%}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+## [{{ version }}]{%- if release_link and previous and previous.version -%}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim }}
 

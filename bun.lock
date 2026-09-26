@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "enshrouded-ember-tooling",
+      "name": "enshrouded-ember",
       "dependencies": {
         "zod": "4.6.5",
       },
