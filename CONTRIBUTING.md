@@ -125,8 +125,10 @@ Some of your own environment reaches the tools:
   commitlint in the hooks load an env file at the checkout's root. Every Bun
   the gate starts itself carries the flag.
 - The gate withholds from every child the variables that change a result:
-  `BUN_OPTIONS`, `SHELLCHECK_OPTS`, the rustdoc flag variables and every
-  `NEXTEST_` variable. [The gate](#the-gate) says what each would change.
+  `BUN_OPTIONS`, `SHELLCHECK_OPTS`, the rustdoc flag variables, every
+  `NEXTEST_` variable, `GH_HOST`, and the `ZIZMOR_OFFLINE`,
+  `ZIZMOR_NO_ONLINE_AUDITS` and `ZIZMOR_CONFIG` switches.
+  [The gate](#the-gate) says what each would change.
 
 Hooks are not a control. They run in your shell's environment and clear no
 variable. In a fresh clone before `bun install`, or once `node_modules` is
@@ -548,8 +550,8 @@ what it read, as rustfmt, taplo, tsc, actionlint and zizmor do, and as
 `bun test`'s junit report does, the row reads that back and fails on a file it
 skipped. Prettier is handed exactly the files its own file info keeps.
 cargo-machete names each crate directory it visited, and the row fails when it
-says it could not read one. A tool whose output a row reads runs with
-`NO_COLOR` set, and the row strips any color or link code before it reads.
+says it could not read one. Every child runs with `NO_COLOR` set, and a row
+strips any color or link code from a tool's output before it reads it.
 
 `typecheck` and `tools` cover `tools/`, the repository's own TypeScript. Bun
 strips types rather than checking them, so without `typecheck` the gate would
@@ -558,7 +560,11 @@ TypeScript file, so one outside `tools/` fails the row rather than going
 unchecked. `bun test` is handed every tracked test file by path, wherever it
 sits, and runs with `CI` set, so a committed `test.only` fails. The row also
 fails a file where no test ran: bun test exits zero when every test in one
-was skipped, a todo or held back by its condition.
+was skipped, a todo or held back by its condition. It runs with
+`EMBER_ARCHIVE_DIR` empty, so the cases against archived builds skip whatever
+your shell holds, and it fails on a skip count other than `BUN_SKIPPED_TESTS`
+beside the step table. A change that adds or removes a skip changes that
+constant in the same diff.
 
 `actionlint` checks workflow syntax, runner labels and every expression,
 including whether a `needs.<job>.outputs.<name>` names an output that job
@@ -598,11 +604,17 @@ an inline `zizmor: ignore` comment under `.github`, so nothing waives an audit
 outside that file. The shared `workflows` job fails unless every job passing
 `secrets: inherit` calls a workflow under
 `zachthedev/.github/.github/workflows/`. That hold is what lets `zizmor.yml`
-waive the audit by file.
+waive the audit by file. Until the next `.github` pin, the gate holds the
+waiver beside it: a second zizmor pass with no config reports every job
+passing `secrets: inherit`, and the row fails on a waiver naming a file that
+holds none. No child gets `GH_HOST`, which points gh and zizmor at another
+GitHub host, or a `ZIZMOR_` switch that turns the online audits off or names
+another config.
 
-`tests` fails when no test ran, a run that skipped every test included, and
-reads no nextest user config. No child gets a `NEXTEST_` variable, since one
-can pass such a run or retry a failing test into a pass.
+`tests` fails when no test ran, and on a skip count other than `SKIPPED_TESTS`
+beside the step table, each skip an `#[ignore]` test that needs a fetched
+server build. It reads no nextest user config. No child gets a `NEXTEST_`
+variable, since one can pass such a run or retry a failing test into a pass.
 
 `doctests` runs beside `tests`, because `cargo nextest` runs none of them and a
 doctest that stops compiling would otherwise pass the gate in silence. It
@@ -686,23 +698,41 @@ key in `mise.toml` names no owner, so for those tools that table is the only
 record of the account outside the generated file. Moving a tool to another
 account takes an edit there, in the same diff as the lockfile it explains.
 
-Each tool's lockfile entry rests on one integrity tier. Provenance means the
-publisher attests the release and mise checks the attestation at every install.
-A checksum in a pinned tree comes from the registry entry mise resolves through.
-A checksum mise hashed at lock time binds every later install to the bytes the
-lock fetched, and nothing outside the lockfile vouches for them.
+Each tool the gate runs rests on one integrity tier, and this table is where
+each one is stated. Provenance means the publisher attests the release and mise
+checks the attestation at every install. A checksum in a pinned tree comes from
+a record the repository pins: the registry entry mise resolves through,
+`bun.lock` or `Cargo.lock`. A checksum mise hashed at lock time binds every
+later install to the bytes the lock fetched, and nothing outside the lockfile
+vouches for them. A publisher signature is checked against a key the checking
+tool carries. A version alone names a release, and nothing in the tree vouches
+for its bytes.
 
-| Tool                | Tier                                |
-| ------------------- | ----------------------------------- |
-| actionlint          | provenance                          |
-| cargo-deny          | a checksum in a pinned tree         |
-| cargo-machete       | a checksum mise hashed at lock time |
-| cargo-nextest       | provenance                          |
-| cargo-semver-checks | a checksum mise hashed at lock time |
-| release-plz         | a checksum mise hashed at lock time |
-| shellcheck          | a checksum in a pinned tree         |
-| taplo               | a checksum hashed here, as below    |
-| zizmor              | provenance                          |
+| Tool                                                    | Tier                                |
+| ------------------------------------------------------- | ----------------------------------- |
+| actionlint                                              | provenance                          |
+| cargo-deny                                              | a checksum in a pinned tree         |
+| cargo-machete                                           | a checksum mise hashed at lock time |
+| cargo-nextest                                           | provenance                          |
+| cargo-semver-checks                                     | a checksum mise hashed at lock time |
+| release-plz                                             | a checksum mise hashed at lock time |
+| shellcheck                                              | a checksum in a pinned tree         |
+| taplo                                                   | a checksum hashed here, as below    |
+| zizmor                                                  | provenance                          |
+| cargo, clippy, rustfmt and rustdoc                      | a version alone                     |
+| every crate `Cargo.lock` records                        | a checksum in a pinned tree         |
+| Prettier, TypeScript, commitlint, `yaml`, lefthook, zod | a checksum in a pinned tree         |
+| Bun                                                     | a version alone                     |
+| mise                                                    | a publisher signature               |
+
+The Rust toolchain is the release `rust-toolchain.toml` names. rustup checks
+each component against the channel manifest it downloads from the same server,
+so nothing in the tree vouches for those bytes. Bun is the release
+`packageManager` in `package.json` names, and setup-bun checks no download.
+`bun.lock` records a checksum for every package `package.json` pulls in,
+`@types/bun` included. Each workflow's `jdx/mise-action` step pins mise's
+release and checks the download against that release's checksum file and the
+file's minisign signature. A contributor installs mise their own way.
 
 `MISE_BACKENDS_<TOOL>` in the environment replaces a tool's backend, and no
 mise setting reports it. The gate and `cargo xtask setup` start mise with it
@@ -784,7 +814,7 @@ other type is hidden from the changelog and releases nothing. The workspace
 shares one version, so the published crates are one `version_group` and move
 together: every release publishes all of them. The commit type sets the
 changelog section and the bump size, and below 1.0.0 a `feat` bumps the patch
-and a breaking change the minor. `0.x` promises no compatibility.
+and a breaking change the minor.
 
 Every version heading in a changelog links GitHub's compare view from the
 previous tag, which lists every change in the release, hidden types included.

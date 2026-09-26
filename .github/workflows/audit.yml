@@ -101,7 +101,11 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+      # A clean verdict names no endpoint, and bun audit takes no --registry
+      # flag, so the step names the registry it asks.
       - run: bun run audit
+        env:
+          BUN_CONFIG_REGISTRY: https://registry.npmjs.org/
 
   # The calling job grants what the called job declares.
   workflows:

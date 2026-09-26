@@ -9,8 +9,7 @@ beside the server, and fails closed when a game update moves something.
 Nothing here is affiliated with or endorsed by Keen Games.
 
 This repository is in development. Its crates are on crates.io, and no GitHub
-release carries the loader library yet. Versions are `0.x`, which promises no
-compatibility between releases.
+release carries the loader library yet.
 
 A mod takes the SDK with `cargo add ember-sdk`, and
 [docs/usage.md](docs/usage.md#writing-a-mod) says what it gets.

@@ -16,7 +16,7 @@
 
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -110,12 +110,18 @@ const UNTRACKED_EXCLUDES: &[&str] = &[
 
 /// The variables git starts with, and nothing else: no system or global
 /// config, so no `core.*` or pathspec setting a contributor keeps changes what
-/// it lists.
+/// it lists, and `NO_COLOR`, which every child the gate starts carries.
 const GIT_ENV: &[(&str, &str)] = &[
     ("GIT_CONFIG_NOSYSTEM", "1"),
     // Git for Windows reads /dev/null as an empty file too.
     ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("NO_COLOR", "1"),
 ];
+
+/// Replaces `command`'s environment with `GIT_ENV`.
+fn git_environment(command: &mut Command) {
+    command.env_clear().envs(GIT_ENV.iter().copied());
+}
 
 /// The tracked files under `root`, and the untracked ones on disk, from two
 /// `git ls-files` calls with an empty environment.
@@ -170,7 +176,7 @@ fn work_tree_finding(top: &str, root: &Path) -> Option<String> {
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     let git = crate::spawn::resolve("git")?;
     let mut command = crate::spawn::command(&git)?;
-    command.env_clear().envs(GIT_ENV.iter().copied());
+    git_environment(&mut command);
     let output = command
         .current_dir(root)
         .args(args)
@@ -1320,12 +1326,32 @@ pub(crate) fn sound_files() -> Vec<(String, String)> {
 mod tests {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
+    use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
 
     use super::{
-        Listing, findings, fold, has_extension, hidden, listing_by, parse_json, path_matches,
-        printable, sound_files, work_tree_finding,
+        Listing, findings, fold, git_environment, has_extension, hidden, listing_by, parse_json,
+        path_matches, printable, sound_files, work_tree_finding,
     };
+
+    /// git starts with `NO_COLOR=1` and the two config switches, and with no
+    /// variable it inherited.
+    #[test]
+    fn git_starts_with_no_color_and_nothing_inherited() {
+        let mut command = Command::new("git");
+        git_environment(&mut command);
+        let envs: BTreeMap<&OsStr, Option<&OsStr>> = command.get_envs().collect();
+        let wanted: BTreeMap<&OsStr, Option<&OsStr>> = [
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("NO_COLOR", "1"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (OsStr::new(name), Some(OsStr::new(value))))
+        .collect();
+        assert_eq!(envs, wanted);
+    }
 
     /// A repository with no TypeScript project config.
     const PLAIN: &[&str] = &[];
