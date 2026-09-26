@@ -8,30 +8,14 @@ beside the server, and fails closed when a game update moves something.
 
 Nothing here is affiliated with or endorsed by Keen Games.
 
-This repository is in development. No release is published yet. Versions are
-`0.x`, which promises no compatibility between releases.
+This repository is in development. Its crates are on crates.io, and no GitHub
+release carries the loader library yet. Versions are `0.x`, which promises no
+compatibility between releases.
 
-## What a mod author gets
-
-A mod is a `cdylib` that links `ember-sdk` and exports the C symbols
-`ember_sdk::declare` describes. The host runs the mod only once every symbol it
-declared is resolved.
-
-- **A lifecycle.** `Mod::load` runs after resolution and dependency ordering.
-  `Mod::ready` runs once every hook is armed. Hooks and events register in
-  `load` and nowhere else, so the chain is fixed for the life of the process.
-- **Chained hooks.** Several mods hook one target and run in load order, each
-  refined by `First`, `Normal` or `Last`. A link continues, stops with a
-  substitute return, or fails and is skipped for that call.
-- **Engine access, not a proxy.** A mod reads components and reflection through
-  its own copy of `ember-holistic` and `ember-enshrouded`, using addresses and
-  offsets the host resolved. The host never marshals a read.
-- **Per-mod config and logging.** JSON like the server's own file, written from
-  defaults when absent, and a log sink the loader owns.
-- **Save-cycle hooks.** A mod stages a payload and the host commits it only when
-  the server's own save succeeds.
-- **Fail closed.** A mod whose symbols are missing is disabled by name and the
-  server keeps running vanilla for that feature.
+A mod takes the SDK with `cargo add ember-sdk`, and
+[docs/usage.md](docs/usage.md#writing-a-mod) says what it gets.
+`cargo xtask check` is the gate a change passes, as
+[CONTRIBUTING.md](CONTRIBUTING.md#the-gate) says.
 
 ## Crates
 
@@ -78,17 +62,13 @@ The revision is not readable when Ember loads: the server formats it into that
 log line later in startup. Each table row therefore also carries a fingerprint
 taken from the image itself, and the loader matches on that.
 
-Ember resolves every required symbol at startup and refuses to activate a mod
-whose symbols are missing, naming each one in the log. The server keeps running
-vanilla for that feature rather than starting half hooked.
-
 A release supports the current server build plus the four before it. Every
 supported build is fetched from SteamCMD and cached by its Steam build id, and
 every change to the table resolves against all of them. No row ships without
 being resolved against its real binary.
 
-A build that no row covers stops with a message rather than hooking the wrong
-function. Report one with the "New Keen build" issue template.
+[docs/usage.md](docs/usage.md#running-a-server) says what a server shows when a
+build or a mod's symbols do not match.
 
 ## Installing
 
@@ -100,6 +80,7 @@ game. [docs/install.md](docs/install.md) has the layout.
 | File                               | For                                                                  |
 | ---------------------------------- | -------------------------------------------------------------------- |
 | [docs/install.md](docs/install.md) | Where Ember goes beside a server, and how it is upgraded and removed |
+| [docs/usage.md](docs/usage.md)     | What a server shows at startup, and what a mod author gets           |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, the dev server and its tools, the gate, commits, releases     |
 | [SECURITY.md](SECURITY.md)         | How to report a vulnerability and what is in scope                   |
 | [AGENTS.md](AGENTS.md)             | What an agent reads first, runs to verify, and never does            |
