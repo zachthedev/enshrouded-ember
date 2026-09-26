@@ -11,8 +11,9 @@
 
 # Personal overrides a contributor keeps on their own machine: an env file Bun
 # loads, a registry bun install reads, and a lefthook config merged over
-# lefthook.yml. The gate refuses a tracked env file or lefthook config. Review
-# catches a tracked .npmrc, and the daily audit names its own registry.
+# lefthook.yml. The shared commits job refuses a tracked env file and the gate
+# a tracked lefthook config. Review catches a tracked .npmrc, and the daily
+# audit names its own registry.
 .env*
 .npmrc
 /lefthook-local*

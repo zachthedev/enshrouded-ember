@@ -503,12 +503,11 @@ upward from the root, where the committed `clippy.toml` stops it, and a root
 `.clippy.toml`, which would win beside it, is refused. A program that
 finds its config by name with no flag naming one has every other name refused:
 a second lefthook config, an actionlint config, a nested `.cargo/config` or
-toolchain file, and a root `.config` directory or `package.yaml`, which
-commitlint's cosmiconfig reads even under `--config`. `tree.rs` lists every
-name. Such a file is refused on disk, tracked or not, so a local run agrees
-with continuous integration. A personal file, such as an env file Bun loads or
-a `lefthook-local` config, is refused only when tracked, and `.gitignore` lists
-it. The rules run again before every later row, since the build and test rows
+toolchain file, and a root `.config` directory, which mise, lefthook,
+cargo-nextest and commitlint's cosmiconfig read. `tree.rs` lists every name.
+Such a file is refused on disk, tracked or not, so a local run agrees with
+continuous integration. A `lefthook-local` config is a personal file, refused
+only when tracked, and `.gitignore` lists it. The rules run again before every later row, since the build and test rows
 run repository code. They read the tree through git, and refuse to when the
 work tree git names is not the root: a `.git` that holds no repository sends
 git to the repository above, and a `core.worktree` setting sends it elsewhere.
@@ -518,19 +517,23 @@ change to one to a code owner. The rules refuse only a key that runs or
 redirects code from a file that reads as data:
 
 - `.cargo/config.toml` holds the `xtask` alias, and nothing else.
-- No `package.json` carries a `cosmiconfig` key, which commitlint's cosmiconfig
-  reads even under `--config`.
 - `rust-toolchain.toml` names a channel and its components, and nothing else.
 - No TypeScript project config sets `noCheck`, and one the gate does not name
   is refused.
-- No tracked `package.json` or named TypeScript project config repeats a key
-  within one object, since Bun keeps the first and a JSON parser the last.
 
-The shared `commits` job refuses the data files that run code before a merge,
-reading the committed tree, and the gate does not repeat them: a `bunfig.toml`
-key beyond `[install] minimumReleaseAge`, TypeScript `paths` or `baseUrl`, and
-a `package.json` `patchedDependencies` key, which makes `bun install` rewrite
-each package it names with a patch.
+The shared `commits` job refuses what runs code before a merge, reading the
+committed tree on every pull request, and the gate does not repeat it:
+
+- a `bunfig.toml` key beyond `[install] minimumReleaseAge`
+- TypeScript `paths` or `baseUrl`
+- a `package.json` `patchedDependencies` key, which makes `bun install`
+  rewrite each package it names with a patch
+- a root `package.json` `cosmiconfig` key or a root `package.yaml`, which
+  commitlint's cosmiconfig reads even under `--config`
+- a `package.json` or TypeScript project config that is not plain JSON with
+  each key once per object, since Bun keeps the first of two equal keys and a
+  JSON parser the last
+- an env file Bun loads, at any depth
 
 Every JavaScript tool a row or a hook starts runs through
 `bun x --bun --no-install`, which fetches nothing. `bun x` runs a copy from a
@@ -598,15 +601,15 @@ token. Those audits catch an impostor commit, an advisory against a pinned
 action and a version comment naming the wrong tag, and they run in CI's shared
 `workflows` job on every pull request. `--config` names `.github/zizmor.yml`,
 which holds the hash-pin policy, the Dependabot cooldown threshold and every
-waiver, so the environment cannot swap it for another. The opening row refuses
-an inline `zizmor: ignore` comment under `.github`, so nothing waives an audit
-outside that file. The shared `workflows` job fails unless every job passing
+waiver, so the environment cannot swap it for another. The shared `workflows`
+job refuses an inline `zizmor: ignore` comment under `.github`, so nothing
+waives an audit outside that file. It also fails unless every job passing
 `secrets: inherit` calls a workflow under
 `zachthedev/.github/.github/workflows/`. That hold is what lets `zizmor.yml`
 waive the audit by file. The same job refuses a waiver that names a position
-or a file holding no job passing `secrets: inherit`. No child gets `GH_HOST`, which points gh and zizmor at another
-GitHub host, or a `ZIZMOR_` switch that turns the online audits off or names
-another config.
+or a file holding no job passing `secrets: inherit`. No child gets `GH_HOST`,
+which points gh and zizmor at another GitHub host, or a `ZIZMOR_` switch that
+turns the online audits off or names another config.
 
 `tests` fails when no test ran, and on a skip count other than `SKIPPED_TESTS`
 beside the step table, each skip an `#[ignore]` test that needs a fetched game
