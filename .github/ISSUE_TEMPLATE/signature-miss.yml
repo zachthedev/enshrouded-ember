@@ -1,6 +1,9 @@
 name: Signature miss
 description: A symbol Ember could not resolve on a build the release supports.
 title: 'sigs: '
+# `sigs` is a label this repository adds to the kickstart's set. It keeps a
+# symbol Ember could not resolve apart from other bugs, because its fix lands in
+# ember-sigs.
 labels: ['sigs']
 body:
   - type: markdown
@@ -25,7 +28,7 @@ body:
         The release you installed, or the commit sha for a build from source. A
         miss is a function of the version and the build together, so one
         identifies nothing alone.
-      placeholder: '0.1.0, or 6f9be1d'
+      placeholder: 'x.y.z, or 6f9be1d'
     validations:
       required: true
   - type: input
@@ -86,8 +89,8 @@ body:
         mod declares the symbols it needs, so the set decides what had to
         resolve. Write none when Ember loaded alone.
       placeholder: |
-        private-chests 0.1.0  disabled
-        team 0.1.0
+        private-chests x.y.z  disabled
+        team x.y.z
       render: text
     validations:
       required: true

@@ -397,8 +397,8 @@ pub fn parse_json(text: &str) -> Result<serde_json::Value, String> {
 // Inline waivers
 // ///////////////////////////////////////////////
 
-/// The lint groups rustc 1.98 lists under `rustc -W help`. A waiver names the
-/// exact lint it waives, and a group waives lints nobody named.
+/// The lint groups the pinned rustc lists under `rustc -W help`. A waiver names
+/// the exact lint it waives, and a group waives lints nobody named.
 const RUSTC_GROUPS: &[&str] = &[
     "warnings",
     "deprecated_safe",
@@ -1296,7 +1296,7 @@ pub(crate) fn sound_files() -> Vec<(String, String)> {
         (".prettierrc", "{ \"singleQuote\": true, \"printWidth\": 120 }"),
         (
             "rust-toolchain.toml",
-            "[toolchain]\nchannel = \"1.98.1\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
+            "[toolchain]\nchannel = \"1.90.0\"\ncomponents = [\"clippy\", \"rustfmt\"]\n",
         ),
         (
             ".cargo/config.toml",
@@ -1820,7 +1820,7 @@ mod tests {
                 "patched dependencies",
                 Tree::new().tracked("tools/package.json").file(
                     "tools/package.json",
-                    r#"{ "patchedDependencies": { "prettier@3.9.8": "patches/p.patch" } }"#,
+                    r#"{ "patchedDependencies": { "prettier@3.0.0": "patches/p.patch" } }"#,
                 ),
                 format!("\"tools/package.json\" {patched}"),
             ),
@@ -2085,7 +2085,7 @@ mod tests {
         let cases = vec![
             (
                 "a profile",
-                Tree::new().file(path, "[toolchain]\nchannel = \"1.98.1\"\ncomponents = [\"clippy\", \"rustfmt\"]\nprofile = \"complete\"\n"),
+                Tree::new().file(path, "[toolchain]\nchannel = \"1.90.0\"\ncomponents = [\"clippy\", \"rustfmt\"]\nprofile = \"complete\"\n"),
                 "rust-toolchain.toml [toolchain] carries \"profile\", and it holds channel and components alone. A path, profile or target changes what every cargo row runs with".to_string(),
             ),
             (
@@ -2095,7 +2095,7 @@ mod tests {
             ),
             (
                 "a table beside the toolchain",
-                Tree::new().file(path, "[toolchain]\nchannel = \"1.98.1\"\ncomponents = [\"clippy\", \"rustfmt\"]\n[other]\nx = 1\n"),
+                Tree::new().file(path, "[toolchain]\nchannel = \"1.90.0\"\ncomponents = [\"clippy\", \"rustfmt\"]\n[other]\nx = 1\n"),
                 "rust-toolchain.toml carries \"other\", and it holds a [toolchain] table alone".to_string(),
             ),
         ];
@@ -2108,7 +2108,7 @@ mod tests {
             ("a moving channel", "[toolchain]\nchannel = \"stable\"\n"),
             (
                 "another component",
-                "[toolchain]\nchannel = \"1.98.1\"\ncomponents = [\"clippy\", \"rustfmt\", \"miri\"]\n",
+                "[toolchain]\nchannel = \"1.90.0\"\ncomponents = [\"clippy\", \"rustfmt\", \"miri\"]\n",
             ),
         ] {
             assert_eq!(

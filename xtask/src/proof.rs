@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(count(9, "file", "files"), "9 files");
     }
 
-    /// One crate's `cargo test --doc` block as cargo 1.98 prints it.
+    /// One crate's `cargo test --doc` block as the pinned cargo prints it.
     fn block(name: &str, passed: usize, ignored: usize, filtered: usize) -> String {
         format!(
             "   Doc-tests {name}\n\nrunning {}\n\ntest result: ok. {passed} passed; 0 failed; {ignored} ignored; 0 measured; {filtered} filtered out; finished in 0.00s\n\n",

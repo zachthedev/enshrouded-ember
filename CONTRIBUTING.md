@@ -91,7 +91,7 @@ installing checkout's `node_modules`, so a worktree's install skips the
 `lefthook.yml` holds them: `commit-msg` runs commitlint, and `pre-push` runs
 the gate. [lefthook](https://lefthook.dev) installs them into `.git/hooks` when
 `bun install` runs the `prepare` script. Each hook starts its tool through
-`bunx --bun --no-install`, which runs the copy in `node_modules`, or one from a
+`bun x --bun --no-install`, which runs the copy in `node_modules`, or one from a
 parent directory or `PATH` when the install is missing. If
 `git config core.hooksPath` prints a path, unset it first: git ignores
 `.git/hooks` while that setting names another directory.
@@ -120,7 +120,7 @@ Some of your own environment reaches the tools:
   `BUN_INSPECT`, `BUN_INSPECT_CONNECT_TO` and `BUN_INSPECT_PRELOAD` open an
   inspector or run a module in any Bun that sees them, the gate's own
   included. Leave all four unset.
-- A personal env file reaches the JavaScript tools. bunx never passes
+- A personal env file reaches the JavaScript tools. `bun x` never passes
   `--no-env-file` to the tool it starts, so Prettier and tsc in the gate and
   commitlint in the hooks load an env file at the checkout's root. Every Bun
   the gate starts itself carries the flag.
@@ -532,11 +532,11 @@ reading the committed tree, and the gate does not repeat them: a `bunfig.toml`
 key beyond `[install] minimumReleaseAge`, and TypeScript `paths` or `baseUrl`.
 
 Every JavaScript tool a row or a hook starts runs through
-`bunx --bun --no-install`, which fetches nothing. bunx runs a copy from a
+`bun x --bun --no-install`, which fetches nothing. `bun x` runs a copy from a
 parent directory or `PATH` when the checkout holds none, so a row first checks
 that `node_modules/.bin` holds its tool as a regular file. Every Bun the gate
 starts itself, a script it evaluates or `bun test`, carries `--no-env-file`.
-bunx passes that flag to no tool it starts, so an untracked env file reaches
+`bun x` passes that flag to no tool it starts, so an untracked env file reaches
 those. No child gets `BUN_OPTIONS`, which Bun reads into every process as
 flags, a preload or a test filter among them.
 
@@ -812,7 +812,7 @@ A local run that fails, or that differs from continuous integration:
 - **A JavaScript tool is not installed in this checkout.** The gate refuses a
   row whose tool `node_modules/.bin` lacks. Run `bun install --frozen-lockfile`
   after every pull, and in a linked worktree add `--ignore-scripts`, as
-  [Hooks](#hooks) says. The `commit-msg` hook does not check, and bunx then
+  [Hooks](#hooks) says. The `commit-msg` hook does not check, and `bun x` then
   runs a copy from a parent directory or `PATH`, which can differ from the one
   CI runs.
 - **A package `bun.lock` no longer names still loads.** A frozen install never

@@ -9,12 +9,18 @@
         "anyhow",
         "clap",
         "comfy-table",
-        "getrandom",
         "goblin",
         "owo-colors",
+        "proc-macro2",
+        "regex-syntax",
+        "serde",
+        "serde_json",
         "tempfile",
         "time",
-        "which"
+        "toml",
+        "which",
+        "windows-link",
+        "windows-sys"
       ],
       "semanticCommitType": "chore"
     }

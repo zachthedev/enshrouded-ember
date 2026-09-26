@@ -28,7 +28,7 @@ body:
       label: Ember version
       description: >
         The release you installed, or the commit sha for a build from source.
-      placeholder: '0.1.0, or 6f9be1d'
+      placeholder: 'x.y.z, or 6f9be1d'
     validations:
       required: true
   - type: input
@@ -50,8 +50,8 @@ body:
         may hook one target, so the order is part of the reproduction. Write
         none when Ember loaded alone.
       placeholder: |
-        private-chests 0.1.0
-        team 0.1.0
+        private-chests x.y.z
+        team x.y.z
       render: text
     validations:
       required: true
