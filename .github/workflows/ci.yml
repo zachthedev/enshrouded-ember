@@ -90,6 +90,11 @@ jobs:
       # The one third-party action. actions/cache needs hand-written keys for
       # the registry, the git database and the target directory, and this one
       # derives them from the lockfile and the toolchain.
+      # A restored cache is the trust boundary: cargo checks a crate against
+      # Cargo.lock when it downloads one, and reuses a cached crate and the
+      # target directory as they stand. Every job on main shares one cache
+      # scope, so a job holding a secret or a write token restores none. This
+      # one holds contents: read and no secret.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # packageManager in package.json is the one Bun pin. The action verifies
       # no download, so that pin plus the cooldown is the control.
