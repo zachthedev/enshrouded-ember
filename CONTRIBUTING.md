@@ -698,32 +698,33 @@ key in `mise.toml` names no owner, so for those tools that table is the only
 record of the account outside the generated file. Moving a tool to another
 account takes an edit there, in the same diff as the lockfile it explains.
 
-Each tool the gate runs rests on one integrity tier, and this table is where
-each one is stated. Provenance means the publisher attests the release and mise
-checks the attestation at every install. A checksum in a pinned tree comes from
-a record the repository pins: the registry entry mise resolves through,
-`bun.lock` or `Cargo.lock`. A checksum mise hashed at lock time binds every
-later install to the bytes the lock fetched, and nothing outside the lockfile
-vouches for them. A publisher signature is checked against a key the checking
-tool carries. A version alone names a release, and nothing in the tree vouches
-for its bytes.
+Each tool this repository pins, and who vouches for its bytes. The publisher's
+build attestation is a statement a workflow in the publisher's repository signed
+over the artifact's digest. The publisher's signature is made with a key the
+checking tool carries. The registry's record is a hash, or a signature, from a
+registry that never replaces a published version. The release's own checksum is
+GitHub's digest for the asset, or a checksum file beside it, in a release that
+can still change. A hash this repository computed comes from one download, and
+nothing outside the lockfile records it. A version alone names a release, and
+nothing recorded before the install vouches for its bytes. Setup names the
+programs you install yourself, and none of them takes a tier.
 
-| Tool                                                    | Tier                                |
-| ------------------------------------------------------- | ----------------------------------- |
-| actionlint                                              | provenance                          |
-| cargo-deny                                              | a checksum in a pinned tree         |
-| cargo-machete                                           | a checksum mise hashed at lock time |
-| cargo-nextest                                           | provenance                          |
-| cargo-semver-checks                                     | a checksum mise hashed at lock time |
-| release-plz                                             | a checksum mise hashed at lock time |
-| shellcheck                                              | a checksum in a pinned tree         |
-| taplo                                                   | a checksum hashed here, as below    |
-| zizmor                                                  | provenance                          |
-| cargo, clippy, rustfmt and rustdoc                      | a version alone                     |
-| every crate `Cargo.lock` records                        | a checksum in a pinned tree         |
-| Prettier, TypeScript, commitlint, `yaml`, lefthook, zod | a checksum in a pinned tree         |
-| Bun                                                     | a version alone                     |
-| mise                                                    | a publisher signature               |
+| Tool                                                    | Tier                                      | Held in                                            |
+| ------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------- |
+| actionlint                                              | the publisher's build attestation         | `mise.lock`                                        |
+| cargo-deny                                              | the release's own checksum                | `mise.lock`                                        |
+| cargo-machete                                           | the release's own checksum                | `mise.lock`                                        |
+| cargo-nextest                                           | the publisher's build attestation         | `mise.lock`                                        |
+| cargo-semver-checks                                     | the release's own checksum                | `mise.semver.lock`                                 |
+| release-plz                                             | the release's own checksum                | `mise.lock`                                        |
+| shellcheck                                              | the release's own checksum                | `mise.lock`                                        |
+| taplo                                                   | a hash this repository computed, as below | `mise.lock`                                        |
+| zizmor                                                  | the publisher's build attestation         | `mise.lock`                                        |
+| cargo, clippy, rustfmt and rustdoc                      | a version alone                           | `rust-toolchain.toml`                              |
+| every crate `Cargo.lock` records                        | the registry's record                     | `Cargo.lock`                                       |
+| Prettier, TypeScript, commitlint, `yaml`, lefthook, zod | the registry's record                     | `bun.lock`                                         |
+| Bun                                                     | a version alone                           | `packageManager` in `package.json`                 |
+| mise                                                    | the publisher's signature                 | the `version:` line of each `jdx/mise-action` step |
 
 The Rust toolchain is the release `rust-toolchain.toml` names. rustup checks
 each component against the channel manifest it downloads from the same server,
@@ -744,11 +745,12 @@ that drops `project` each turn the `[settings]` one off. The `[tool_config]` one
 holds regardless of the environment, and mise reads it from the file alone, so
 the gate asserts it from the file.
 
-`taplo` is the one tool whose checksum does not come from its publisher. GitHub
-began recording a digest for release assets after the taplo release `mise.toml`
-pins was published, so its hashes were computed here and committed. They say the
-bytes came from that release URL and that every install since has to match them,
-which is narrower than a digest the publisher recorded and is not provenance.
+`taplo` is the one tool whose checksum nothing outside this repository records.
+GitHub began recording a digest for release assets after the taplo release
+`mise.toml` pins was published, and the release ships no checksum file, so its
+hashes were computed here and committed. They say the bytes came from that
+release URL and that every install since has to match them. No second party
+recorded them, as GitHub did for every other tool's asset.
 Bumping taplo writes a lockfile entry with no checksum at all, which the gate's
 own tests refuse, so whoever bumps it computes and commits the new hashes. A
 relock at the same version keeps them, so only a bump drops them. A release the
