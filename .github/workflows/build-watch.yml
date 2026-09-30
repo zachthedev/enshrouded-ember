@@ -149,9 +149,13 @@ jobs:
 
       # packageManager in package.json is the one Bun pin. The action verifies
       # no download, so that pin plus the cooldown is the control.
+      # No cached Bun. Every job on main shares one cache scope, so an
+      # executable another job saved under the action's key would run here
+      # beside the deploy key and the issues write token.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+          no-cache: true
 
       # --ignore-scripts because the root `prepare` installs lefthook, whose
       # pre-push runs the whole gate. The runner has no tool belt, so the gate
@@ -275,9 +279,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # No cached Bun. Every job on main shares one cache scope, so an
+      # executable another job saved under the action's key would run here
+      # beside the archive read pair. Its answer also decides whether the job
+      # holding the write pair runs.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+          no-cache: true
 
       - run: bun install --frozen-lockfile --ignore-scripts
 
@@ -343,9 +352,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # No cached Bun. Every job on main shares one cache scope, so an
+      # executable another job saved under the action's key would run here
+      # beside the archive write pair.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+          no-cache: true
 
       # --ignore-scripts because the root `prepare` installs lefthook, whose
       # pre-push runs the whole gate. The runner has no tool belt, so the gate
@@ -470,9 +483,13 @@ jobs:
         with:
           ssh-key: ${{ secrets.EMBER_CI_SSH_KEY }}
 
+      # No cached Bun. Every job on main shares one cache scope, so an
+      # executable another job saved under the action's key would run here
+      # beside the deploy key.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+          no-cache: true
 
       - run: bun install --frozen-lockfile --ignore-scripts
 
@@ -531,9 +548,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # No cached Bun. Every job on main shares one cache scope, so an
+      # executable another job saved under the action's key would run here
+      # beside the archive read pair and the issues write token.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+          no-cache: true
 
       - run: bun install --frozen-lockfile --ignore-scripts
 
