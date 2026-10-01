@@ -18,6 +18,9 @@ name: audit
 # audits read the pinned actions: a pinned commit outside its action's
 # repository, a stale action ref, a known-vulnerable action. Those answers
 # change with no pull request, so a schedule is what asks again.
+#
+# The commits job runs the shared tree refusals: paths, JSON keys, runtime pins
+# and the Renovate config. A daily pass covers a push that started no run.
 on:
   schedule:
     # At least once a day. The hour is clear of deps.yml's cron. Every job runs
@@ -110,7 +113,12 @@ jobs:
         env:
           BUN_CONFIG_REGISTRY: https://registry.npmjs.org/
 
-  # The calling job grants what the called job declares.
+  # Each calling job grants what its called job declares.
+  commits:
+    permissions:
+      contents: read
+    uses: zachthedev/.github/.github/workflows/commits.yml@e7a17edaaa9450eb13b5800dbc7034642d7ea667 # v0.4.0
+
   workflows:
     permissions:
       contents: read
