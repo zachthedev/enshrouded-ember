@@ -138,14 +138,14 @@ jobs:
   commits:
     permissions:
       contents: read
-    uses: zachthedev/.github/.github/workflows/commits.yml@ec458567a7200c4ad96ed0c7556e06bc2b287738 # v0.3.0
+    uses: zachthedev/.github/.github/workflows/commits.yml@e7a17edaaa9450eb13b5800dbc7034642d7ea667 # v0.4.0
 
   workflows:
     permissions:
       contents: read
-    uses: zachthedev/.github/.github/workflows/workflows.yml@ec458567a7200c4ad96ed0c7556e06bc2b287738 # v0.3.0
+    uses: zachthedev/.github/.github/workflows/workflows.yml@e7a17edaaa9450eb13b5800dbc7034642d7ea667 # v0.4.0
 
   dependency-review:
     permissions:
       contents: read
-    uses: zachthedev/.github/.github/workflows/dependency-review.yml@ec458567a7200c4ad96ed0c7556e06bc2b287738 # v0.3.0
+    uses: zachthedev/.github/.github/workflows/dependency-review.yml@e7a17edaaa9450eb13b5800dbc7034642d7ea667 # v0.4.0
