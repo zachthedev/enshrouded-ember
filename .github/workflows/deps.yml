@@ -4,8 +4,9 @@ name: deps
 # This file says when, and hands over the environment's credentials.
 on:
   # At least once a day. The preset opens new pull requests inside its Monday
-  # window alone, and this hour is inside it. Every other run keeps open
-  # branches current and raises security fixes, which ignore the schedule.
+  # window, and this hour is inside it. A security fix and a bump of
+  # zachthedev/.github ignore the window, so any run can open either. Every
+  # other run keeps open branches current.
   schedule:
     - cron: '23 4 * * *'
   workflow_dispatch:
