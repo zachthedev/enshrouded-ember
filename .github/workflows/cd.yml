@@ -341,7 +341,7 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: zachthedev/.github/.github/workflows/publish.yml@ec458567a7200c4ad96ed0c7556e06bc2b287738 # v0.3.0
+    uses: zachthedev/.github/.github/workflows/publish.yml@e7a17edaaa9450eb13b5800dbc7034642d7ea667 # v0.4.0
     with:
       tag: ${{ needs.release.outputs.tag }}
       flip: true
