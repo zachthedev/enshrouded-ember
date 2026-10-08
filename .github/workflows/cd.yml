@@ -79,7 +79,7 @@ jobs:
       # --locked, so a tool the lockfiles do not record is refused. cache:
       # false, because a cache this job restored or saved would carry what its
       # build scripts wrote.
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
           version: 2026.9.15
           install: false
@@ -161,7 +161,7 @@ jobs:
     steps:
       # Ahead of the checkout, as in ci.yml, so the action reads no repository
       # file.
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
           version: 2026.9.15
           install: false
@@ -264,7 +264,7 @@ jobs:
     steps:
       # Ahead of the checkout, as in ci.yml, so the action reads no repository
       # file.
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
           version: 2026.9.15
           install: false
