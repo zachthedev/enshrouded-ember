@@ -42,10 +42,10 @@ regex-syntax = { version = "0.8.11", default-features = false, features = [
     "unicode-bool",
 ] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting"] }
-toml = "1.1.6"
+toml = "1.1.8"
 which = "8.0.6"
 windows-link = "0.100.0"
 # One Win32 call in xtask: the known folders a mise child is given in place of
@@ -53,7 +53,7 @@ windows-link = "0.100.0"
 windows-sys = "0.61.2"
 # Decoding only, so the dictionary builder, the legacy frame formats and the
 # array helpers stay out of the C build.
-zstd = { version = "0.14.0", default-features = false }
+zstd = { version = "0.14.3", default-features = false }
 
 tempfile = "3.27.0"
 
