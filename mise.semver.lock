@@ -3,21 +3,21 @@
 lockfile_version = 1
 
 [[tools."github:obi1kenobi/cargo-semver-checks"]]
-version = "0.50.0"
+version = "0.51.0"
 backend = "github:obi1kenobi/cargo-semver-checks"
-specifiers = ["0.50.0"]
+specifiers = ["v0.51.0"]
 
 [tools."github:obi1kenobi/cargo-semver-checks"."platforms.linux-x64"]
-checksum = "sha256:52a65dc88dc53fa8b57d6087954eb52cda149ca03bcfca78ce3fdecd23f893c4"
-url = "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498085744"
+checksum = "sha256:cacadafaa5cd27ae6d05a74a103266917ebab4c5e43c898360e177d4fbf06a65"
+url = "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.51.0/cargo-semver-checks-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/608677290"
 
 [tools."github:obi1kenobi/cargo-semver-checks"."platforms.macos-arm64"]
-checksum = "sha256:f99f928d67501c29e8410026f27a54cf799fb13611c3b4a6a58f2772cf7e3799"
-url = "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498087281"
+checksum = "sha256:3cec5da41eee9a3336d75ad43d1f30a5c9680818f4ba209024786f452cabab5b"
+url = "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.51.0/cargo-semver-checks-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/608677274"
 
 [tools."github:obi1kenobi/cargo-semver-checks"."platforms.windows-x64"]
-checksum = "sha256:58854aaeaf84fee3266d1b4d9c45df585fe0478c7cabb4db4fac8f060a636864"
-url = "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.50.0/cargo-semver-checks-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/498090877"
+checksum = "sha256:7663ba2c938b59f0476d375ee1b5d8bece36a81819612d1541bc6ccf6316c4b7"
+url = "https://github.com/obi1kenobi/cargo-semver-checks/releases/download/v0.51.0/cargo-semver-checks-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/obi1kenobi/cargo-semver-checks/releases/assets/608677294"
