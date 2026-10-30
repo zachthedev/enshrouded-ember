@@ -70,7 +70,7 @@ jobs:
       # cooldown.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: 2026.9.15
+          version: 2026.10.21
           install: false
           # No mise environment, PATH entry or shim reaches a later step, so a
           # bare program name never resolves to a tool mise.toml pins. Every
@@ -95,7 +95,7 @@ jobs:
       # target directory as they stand. Every job on main shares one cache
       # scope, so a job holding a secret or a write token restores none. This
       # one holds contents: read and no secret.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # packageManager in package.json is the one Bun pin. The action verifies
       # no download, so that pin plus the cooldown is the control.
       # The action restores a cached Bun executable, which every job on main
