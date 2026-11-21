@@ -26,7 +26,7 @@ ember-holistic = { version = "0.1.0", path = "crates/ember-holistic" }
 ember-kfc = { version = "0.1.0", path = "crates/ember-kfc" }
 
 anyhow = "1.0.104"
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.8", features = ["derive"] }
 comfy-table = { version = "8.0.1", default-features = false }
 goblin = "0.10.7"
 owo-colors = { version = "4.4.0", features = ["supports-colors"] }
@@ -38,14 +38,14 @@ proc-macro2 = { version = "1.0.107", default-features = false, features = [
 # Unicode's Default_Ignorable_Code_Point set, which the gate strips from a
 # waiver's reason before it looks for a letter or a digit. The boolean property
 # tables alone.
-regex-syntax = { version = "0.8.11", default-features = false, features = [
+regex-syntax = { version = "0.8.12", default-features = false, features = [
     "unicode-bool",
 ] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = "1.0.154"
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting"] }
-toml = "1.1.6"
+toml = "1.2.1"
 which = "8.0.6"
 windows-link = "0.100.0"
 # One Win32 call in xtask: the known folders a mise child is given in place of
